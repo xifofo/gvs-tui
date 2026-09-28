@@ -56,22 +56,23 @@ export function frameCrcTiming() {
  * A small reorder window is needed because the first decoded video packet
  * need not have the earliest PTS. Missing timestamps are an error, never zero.
  */
-export async function firstPresentationMs(ffmpeg: string, path: string, stream: string): Promise<number> {
+export async function firstPresentationMs(ffmpeg: string, path: string, stream: string, signal?: AbortSignal): Promise<number> {
   if (!/^[va]:\d+$/.test(stream)) throw new Error('无效媒体轨道选择')
   return new Promise((resolve, reject) => {
     const parser = frameCrcTiming()
     const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-v', 'error', '-copyts', '-i', path,
       '-map', `0:${stream}`, '-c', 'copy', '-frames:0', '64', '-avoid_negative_ts', 'disabled', '-f', 'framecrc', 'pipe:1'],
-    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
     let errors = '', parseError: unknown
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
       try { parser.feed(chunk) } catch (e) { parseError = e; child.kill() }
     })
     child.stderr.on('data', (b: Buffer) => { errors = (errors + b.toString()).slice(-4000) })
-    child.once('error', reject)
+    child.once('error', (e) => reject(signal?.aborted ? (signal.reason ?? e) : e))
     child.once('close', (code) => {
       try {
+        if (signal?.aborted) throw signal.reason ?? new Error('已停止')
         if (parseError) throw parseError
         if (code !== 0 || errors.trim()) throw new Error(`读取原始时间戳失败 (${code}) ${stream} ${path}: ${errors.trim()}`)
         const track = parser.finish()[0]
@@ -94,12 +95,12 @@ export function relativePresentationStarts(videoMs: number, audioMs: number[], d
 }
 
 /** Uses bundled ffmpeg, without decoding/re-encoding or depending on ffprobe. */
-export async function inspectMediaTiming(ffmpeg: string, path: string): Promise<TrackTiming[]> {
+export async function inspectMediaTiming(ffmpeg: string, path: string, signal?: AbortSignal): Promise<TrackTiming[]> {
   return new Promise((resolve, reject) => {
     const parser = frameCrcTiming()
     const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-v', 'error', '-copyts', '-i', path,
       '-map', '0:v?', '-map', '0:a?', '-c', 'copy', '-avoid_negative_ts', 'disabled', '-f', 'framecrc', 'pipe:1'],
-    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
     let errors = ''
     let parseError: unknown
     child.stdout.setEncoding('utf8')
@@ -107,9 +108,10 @@ export async function inspectMediaTiming(ffmpeg: string, path: string): Promise<
       try { parser.feed(chunk) } catch (e) { parseError = e; child.kill() }
     })
     child.stderr.on('data', (b: Buffer) => { errors = (errors + b.toString()).slice(-4000) })
-    child.once('error', reject)
+    child.once('error', (e) => reject(signal?.aborted ? (signal.reason ?? e) : e))
     child.once('close', (code) => {
       try {
+        if (signal?.aborted) throw signal.reason ?? new Error('已停止')
         if (parseError) throw parseError
         // FFmpeg may return 0 even after "File ended prematurely".
         if (code !== 0 || errors.trim()) throw new Error(`媒体包校验失败 (${code}): ${errors.trim()}`)

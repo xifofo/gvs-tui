@@ -294,3 +294,58 @@ test('refresh stops immediately for login, key and structural failures', async (
     }
   }
 })
+
+test('an aborted relay stops its in-flight upstream requests', async () => {
+  let started = 0
+  const origin = createServer((req, res) => {
+    if (req.url === '/media.m3u8') { res.end('#EXTM3U\n#EXTINF:1,\nseg.mp4\n#EXT-X-ENDLIST\n'); return }
+    // Never answers: the segment request would hang forever without the abort.
+    started++
+    res.writeHead(200, { 'Content-Type': 'video/mp2t' })
+    res.write('partial')
+  })
+  await new Promise<void>(r => origin.listen(0, '127.0.0.1', r))
+  const base = `http://127.0.0.1:${(origin.address() as { port: number }).port}`
+  const ctrl = new AbortController()
+  const relay = await createHlsRelay(`${base}/media.m3u8`, {}, false, { signal: ctrl.signal, maxAttempts: 1 })
+  try {
+    expect(relay.error()).toBeUndefined()
+    const playlist = await (await fetch(relay.url)).text()
+    const segment = playlist.split('\n').find(l => l.startsWith('http'))!
+    const pending = fetch(segment)
+    await new Promise<void>(r => setTimeout(r, 50))
+    expect(started).toBe(1)
+    ctrl.abort('pause')
+    // The in-flight transfer is cut off (a truncated body the consumer sees)
+    // instead of hanging until RE's own timeout.
+    const result = await pending
+    expect(await result.text()).toBe('partial')
+    // And the stopped relay refuses to start new upstream work.
+    const after = await fetch(relay.url)
+    expect(after.status).toBe(502)
+    await after.text()
+    expect(started).toBe(1)
+  } finally {
+    await relay.close(); origin.closeAllConnections()
+    await new Promise<void>(r => origin.close(() => r()))
+  }
+})
+
+test('an already aborted signal never reaches the CDN', async () => {
+  let upstream = 0
+  const origin = createServer((_req, res) => { upstream++; res.end('#EXTM3U\n#EXT-X-ENDLIST\n') })
+  await new Promise<void>(r => origin.listen(0, '127.0.0.1', r))
+  const base = `http://127.0.0.1:${(origin.address() as { port: number }).port}`
+  const ctrl = new AbortController()
+  ctrl.abort('cancel')
+  const relay = await createHlsRelay(`${base}/media.m3u8`, {}, false, { signal: ctrl.signal, maxAttempts: 1 })
+  try {
+    const res = await fetch(relay.url)
+    expect(res.status).toBe(502)
+    await res.text()
+    expect(upstream).toBe(0)
+  } finally {
+    await relay.close(); origin.closeAllConnections()
+    await new Promise<void>(r => origin.close(() => r()))
+  }
+})

@@ -57,3 +57,9 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
+
+/** `signal` plus a timeout; aborts when either the caller stops or time runs out. */
+export function combinedSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timer = AbortSignal.timeout(timeoutMs)
+  return signal ? AbortSignal.any([signal, timer]) : timer
+}

@@ -211,6 +211,7 @@ export class Runtime {
           huangguoNfo: true,
           huangguoFmt: 'mkv',
           threads: 4,
+          tmpDir: '',
         }
       : loadConfig()
     this.discovery = new Discovery(

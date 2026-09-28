@@ -61,20 +61,42 @@ export function presentationMs(track: Mp4Track, cts: number): number {
   return 1000 * (lead / track.movieScale + (cts - mediaTime) / track.scale)
 }
 
-function run(bin: string, args: string[], consume?: (chunk: string) => void,
-  phase?: { out: string; total: number; cb?: (n: number, total: number) => void }): Promise<void> {
+type Mp4RunOpts = {
+  consume?: (chunk: string) => void
+  phase?: { out: string; total: number; cb?: (n: number, total: number) => void }
+  signal?: AbortSignal
+  /** Resolve early — killing MP4Box — once the consumer has what it needs. */
+  done?: () => boolean
+}
+
+function run(bin: string, args: string[], opts: Mp4RunOpts = {}): Promise<void> {
+  const { consume, phase, signal, done } = opts
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['-p', '0', '-noprog', ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(bin, ['-p', '0', '-noprog', ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
     let error = '', parseError: unknown
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      clearInterval(timer)
+      resolve()
+    }
     const timer = phase?.cb ? setInterval(() => {
       try { phase.cb?.(statSync(phase.out).size, phase.total) } catch { /* not created yet */ }
     }, 250) : undefined
     child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (s: string) => { try { consume?.(s) } catch (e) { parseError = e; child.kill() } })
+    child.stdout.on('data', (s: string) => {
+      if (finished) return
+      try { consume?.(s) } catch (e) { parseError = e; child.kill(); return }
+      // `-disox` keeps dumping after </MovieBox>; nothing reads it, so stop.
+      if (done?.()) { child.kill(); finish() }
+    })
     child.stderr.on('data', b => { error = (error + b.toString()).slice(-4000) })
-    child.once('error', e => { clearInterval(timer); reject(e) })
+    child.once('error', e => { clearInterval(timer); reject(signal?.aborted ? (signal.reason ?? e) : e) })
     child.once('close', code => {
       clearInterval(timer)
+      if (finished) return
+      if (signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }
       if (parseError) reject(parseError)
       else if (code !== 0) reject(new Error(`MP4Box: exit ${code} ${error.trim()}`))
       else resolve()
@@ -82,21 +104,25 @@ function run(bin: string, args: string[], consume?: (chunk: string) => void,
   })
 }
 
-export async function readMp4Tracks(mp4box: string, path: string): Promise<Mp4Track[]> {
+export async function readMp4Tracks(mp4box: string, path: string, signal?: AbortSignal): Promise<Mp4Track[]> {
   // Only retain moov metadata, not the potentially huge list of fragments.
   let xml = '', moovDone = false
-  await run(mp4box, ['-std', '-disox', path], chunk => {
-    if (moovDone) return
-    xml += chunk
-    const end = xml.indexOf('</MovieBox>')
-    if (end !== -1) { xml = xml.slice(0, end + 11); moovDone = true }
-    if (xml.length > 8 * 1024 * 1024) throw new Error('MP4 元数据过大')
+  await run(mp4box, ['-std', '-disox', path], {
+    signal,
+    consume: chunk => {
+      if (moovDone) return
+      xml += chunk
+      const end = xml.indexOf('</MovieBox>')
+      if (end !== -1) { xml = xml.slice(0, end + 11); moovDone = true }
+      if (xml.length > 8 * 1024 * 1024) throw new Error('MP4 元数据过大')
+    },
+    done: () => moovDone,
   })
   return parseMp4Tracks(xml)
 }
 
-export async function inspectMp4(mp4box: string, path: string): Promise<Mp4TrackScan[]> {
-  const metadata = await readMp4Tracks(mp4box, path)
+export async function inspectMp4(mp4box: string, path: string, signal?: AbortSignal): Promise<Mp4TrackScan[]> {
+  const metadata = await readMp4Tracks(mp4box, path, signal)
   if (!metadata.length) throw new Error('MP4 没有媒体轨道')
   const tracks = metadata.map(t => ({ ...t, samples: 0, bytes: 0, minCts: Infinity,
     firstDts: NaN, lastDts: -Infinity, timeline: createHash('sha256'),
@@ -125,8 +151,11 @@ export async function inspectMp4(mp4box: string, path: string): Promise<Mp4Track
     }
   }
   try {
-    await run(mp4box, ['-std', '-dts', path], chunk => {
-      const lines = (tail + chunk).split(/\r?\n/); tail = lines.pop() ?? ''; lines.forEach(line)
+    await run(mp4box, ['-std', '-dts', path], {
+      signal,
+      consume: chunk => {
+        const lines = (tail + chunk).split(/\r?\n/); tail = lines.pop() ?? ''; lines.forEach(line)
+      },
     })
     if (tail.trim()) line(tail)
     return tracks.map(({ minCts, firstDts, lastDts, timeline, payload, ...t }) => {
@@ -164,7 +193,7 @@ export function shiftedEdits(track: Mp4Track, deltaMs: number): string {
  * Do not set :delay=0: MP4Box would replace the source edit list (including B-frame trims).
  */
 export async function mp4boxMux(mp4box: string, video: string, audios: MuxAudio[], out: string,
-  progress?: (n: number, total: number) => void): Promise<void> {
+  progress?: (n: number, total: number) => void, signal?: AbortSignal): Promise<void> {
   const tmp = scratchDir(out, 'gvs-mp4box-')
   const report: Record<string, unknown> = { version: 1, muxer: 'MP4Box', verified: false }
   try {
@@ -172,9 +201,10 @@ export async function mp4boxMux(mp4box: string, video: string, audios: MuxAudio[
     const sources = [video, ...audios.map(a => a.path)]
     const before: Mp4TrackScan[] = []
     const args: string[] = ['-tmp', tmp]
+    const probed = await Promise.all(sources.map(path => inspectMp4(mp4box, path, signal)))
     for (const [i, path] of sources.entries()) {
       const type = i === 0 ? 'vide' : 'soun'
-      const tracks = (await inspectMp4(mp4box, path)).filter(t => t.type === type)
+      const tracks = probed[i]!.filter(t => t.type === type)
       if (tracks.length !== 1) throw new Error('MP4Box 输入必须包含一条所选类型轨道')
       before.push(tracks[0]!)
       args.push('-add', `${path}#trackID=${tracks[0]!.id}:ID=${i + 1}${i ? ':group=1' : ''}`)
@@ -186,8 +216,8 @@ export async function mp4boxMux(mp4box: string, video: string, audios: MuxAudio[
     }
     args.push('-timescale', '1000000', '-new', out)
     report.source = before
-    await run(mp4box, args, undefined, { out, total: sources.reduce((n, p) => n + statSync(p).size, 0), cb: progress })
-    let after = await inspectMp4(mp4box, out)
+    await run(mp4box, args, { signal, phase: { out, total: sources.reduce((n, p) => n + statSync(p).size, 0), cb: progress } })
+    let after = await inspectMp4(mp4box, out, signal)
     if (after.length !== before.length) throw new Error('MP4 封装轨道数量不符')
     // Importing fragmented MP4 can discard the original first tfdt even when
     // the existing edit list is retained. Restore only the measured shift.
@@ -198,8 +228,10 @@ export async function mp4boxMux(mp4box: string, video: string, audios: MuxAudio[
     })
     if (edits.length) {
       report.initialOutput = after
-      await run(mp4box, [...edits, out])
-      after = await inspectMp4(mp4box, out)
+      // GPAC otherwise stages its rewrite in the system %TEMP% (C:), which
+      // would copy the whole file across volumes.
+      await run(mp4box, [...edits, '-tmp', tmp, out], { signal })
+      after = await inspectMp4(mp4box, out, signal)
     }
     report.output = after
     assertMp4Preserved(before, after)

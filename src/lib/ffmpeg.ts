@@ -103,16 +103,17 @@ function watchOutput(phase?: PhaseWatcher): () => void {
   return () => clearInterval(timer)
 }
 
-function run(ffmpeg: string, args: string[], phase?: PhaseWatcher): Promise<void> {
+function run(ffmpeg: string, args: string[], phase?: PhaseWatcher, signal?: AbortSignal): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>()
   const stop = watchOutput(phase)
-  const child = spawn(ffmpeg, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(ffmpeg, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
   let out = ''
   child.stdout.on('data', (d: Buffer) => { out += d.toString() })
   child.stderr.on('data', (d: Buffer) => { out += d.toString() })
-  child.on('error', (e) => { stop(); reject(e) })
+  child.on('error', (e) => { stop(); reject(signal?.aborted ? (signal.reason ?? e) : e) })
   child.on('close', (code) => {
     stop()
+    if (signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }
     if (code === 0 && !/File ended prematurely|partial file|Invalid data found|Error during demuxing/i.test(out)) {
       if (phase?.cb) phase.cb(sizes(phase.inputs), Math.max(1, sizes(phase.inputs)))
       resolve()
@@ -129,11 +130,12 @@ export function ffmpegDecryptCopy(
   inPath: string,
   outPath: string,
   onProgress?: (n: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const args = ['-hide_banner', '-loglevel', 'error', '-y']
   if (keyHex) args.push('-decryption_key', keyHex.toLowerCase().trim())
   args.push('-i', inPath, '-c', 'copy', outPath)
-  return run(ffmpeg, args, { out: outPath, inputs: [inPath], cb: onProgress })
+  return run(ffmpeg, args, { out: outPath, inputs: [inPath], cb: onProgress }, signal)
 }
 
 export function ffmpegRemux(
@@ -141,9 +143,10 @@ export function ffmpegRemux(
   inPath: string,
   outPath: string,
   onProgress?: (n: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   return run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', inPath, '-c', 'copy', outPath],
-    { out: outPath, inputs: [inPath], cb: onProgress })
+    { out: outPath, inputs: [inPath], cb: onProgress }, signal)
 }
 
 /** Labels reflect detected codec/profile and channels, never the platform title. */
@@ -170,10 +173,10 @@ export function audioLabelFromProbe(output: string): string {
 }
 
 /** Probe local input metadata without transcoding; failure must not invent a codec. */
-export function audioTrackLabel(ffmpeg: string, path: string): Promise<string> {
+export function audioTrackLabel(ffmpeg: string, path: string, signal?: AbortSignal): Promise<string> {
   return new Promise(resolve => {
     const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-i', path], {
-      windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], signal,
     })
     let output = ''
     const timer = setTimeout(() => { child.kill(); resolve('音轨（编码未确认）') }, 15000)
@@ -186,10 +189,11 @@ export function audioTrackLabel(ffmpeg: string, path: string): Promise<string> {
 }
 
 /** Fail before muxing if an encrypted/damaged audio track cannot decode. */
-export async function validateAudio(ffmpeg: string, path: string): Promise<void> {
+export async function validateAudio(ffmpeg: string, path: string, signal?: AbortSignal): Promise<void> {
   try {
-    await run(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-xerror', '-err_detect', 'explode', '-i', path, '-map', '0:a', '-f', 'null', '-'])
+    await run(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-xerror', '-err_detect', 'explode', '-i', path, '-map', '0:a', '-f', 'null', '-'], undefined, signal)
   } catch (e) {
+    if (signal?.aborted) throw signal.reason ?? e
     throw new Error(`音轨解码校验失败，未生成成品：${e instanceof Error ? e.message : String(e)}`)
   }
 }

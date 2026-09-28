@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { chooseOutDir, ensureOutDir, isLegacyDownloads, normalizeOutDir } from './config.ts'
-import { removeScratch, scratchDir } from './scratch.ts'
+import { dirname, join, resolve } from 'node:path'
+import { chooseOutDir, defaultConfig, ensureOutDir, isLegacyDownloads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from './config.ts'
+import { removeScratch, scratchDir, scratchDirIn } from './scratch.ts'
 
 describe('download directory', () => {
   test('legacy relative default is recognized, an explicit folder is not', () => {
@@ -51,6 +51,62 @@ describe('download directory', () => {
   test('typed paths are stored absolute', () => {
     expect(normalizeOutDir('  D:\\Shows  ')).toBe(resolve('D:\\Shows'))
     expect(normalizeOutDir('   ')).toBe('')
+  })
+
+  test('tmpDir defaults to empty and is normalised like outDir', () => {
+    expect(defaultConfig().tmpDir).toBe('')
+    // '' keeps the default (outDir/.gvs-tmp); a typed path becomes absolute so
+    // a later launch does not resolve it against the process cwd.
+    expect(normalizeOutDir('')).toBe('')
+    expect(normalizeOutDir('  E:\gvs-cache  ')).toBe(resolve('E:\gvs-cache'))
+  })
+
+  test('an old config without tmpDir still loads and gains the field', () => {
+    // Redirect APPDATA so the real user config is never touched.
+    const appdata = mkdtempSync(join(tmpdir(), 'gvs-appdata-'))
+    const previous = process.env.APPDATA
+    process.env.APPDATA = appdata
+    try {
+      const file = join(appdata, 'gvs', 'tui.json')
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify({ outDir: 'D:\GVS', threads: 8, hongguoFmt: 'mp4' }))
+      const cfg = loadConfig()
+      expect(cfg.tmpDir).toBe('')
+      expect(cfg.threads).toBe(8)
+      expect(cfg.hongguoFmt).toBe('mp4')
+      // The field is persisted, and a relative tmpDir becomes absolute.
+      saveConfig({ ...cfg, tmpDir: 'E:\gvs-cache' } as FileConfig)
+      expect(JSON.parse(readFileSync(file, 'utf8')).tmpDir).toBe('E:\gvs-cache')
+      expect(loadConfig().tmpDir).toBe(resolve('E:\gvs-cache'))
+    } finally {
+      if (previous === undefined) delete process.env.APPDATA
+      else process.env.APPDATA = previous
+      rmSync(appdata, { recursive: true, force: true })
+    }
+  })
+
+  test('scratchDirIn uses the requested folder and only falls back when it fails', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gvs-scratch-in-'))
+    try {
+      const notes: string[] = []
+      const made = scratchDirIn(root, 're-', (m) => notes.push(m))
+      expect(made.startsWith(root)).toBe(true)
+      expect(notes).toEqual([])
+      // removeScratch also drops the now-empty parent, like the .gvs-tmp case.
+      removeScratch(made)
+      expect(existsSync(made)).toBe(false)
+      mkdirSync(root, { recursive: true })
+      // A file where the folder should be makes creation fail; the fallback is
+      // reported instead of silently landing on the system drive.
+      const blocked = join(root, 'blocked')
+      writeFileSync(blocked, 'x')
+      const fallback = scratchDirIn(join(blocked, 'nested'), 're-', (m) => notes.push(m))
+      expect(notes).toHaveLength(1)
+      expect(fallback.startsWith(tmpdir())).toBe(true)
+      rmSync(fallback, { recursive: true, force: true })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   test('scratch files sit next to the output', () => {

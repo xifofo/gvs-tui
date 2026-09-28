@@ -3,7 +3,8 @@ import { tencentAudioDownloadPlan, tencentAudioPlanNote, tencentPlayQualityInput
 import { resolveHongguoDownload } from './hongguo.ts'
 import { resolveHuangguoDownload } from './huangguo.ts'
 import { mkdirSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs'
-import { dirname, extname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { basename, dirname, extname, join } from 'node:path'
 import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
 import { audioTrackLabel, ffmpegDecryptCopy, ffmpegRemux, validateAudio } from './ffmpeg.ts'
@@ -51,7 +52,23 @@ export type DlTask = {
 }
 
 /** note: non-fatal warning on a finished job, e.g. a skipped audio track. */
-export type JobEvt = { id: number; status: string; pct: number; log: string; err: string; done?: boolean; note?: string }
+export type JobEvt = {
+  id: number
+  status: string
+  pct: number
+  log: string
+  err: string
+  done?: boolean
+  note?: string
+  /** Final event only: the user stopped the job instead of it failing. */
+  stopped?: 'pause' | 'cancel'
+}
+
+/** What a stop request asks for: keep the work dir (pause) or discard it (cancel). */
+export type StopReason = 'pause' | 'cancel'
+
+/** Lets the hub release per-provider resources as soon as downloading is done. */
+export type JobHooks = { downloaded?: () => void }
 
 type JobRunner = (
   emit: (e: JobEvt) => void,
@@ -59,9 +76,11 @@ type JobRunner = (
   cli: GwClient,
   id: number,
   t: DlTask,
+  signal?: AbortSignal,
+  hooks?: JobHooks,
 ) => Promise<void>
 
-type QueuedJob = { provider: string; run: () => Promise<void> }
+type QueuedJob = { id: number; provider: string; run: (signal: AbortSignal, hooks: JobHooks) => Promise<void> }
 
 export function youkuDRM(payload: Record<string, unknown>) {
   const drm = isObj(payload.drm) ? payload.drm : {}
@@ -95,10 +114,16 @@ export function nextJobID(): number {
   return jobSeq
 }
 
+/** Keep generated ids above an id that already exists (e.g. restored queue). */
+export function seedJobID(min: number): void {
+  if (Number.isFinite(min)) jobSeq = Math.max(jobSeq, Math.trunc(min))
+}
+
 export class JobHub {
   private readonly q: QueuedJob[] = []
   private active = 0
   private youkuActive = 0
+  private readonly running = new Map<number, { ctrl: AbortController; settled: Promise<void> }>()
 
   constructor(
     private readonly onEvt: (e: JobEvt) => void,
@@ -106,11 +131,45 @@ export class JobHub {
   ) {}
 
   enqueue(cfg: FileConfig, cli: GwClient, id: number, t: DlTask): void {
+    // A double click / retry must not run the same row twice.
+    if (this.isActive(id)) return
     this.q.push({
+      id,
       provider: t.provider,
-      run: () => this.start(this.onEvt, cfg, cli, id, t),
+      run: (signal, hooks) => this.start(this.onEvt, cfg, cli, id, t, signal, hooks),
     })
     this.pump()
+  }
+
+  /** Queued or running right now. */
+  isActive(id: number): boolean {
+    return this.running.has(id) || this.q.some(item => item.id === id)
+  }
+
+  /**
+   * Queued: drop it, emit nothing, resolve 'queued'.
+   * Running: abort with `reason` and resolve only after the runner promise has
+   * settled, so a resume cannot race the old process on the same files.
+   */
+  async cancel(id: number, reason: StopReason = 'cancel'): Promise<'queued' | 'running' | 'none'> {
+    const queuedAt = this.q.findIndex(item => item.id === id)
+    if (queuedAt >= 0) {
+      this.q.splice(queuedAt, 1)
+      return 'queued'
+    }
+    const live = this.running.get(id)
+    if (!live) return 'none'
+    live.ctrl.abort(reason)
+    await live.settled
+    return 'running'
+  }
+
+  /** Stop everything that is still queued or running and wait for all runners. */
+  async cancelAll(reason: StopReason = 'cancel'): Promise<void> {
+    this.q.length = 0
+    const live = [...this.running.values()]
+    for (const { ctrl } of live) ctrl.abort(reason)
+    await Promise.all(live.map(({ settled }) => settled))
   }
 
   private pump(): void {
@@ -125,9 +184,31 @@ export class JobHub {
       this.q.splice(i, 1)
       this.active += 1
       if (item.provider === 'youku') this.youkuActive += 1
-      void item.run().finally(() => {
+      const ctrl = new AbortController()
+      // The Youku slot guards download/decrypt only: mixed RE/Shaka temp names
+      // and mixed CENC keys exist while downloading, not while muxing the
+      // finished tracks. Release it once the download phase reports done.
+      let youkuHeld = item.provider === 'youku'
+      let releaseHooks: JobHooks = {}
+      const releaseYouku = () => {
+        if (!youkuHeld) return
+        youkuHeld = false
+        this.youkuActive -= 1
+        releaseHooks = {}
+        this.pump()
+      }
+      releaseHooks = { downloaded: releaseYouku }
+      const hooks: JobHooks = { downloaded: () => releaseHooks.downloaded?.() }
+      const settled = Promise.withResolvers<void>()
+      this.running.set(item.id, { ctrl, settled: settled.promise })
+      void item.run(ctrl.signal, hooks).finally(() => {
+        if (youkuHeld) {
+          youkuHeld = false
+          this.youkuActive -= 1
+        }
         this.active -= 1
-        if (item.provider === 'youku') this.youkuActive -= 1
+        this.running.delete(item.id)
+        settled.resolve()
         this.pump()
       })
     }
@@ -156,6 +237,8 @@ async function runTask(
   cli: GwClient,
   id: number,
   t: DlTask,
+  signal?: AbortSignal,
+  hooks?: JobHooks,
 ): Promise<void> {
   // Surface CDN retries in the job row instead of letting the bar sit still.
   let lastPct = 0
@@ -166,7 +249,12 @@ async function runTask(
   const retryNote = (attempt: number, total: number, why: string) => {
     emitEvt({ id, status: '重试', pct: lastPct, log: `第 ${attempt}/${total} 次 · ${why}`, err: '' })
   }
+  const log = (msg: string) => runLog(`job ${id} ${t.provider} ${msg}`)
+  let dir = ''
+  let out = ''
+  let succeeded = false
   try {
+    signal?.throwIfAborted()
     const kind: MediaKind = t.kind ?? (t.provider === 'hongguo' || t.provider === 'huangguo' || t.provider === 'douyin' ? 'short' : 'show')
     const n: Naming = {
       kind,
@@ -186,9 +274,15 @@ async function runTask(
         ? 'mp4' : t.provider === 'hongguo' && cfg.hongguoFmt ? cfg.hongguoFmt
           : t.provider === 'huangguo' && cfg.huangguoFmt ? cfg.huangguoFmt : 'mkv',
     }
-    const dir = t.provider === 'douyin' ? cfg.outDir : folder(n, cfg.outDir)
+    dir = t.provider === 'douyin' ? cfg.outDir : folder(n, cfg.outDir)
     mkdirSync(dir, { recursive: true })
-    let out = join(dir, filename(n))
+    out = join(dir, filename(n))
+    // All intermediates live in one deterministic per-task folder so a resume
+    // finds its `.partN` / RE scratch, and so the user can put that folder on
+    // another volume instead of filling the system drive.
+    const work = jobWorkDir(cfg, t)
+    mkdirSync(work, { recursive: true })
+    log(`work dir ${work}`)
     let note = ''
     const ffmpeg = t.provider === 'hongguo' || t.provider === 'huangguo' ? await ensureFFmpeg() : ''
     const mkvmerge = n.container === 'mkv' ? await ensureMkvmerge() : ''
@@ -196,70 +290,150 @@ async function runTask(
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
       case 'hongguo':
-        await dlHongguo(cli, t, dir, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads)
+        await dlHongguo(cli, t, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads, work, signal)
         break
       case 'huangguo':
-        await dlHuangguo(cli, t, dir, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads)
+        await dlHuangguo(cli, t, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads, work, signal)
         break
       case 'youku':
-        out = await dlYouku(cli, cfg, t, dir, out, mkvmerge, emit, retryNote)
+        out = await dlYouku(cli, cfg, t, dir, out, mkvmerge, emit, retryNote, work, signal, hooks)
         break
       case 'tencent':
-        note = await dlTencent(cli, cfg, t, dir, out, mkvmerge, emit, retryNote)
+        note = await dlTencent(cli, cfg, t, out, mkvmerge, emit, retryNote, work, signal)
         break
       case 'douyin':
-        await dlDouyin(cli, t, out, emit, retryNote)
+        await dlDouyin(cli, t, out, emit, retryNote, signal)
         break
       default:
         throw new Error(`demo 尚未接 ${t.provider} 下载管线`)
     }
+    signal?.throwIfAborted()
     if ((t.provider === 'hongguo' && cfg.hongguoNfo) || (t.provider === 'huangguo' && cfg.huangguoNfo)) {
       writeTvShowNFO(dirname(dir), n.title, t.plot, 0)
       writeEpisodeNFO(out, t.title, Math.max(t.season, 1), t.episode, '')
     }
+    succeeded = true
     emitEvt({ id, status: '完成', pct: 1, log: out, err: '', done: true, note })
   } catch (e) {
+    // A stop is not a failure: one final event carrying `stopped`, never 失败.
+    if (signal?.aborted) {
+      const reason: StopReason = signal.reason === 'pause' ? 'pause' : 'cancel'
+      emitEvt({ id, status: reason === 'pause' ? '已暂停' : '已取消', pct: lastPct, log: '', err: '', done: true, stopped: reason })
+      if (reason === 'cancel') {
+        // Delete a truncated final output; the download stages already removed
+        // the job work dir, this covers the mux stages writing straight to out.
+        if (out) {
+          try { unlinkSync(out) } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log(`删除未完成的成品失败：${(err as Error).message}`)
+          }
+        }
+        try { await discardJobWork(cfg, t) } catch (err) { log(`清理工作目录失败：${(err as Error).message}`) }
+      }
+      return
+    }
     emitEvt({ id, status: '失败', pct: lastPct, log: '', err: e instanceof Error ? e.message : String(e), done: true })
+  } finally {
+    // Success cleans up its scratch; a failure keeps it so a retry can resume.
+    if (succeeded) {
+      try { await discardJobWork(cfg, t) } catch (err) { log(`清理工作目录失败：${(err as Error).message}`) }
+      cleanupOutputCaches(dir)
+    }
+  }
+}
+
+/** Forget `.partN` of a destination whose URL/key was refreshed: those bytes
+ * are not the same content, so a byte-range resume would corrupt the file. */
+function dropPartFiles(dest: string): void {
+  try { unlinkSync(`${dest}.parts.json`) } catch { /* first run */ }
+  for (let i = 0; i < 64; i++) {
+    try { unlinkSync(`${dest}.part${i}`) } catch { /* fewer parts */ }
+  }
+}
+
+/**
+ * Report a scratch-dir fallback in the run log. Without it a configured tmpDir
+ * that cannot be created would silently put the bytes back on the system drive.
+ */
+function scratchLog(msg: string): void {
+  runLog(`scratch ${msg}`)
+}
+
+function isViewingLimit(message: string): boolean {
+  return /channel element|Prediction is not allowed|is not allocated|Error submitting packet/i.test(message)
+}
+
+/** Same advice the mux stage gives, for a track that fails to decode first. */
+function viewingLimitError(): Error {
+  return new Error('片源超出试看段后无法解码（未登录或非会员）：设置 → 优酷扫码 登录后重下')
+}
+
+/**
+ * Write the finished file under a hidden name beside `out`, then rename it in
+ * place: a pause, cancel or crash mid-write never leaves a truncated file that
+ * looks finished. Same folder and extension, so tools pick the same muxer.
+ */
+async function writeFinal(out: string, write: (dest: string) => Promise<void>): Promise<void> {
+  const ext = extname(out)
+  const partial = join(dirname(out), `.${basename(out, ext)}.partial${ext}`)
+  try {
+    await write(partial)
+    moveFileSync(partial, out)
+  } catch (e) {
+    try { unlinkSync(partial) } catch { /* never written */ }
+    throw e
   }
 }
 
 async function dlHongguo(
-  cli: GwClient, t: DlTask, dir: string, out: string, ffmpeg: string, mkvmerge: string,
+  cli: GwClient, t: DlTask, out: string, ffmpeg: string, mkvmerge: string,
   emit: (s: string, p: number, l: string) => void,
   retryNote: RetryNote,
   threads: number,
+  work: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   emit('取链', 0.02, t.vid)
   let picked = await resolveHongguoDownload(cli, t.vid, t.quality)
-  const enc = join(dir, `.${t.vid}.enc.mp4`)
+  signal?.throwIfAborted()
+  const safe = t.vid.replace(/[^\w.-]+/g, '_')
+  const enc = join(work, `.${safe}.enc.mp4`)
+  const tmp = join(work, `.${safe}.mp4`)
   emit('下载', 0.08, '')
+  const pull = () => downloadProgress(picked.cdn, enc, referer(t.provider), speedCB(emit, '下载', 0.08, 0.7), retryNote, threads, undefined, undefined, signal)
   try {
-    await downloadProgress(picked.cdn, enc, referer(t.provider), speedCB(emit, '下载', 0.08, 0.7), retryNote, threads)
+    await pull()
   } catch (e) {
+    signal?.throwIfAborted()
     // CDN 拒绝旧链接时重新获取成对的 URL 和 key。
     if (!(e instanceof CdnDenied)) throw e
     emit('重取', 0.08, `CDN ${e.status}，重新取链后下载`)
+    const previousKey = picked.key
     picked = await resolveHongguoDownload(cli, t.vid, t.quality)
-    // A refreshed URL may identify different bytes; restart to keep CDN and key paired.
-    try { unlinkSync(enc) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    await downloadProgress(picked.cdn, enc, referer(t.provider), speedCB(emit, '下载', 0.08, 0.7), retryNote, threads)
+    signal?.throwIfAborted()
+    // Encrypted bytes are identical across a URL refresh only while the key
+    // is: a new key means the old .partN no longer describes this download.
+    // (A mere URL change is already handled by the resume identity hash.)
+    if (picked.key !== previousKey) dropPartFiles(enc)
+    await pull()
   }
-  const tmp = join(dir, `.${t.vid}.mp4`)
+  // mp4 成品不需要换容器：解密（或搬移）直接写到成品路径，省掉一次整文件复写。
+  const direct = !!ffmpeg && !mkvmerge
+  const materialize = direct ? out : tmp
   emit('解密', 0.78, '')
   if (picked.key) {
-    await ffmpegDecryptCopy(ffmpeg, picked.key, enc, tmp, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`))
+    const decrypt = (dest: string) => ffmpegDecryptCopy(ffmpeg, picked.key, enc, dest, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`), signal)
+    if (direct) await writeFinal(out, decrypt)
+    else await decrypt(tmp)
     try { unlinkSync(enc) } catch { /* keep */ }
   } else {
-    moveFileSync(enc, tmp)
+    moveFileSync(enc, materialize)
   }
-  emit('封装', 0.86, out)
+  if (direct) return
+  const remux = (n: number, total: number) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`)
   try {
-    if (mkvmerge) {
-      await mkvmergeRemux(mkvmerge, tmp, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`))
-    } else {
-      await ffmpegRemux(ffmpeg, tmp, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`))
-    }
-  } catch {
+    await writeFinal(out, (dest) => mkvmerge ? mkvmergeRemux(mkvmerge, tmp, dest, remux, signal) : ffmpegRemux(ffmpeg, tmp, dest, remux, signal))
+  } catch (e) {
+    if (signal?.aborted) throw e
     moveFileSync(tmp, out.slice(0, out.length - extname(out).length) + '.mp4')
     throw new Error('封装失败')
   }
@@ -271,26 +445,29 @@ async function dlHongguo(
  * - HLS：N_m3u8DL-RE 直连 CDN，用 `--custom-hls-key` 解密（key 由网关取好，
  *   所以不需要 CDN 上的 key URI，也不需要本地转发）。
  * - 直链 mp4：按普通文件下载；带 key 时先 ffmpeg 解一次。
- * 下载到临时名（分集 ID 里有冒号，不能直接当文件名）。
+ * 中间文件写进 job 工作目录（分集 ID 里有冒号，不能直接当文件名）。
  */
 async function dlHuangguo(
-  cli: GwClient, t: DlTask, dir: string, out: string, ffmpeg: string, mkvmerge: string,
+  cli: GwClient, t: DlTask, out: string, ffmpeg: string, mkvmerge: string,
   emit: (s: string, p: number, l: string) => void,
   retryNote: RetryNote,
   threads: number,
+  work: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   emit('取链', 0.02, t.vid)
   const safe = t.vid.replace(/[^\w.-]+/g, '_')
   let picked = await resolveHuangguoDownload(cli, t.vid, t.quality)
+  signal?.throwIfAborted()
   let hls = /\.(?:m3u8|mpd)(?:[?#]|$)/i.test(picked.url)
-  const raw = join(dir, `.${safe}.src${hls ? '.ts' : '.mp4'}`)
-  const dec = join(dir, `.${safe}.dec.mp4`)
+  const raw = join(work, `.${safe}.src${hls ? '.ts' : '.mp4'}`)
+  const dec = join(work, `.${safe}.dec.mp4`)
   const pull = async () => {
     hls = /\.(?:m3u8|mpd)(?:[?#]|$)/i.test(picked.url)
     const ref = picked.headers.Referer || picked.headers.referer || referer(t.provider)
     emit('下载', 0.08, '')
     if (!hls) {
-      await downloadProgress(picked.url, raw, ref, speedCB(emit, '下载', 0.08, 0.72), retryNote, threads, undefined, picked.headers)
+      await downloadProgress(picked.url, raw, ref, speedCB(emit, '下载', 0.08, 0.72), retryNote, threads, undefined, picked.headers, signal)
       return
     }
     await downloadPlaylist({
@@ -304,6 +481,10 @@ async function dlHuangguo(
       threads,
       select: 'muxed',
       transport: 're',
+      workDir: work,
+      workTag: 'hls',
+      log: scratchLog,
+      signal,
       cb: (n, total, info) => {
         const pct = total > 1 ? n / total : n
         const status = playlistStatus('下载', info?.phase ?? 'download')
@@ -314,24 +495,39 @@ async function dlHuangguo(
   try {
     await pull()
   } catch (e) {
+    signal?.throwIfAborted()
     // CDN 拒绝旧链接时重新取链，链接与 key 必须成对刷新。
     if (!(e instanceof CdnDenied)) throw e
     emit('重取', 0.08, `CDN ${e.status}，重新取链后下载`)
     picked = await resolveHuangguoDownload(cli, t.vid, t.quality)
-    try { unlinkSync(raw) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    signal?.throwIfAborted()
+    // The HLS path restarts RE in a deterministic folder that downloadPlaylist
+    // empties first, so the stale file is replaced rather than appended to.
     await pull()
+  }
+  // 直链 mp4 + 不换容器：解密（或搬移）直接写到成品路径，跳过 mp4→mp4 复写。
+  if (!hls && !mkvmerge) {
+    if (picked.key && ffmpeg) {
+      emit('解密', 0.78, '')
+      await writeFinal(out, (dest) => ffmpegDecryptCopy(ffmpeg, picked.key, raw, dest, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`), signal))
+      try { unlinkSync(raw) } catch { /* keep */ }
+    } else {
+      moveFileSync(raw, out)
+    }
+    return
   }
   let muxSource = raw
   if (!hls && picked.key && ffmpeg) {
     emit('解密', 0.78, '')
-    await ffmpegDecryptCopy(ffmpeg, picked.key, raw, dec, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`))
+    await ffmpegDecryptCopy(ffmpeg, picked.key, raw, dec, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`), signal)
     muxSource = dec
   }
   emit('封装', 0.86, out)
   const remux = (n: number, total: number) =>
     emit('封装', 0.86 + 0.13 * (n / Math.max(1, total)), `封装 ${human(n)}/${human(total)}`)
-  if (mkvmerge && extname(out).toLowerCase() === '.mkv') await mkvmergeRemux(mkvmerge, muxSource, out, remux)
-  else await ffmpegRemux(ffmpeg, muxSource, out, remux)
+  await writeFinal(out, (dest) => mkvmerge && extname(out).toLowerCase() === '.mkv'
+    ? mkvmergeRemux(mkvmerge, muxSource, dest, remux, signal)
+    : ffmpegRemux(ffmpeg, muxSource, dest, remux, signal))
   for (const leftover of [raw, dec]) {
     try { unlinkSync(leftover) } catch { /* keep */ }
   }
@@ -364,16 +560,23 @@ function logTencentDownloadHost(cdn: string, t: DlTask): void {
 }
 
 async function dlTencent(
-  cli: GwClient, cfg: FileConfig, t: DlTask, dir: string, out: string, mkvmerge: string,
+  cli: GwClient, cfg: FileConfig, t: DlTask, out: string, mkvmerge: string,
   emit: (s: string, p: number, l: string) => void,
   retryNote: RetryNote,
+  work: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   emit('取链', 0.05, t.vid)
-  const play = () => cli.invoke('tencent', 'play', { vid: t.vid, ...tencentPlayQualityInput(t), ...tencentPlayInput(cfg) }, cli.extra(cfg, 'tencent'))
+  const play = async () => {
+    const payload = await cli.invoke('tencent', 'play', { vid: t.vid, ...tencentPlayQualityInput(t), ...tencentPlayInput(cfg) }, cli.extra(cfg, 'tencent'))
+    // The gateway call has no signal of its own; stop right after it returns.
+    signal?.throwIfAborted()
+    return payload
+  }
   // Skip CDN mirrors that refuse this network (200 + HTML "Forbidden").
   const pick = async (data: Record<string, unknown>) => {
     const u = pickTencentDownloadURL(data, tencentDlPickOpts(t))
-    return u && /\.m3u8/i.test(u) ? firstLivePlaylist(tencentMirrors(data, u), referer('tencent')) : u
+    return u && /\.m3u8/i.test(u) ? firstLivePlaylist(tencentMirrors(data, u), referer('tencent'), signal) : u
   }
   let played = await play()
   let cdn = await pick(played)
@@ -388,13 +591,16 @@ async function dlTencent(
     runLog(`tencent audio downgrade vid=${t.vid} ${note}`)
     emit('取链', 0.08, note)
   }
-  const raw = join(dir, `.${t.vid}.bin`)
+  const safe = t.vid.replace(/[^\w.-]+/g, '_')
+  const raw = join(work, `.${safe}.bin`)
   const temps = [raw]
+  let done = false
   emit('下载', 0.1, '')
   try {
     try {
-      await downloadProgress(cdn, raw, referer('tencent'), speedCB(emit, '下载', 0.1, 0.55), retryNote, cfg.threads, cipher)
+      await downloadProgress(cdn, raw, referer('tencent'), speedCB(emit, '下载', 0.1, 0.55), retryNote, cfg.threads, cipher, undefined, signal)
     } catch (e) {
+      signal?.throwIfAborted()
       if (!(e instanceof CdnDenied)) throw e
       emit('重取', 0.1, `CDN ${e.status}，重新取链后下载`)
       played = await play()
@@ -404,34 +610,47 @@ async function dlTencent(
       logTencentDownloadHost(cdn, t)
       // Audio playlists come from the same play response; refresh them too.
       plan = tencentAudioDownloadPlan(played, t.audioTracks ?? [])
-      await downloadProgress(cdn, raw, referer('tencent'), speedCB(emit, '下载', 0.1, 0.55), retryNote, cfg.threads, cipher)
+      await downloadProgress(cdn, raw, referer('tencent'), speedCB(emit, '下载', 0.1, 0.55), retryNote, cfg.threads, cipher, undefined, signal)
+    }
+    // 封装直接写 out：中止时删掉截断的成品，别留下看似完成的文件。
+    const muxToOut = async (mux: () => Promise<void>) => {
+      try { await mux() } catch (e) {
+        if (signal?.aborted) { try { unlinkSync(out) } catch { /* 还没开始写 */ } }
+        throw e
+      }
     }
     if (!plan.files.length) {
       // The video stream carries its own default audio track.
       emit('封装', 0.86, out)
-      await mkvmergeRemux(mkvmerge, raw, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`))
+      await muxToOut(() => mkvmergeRemux(mkvmerge, raw, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal))
+      done = true
       return note
     }
     const mux: MuxAudio[] = []
     for (let i = 0; i < plan.files.length; i++) {
       const audio = plan.files[i]!
-      const dest = join(dir, `.${t.vid}.a${i}.bin`)
+      const dest = join(work, `.${safe}.a${i}.bin`)
       temps.push(dest)
       const base = 0.55 + (0.25 * i) / plan.files.length
       const span = 0.25 / plan.files.length
       emit('音轨', base, audio.label)
       // Audio playlists share the play response's key but may be clear; decide per track.
-      const audioURL = await firstLivePlaylist(audio.urls, referer('tencent'))
-      const audioCipher = cipher && await hlsSegmentsEncrypted(audioURL, referer('tencent')) ? cipher : undefined
-      await downloadProgress(audioURL, dest, referer('tencent'), speedCB(emit, '音轨', base, base + span), retryNote, cfg.threads, audioCipher)
+      const audioURL = await firstLivePlaylist(audio.urls, referer('tencent'), signal)
+      const audioCipher = cipher && await hlsSegmentsEncrypted(audioURL, referer('tencent'), signal) ? cipher : undefined
+      await downloadProgress(audioURL, dest, referer('tencent'), speedCB(emit, '音轨', base, base + span), retryNote, cfg.threads, audioCipher, undefined, signal)
       mux.push({ path: dest, title: audio.label, lang: audio.lang })
     }
     emit('封装', 0.86, out)
-    await mkvmergeMux(mkvmerge, raw, mux, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`))
+    await muxToOut(() => mkvmergeMux(mkvmerge, raw, mux, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal))
+    done = true
     return note
   } finally {
-    for (const path of temps) {
-      try { unlinkSync(path) } catch { /* keep */ }
+    // Success and cancel drop the sources; a failure keeps them for diagnosis,
+    // and a pause keeps them so the resume can reuse the downloaded bytes.
+    if (done || signal?.reason === 'cancel') {
+      for (const path of temps) {
+        try { unlinkSync(path) } catch { /* keep */ }
+      }
     }
   }
 }
@@ -440,24 +659,27 @@ async function dlDouyin(
   cli: GwClient, t: DlTask, out: string,
   emit: (s: string, p: number, l: string) => void,
   retryNote: RetryNote,
+  signal?: AbortSignal,
 ): Promise<void> {
   emit('取链', 0.02, t.vid || t.url || '')
   const url = (t.url || '').trim() || (t.vid ? `https://www.douyin.com/video/${t.vid}` : '')
   if (!url) throw new Error('没有抖音链接')
   const resolve = async () => {
     const cdn = pickDouyinURL(await cli.invoke('douyin', 'resolve', { url }))
+    signal?.throwIfAborted()
     if (!cdn) throw new Error('抖音没有直链')
     return cdn
   }
   let cdn = await resolve()
   emit('下载', 0.1, cdn)
   try {
-    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, 4)
+    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, 4, undefined, undefined, signal)
   } catch (e) {
+    signal?.throwIfAborted()
     if (!(e instanceof CdnDenied)) throw e
     emit('重取', 0.1, `CDN ${e.status}，重新解析后续传`)
     cdn = await resolve()
-    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, 4)
+    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, 4, undefined, undefined, signal)
   }
 }
 
@@ -465,13 +687,19 @@ async function dlYouku(
   cli: GwClient, cfg: FileConfig, t: DlTask, dir: string, out: string, mkvmerge: string,
   emit: (s: string, p: number, l: string) => void,
   retryNote: RetryNote,
+  work: string,
+  signal?: AbortSignal,
+  hooks?: JobHooks,
 ): Promise<string> {
   // Rebind at download time too: drafts / older queues may still carry ep1 probe vids.
   const tracks = t.audioTracks?.length
     ? bindYoukuAudioTracksToTask(t.audioTracks, t)
     : [{ id: '', label: '默认音轨', lang: '' }]
-  const videoPath = join(dir, `.${t.vid}.video.mp4`)
+  const videoPath = join(work, `.${t.vid}.video.mp4`)
   const muxInputs: MuxAudio[] = []
+  // Whether each muxed input is DTS, aligned with muxInputs. Kept separately
+  // because a soft-skipped track shifts muxInputs away from `tracks`.
+  const muxDts: boolean[] = []
   const temps = new Set<string>()
   const completedTracks = new Set<string>()
   let succeeded = false
@@ -498,8 +726,15 @@ async function dlYouku(
       threads: cfg.threads,
       select,
       transport: 'node',
+      workDir: work,
+      workTag: select === 'audio'
+        ? `audio${trackId ? `-${trackId.replace(/[^\w-]+/g, '_')}` : ''}`
+        : select === 'video' ? 'video' : 'muxed',
+      log: scratchLog,
+      signal,
       refreshSource: async () => {
         const payload = await playYouku(cli, cfg, t, select === 'audio' ? trackVid(t, trackId) : t.vid)
+        signal?.throwIfAborted()
         const drm = youkuDRM(payload)
         const src = select === 'audio' ? youkuAudioPlaylist(payload, trackId) : youkuVideoPlaylist(payload, t.quality)
         if (!src) throw new Error('重新取链后缺少所选轨道')
@@ -518,6 +753,7 @@ async function dlYouku(
 
   const run = async (payload: Record<string, unknown>) => {
     muxInputs.length = 0
+    muxDts.length = 0
     temps.add(videoPath)
     temps.add(`${videoPath}.transport.json`)
     temps.add(`${videoPath}.download-error.log`)
@@ -545,6 +781,7 @@ async function dlYouku(
       // Video download/decryption can outlive the original audio URL lease.
       const audioVid = trackVid(t, track.id, track.vid)
       const audioPayload = await playYouku(cli, cfg, t, audioVid)
+      signal?.throwIfAborted()
       const audioDrm = youkuDRM(audioPayload)
       if (audioDrm.audioEnc && !audioDrm.reKey) throw new Error('重新取得的音轨缺少解密密钥')
       const audioPl = youkuAudioPlaylist(audioPayload, track.id, track.lang)
@@ -553,7 +790,7 @@ async function dlYouku(
         emit('音轨', 0.67 + 0.18 * i / tracks.length, `跳过无播放列表音轨：${track.label}`)
         continue
       }
-      const audioPath = join(dir, `.${t.vid}.audio${i}.mp4`)
+      const audioPath = join(work, `.${t.vid}.audio${i}.mp4`)
       temps.add(audioPath)
       temps.add(`${audioPath}.transport.json`)
       temps.add(`${audioPath}.download-error.log`)
@@ -568,56 +805,130 @@ async function dlYouku(
         track.id,
       )
       muxInputs.push({ path: audioPath, title: track.label, lang: track.lang })
+      muxDts.push(isDtsAudio(track))
     }
   }
 
   try {
     await retryCdnRefresh(async () => run(await playYouku(cli, cfg, t)), (retry, total, delayMs, status) => {
       retryNote(retry, total, `CDN ${status}，${delayMs / 1000} 秒后重新取链`)
-    })
+    }, undefined, signal)
+    signal?.throwIfAborted()
+    // 下载与解密（都在 downloadPlaylist 内部）已经结束，可以让下一个优酷任务入场：
+    // 冲突点是共享的 RE/Shaka 临时文件名与混用的 CENC key，封装阶段不再涉及。
+    hooks?.downloaded?.()
 
     // Inspect the actual sample entry as well as the selected label: a default
     // track may be DTS without an explicit selection in the task.
     const mp4box = await ensureMP4Box()
-    const audioInfo = []
-    for (const input of muxInputs) audioInfo.push(await readMp4Tracks(mp4box, input.path))
+    const audioInfo = await Promise.all(muxInputs.map(input => readMp4Tracks(mp4box, input.path, signal)))
     const dts = tracks.some(isDtsAudio) || audioInfo.some(list => list.some(t => /^dts[cehlxy]$/.test(t.codec)))
     if (dts) out = out.slice(0, out.length - extname(out).length) + '.mp4'
     emit('校验', 0.85, dts ? '检查 MP4 轨道和时间戳（DTS 使用 MP4Box）' : '检查音轨完整解码')
     const ffmpeg = await ensureFFmpeg()
-    for (const [i, input] of muxInputs.entries()) {
-      const probed = await audioTrackLabel(ffmpeg, input.path)
-      input.title = input.lang && input.lang !== '—' ? `${input.lang} ${probed}` : probed
-      if (!isDtsAudio(tracks[i]!) && !audioInfo[i]!.some(t => /^dts[cehlxy]$/.test(t.codec))) await validateAudio(ffmpeg, input.path)
+    const validate = async (path: string) => {
+      try {
+        await validateAudio(ffmpeg, path, signal)
+      } catch (e) {
+        if (signal?.aborted) throw e
+        const msg = e instanceof Error ? e.message : String(e)
+        throw isViewingLimit(msg) ? viewingLimitError() : e
+      }
     }
+    // Every track was validated on its own input, so the muxed file needs no
+    // second full decode — it is only needed when there is no input at all
+    // (single muxed stream), and then the mp4 source is validated up front.
+    const muxedOnly = muxInputs.length === 0
+    await Promise.all([
+      ...muxInputs.map(async (input, i) => {
+        const probed = await audioTrackLabel(ffmpeg, input.path, signal)
+        input.title = input.lang && input.lang !== '—' ? `${input.lang} ${probed}` : probed
+        if (!muxDts[i] && !audioInfo[i]!.some(t => /^dts[cehlxy]$/.test(t.codec))) await validate(input.path)
+      }),
+      ...(muxedOnly && !dts ? [validate(videoPath)] : []),
+    ])
+    signal?.throwIfAborted()
     emit('封装', 0.86, muxInputs.length > 1 ? `封装 ${muxInputs.length} 条音轨` : out)
     const muxProgress = (n: number, total: number) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`)
     const partial = join(dir, `.${t.vid}.mux-partial${dts ? '.mp4' : '.mkv'}`)
     temps.add(partial)
     temps.add(`${partial}.timing.json`)
     try {
-      if (dts) await mp4boxMux(mp4box, videoPath, muxInputs, partial, muxProgress)
-      else if (muxInputs.length) await mkvmergeMux(mkvmerge, videoPath, muxInputs, partial, muxProgress)
-      else await mkvmergeRemux(mkvmerge, videoPath, partial, muxProgress)
-      if (!dts) await validateAudio(ffmpeg, partial)
+      if (dts) await mp4boxMux(mp4box, videoPath, muxInputs, partial, muxProgress, signal)
+      else if (muxInputs.length) await mkvmergeMux(mkvmerge, videoPath, muxInputs, partial, muxProgress, signal)
+      else await mkvmergeRemux(mkvmerge, videoPath, partial, muxProgress, signal)
+      signal?.throwIfAborted()
       moveFileSync(partial, out)
       succeeded = true
       return out
     } catch (e) {
+      if (signal?.aborted) throw e
       const msg = e instanceof Error ? e.message : String(e)
-      if (/channel element|Prediction is not allowed|is not allocated|Error submitting packet/i.test(msg)) {
-        throw new Error('片源超出试看段后无法解码（未登录或非会员）：设置 → 优酷扫码 登录后重下')
-      }
+      if (isViewingLimit(msg)) throw viewingLimitError()
       throw e
     }
   } finally {
     // Failed muxes retain original tracks for diagnosis/retry. Developers can
     // opt into retaining successful downloads too, without editing config.
     if (succeeded && process.env.GVS_KEEP_INTERMEDIATES !== '1') {
-      await cleanupTemporaryFiles(temps)
+      // Cleanup must never turn a finished download into a failed one.
+      try { await cleanupTemporaryFiles(temps) } catch (e) { runLog(`youku cleanup ${(e as Error).message}`) }
       cleanupOutputCaches(dir)
+    } else if (signal?.aborted && signal.reason === 'cancel') {
+      // 取消不留中间文件；暂停保留，续传还要用。已下好的轨道保留到工作目录被
+      // 整体删除为止，避免删到一半又失败时反而丢了续传状态。
+      const disposable = [...temps].filter(path => path !== videoPath && !muxInputs.some(m => m.path === path))
+      try { await cleanupTemporaryFiles(disposable) } catch { /* work dir removal is the backstop */ }
     }
   }
+}
+
+/** Root of every intermediate file: the configured folder, else beside the library. */
+export function tmpRoot(cfg: FileConfig): string {
+  return cfg.tmpDir || join(cfg.outDir, '.gvs-tmp')
+}
+
+/**
+ * Deterministic per-task working folder. The same task always maps to the same
+ * folder, so a resume finds the `.partN` chunks it left behind.
+ */
+export function jobWorkDir(cfg: FileConfig, t: DlTask): string {
+  const vid = t.vid.replace(/[^\w.-]+/g, '_').slice(0, 48) || 'task'
+  const key = JSON.stringify([
+    t.quality ?? '',
+    t.height ?? 0,
+    (t.audioTracks ?? []).map(a => a.id),
+    t.edition ?? '',
+    t.codec ?? '',
+    t.season ?? 0,
+    t.episode ?? 0,
+  ])
+  return join(tmpRoot(cfg), `job-${t.provider}-${vid}-${createHash('sha256').update(key).digest('hex').slice(0, 12)}`)
+}
+
+/**
+ * Remove one job's work folder, retrying the Windows EBUSY/EPERM window while a
+ * killed downloader's handles close, then drop tmpRoot when it became empty.
+ */
+export async function discardJobWork(cfg: FileConfig, t: DlTask): Promise<void> {
+  const work = jobWorkDir(cfg, t)
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      rmSync(work, { recursive: true, force: true })
+      lastErr = undefined
+      break
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') { lastErr = undefined; break }
+      lastErr = e
+      if (code !== 'EBUSY' && code !== 'EPERM' && code !== 'EACCES') break
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)))
+    }
+  }
+  const root = tmpRoot(cfg)
+  try { if (!readdirSync(root).length) rmSync(root, { recursive: true, force: true }) } catch { /* not empty / in use / absent */ }
+  if (lastErr) throw new Error(`工作目录清理失败：${work}：${(lastErr as Error).message}`)
 }
 
 /** Clean only paths owned by this job; never scan or delete another active job. */
@@ -652,6 +963,12 @@ export function cleanupOutputCaches(dir: string): void {
       if (statSync(path).isDirectory()) rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
     } catch { /* finished file already in place */ }
   }
+  // Older builds put RE/decrypt scratch in `<outDir>/.gvs-tmp`; drop it once
+  // the last job using it is gone.
+  const tmp = join(dir, '.gvs-tmp')
+  try {
+    if (readdirSync(tmp).length === 0) rmSync(tmp, { recursive: true, force: true })
+  } catch { /* still in use or absent */ }
 }
 
 async function playYouku(cli: GwClient, cfg: FileConfig, t: DlTask, vid = t.vid): Promise<Record<string, unknown>> {
