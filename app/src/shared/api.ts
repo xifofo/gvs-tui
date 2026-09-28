@@ -27,6 +27,8 @@ export type SettingsView = {
   keyMasked: string
   hasKey: boolean
   outDir: string
+  /** 临时目录：下载分片、解密、封装的中间文件。空 = 自动（放在下载目录所在盘的 .gvs-tmp，完成后直接改名，不跨盘复制） */
+  tmpDir: string
   releaseGroup: string
   tmdbKey: string
   tmdbLang: string
@@ -70,6 +72,10 @@ export type Card = {
   /** detail = 能直接打开详情；search = 只能按标题搜；unavailable = 预约等 */
   target: 'detail' | 'search' | 'unavailable'
   reason?: string
+  /** target=search 时网关给的搜索词（缺省用标题） */
+  query?: string
+  /** 优酷单视频（id 是 vid 而非节目 id），走 detailFromLink */
+  video?: boolean
 }
 
 /** channels：栏目里嵌的子频道（红果剧场的「真人剧」「漫剧」…），界面当成栏目标签 */
@@ -171,8 +177,13 @@ export type JobView = {
   log: string
   err: string
   note: string
-  state: 'queued' | 'running' | 'done' | 'failed'
+  state: 'queued' | 'running' | 'paused' | 'done' | 'failed'
   output: string
+  /** 入队 / 结束时间（毫秒时间戳，结束前为 0） */
+  createdAt: number
+  finishedAt: number
+  /** 正在切换暂停/继续，按钮先禁用 */
+  busy?: boolean
 }
 
 export type NamingPreview = { folder: string; file: string }
@@ -206,7 +217,8 @@ export interface GvsApi {
   parseLink(text: string): Promise<LinkTarget>
   searchTargets(): Promise<Provider[]>
   searchProvider(provider: Provider, query: string): Promise<SearchGroup>
-  detail(provider: Provider, id: string): Promise<DetailView>
+  /** hint：卡片上已有的标题/海报，详情接口没给时兜底 */
+  detail(provider: Provider, id: string, hint?: { title?: string; poster?: string }): Promise<DetailView>
   detailFromLink(link: LinkTarget): Promise<DetailView>
   probe(provider: Provider, episodes: EpisodeView[]): Promise<ProbeResult>
   namingPreview(req: EnqueueRequest): Promise<NamingPreview>
@@ -214,10 +226,23 @@ export interface GvsApi {
   enqueue(req: EnqueueRequest): Promise<number>
   jobs(): Promise<JobView[]>
   retryJob(id: number): Promise<void>
+  /** 暂停：停掉进程、保留已下载的部分；排队中的直接挂起 */
+  pauseJob(id: number): Promise<void>
+  /** 继续：重新排队，能续传的从断点接着下 */
+  resumeJob(id: number): Promise<void>
+  /** 从列表删除（运行中先停止）；deleteFiles 同时删掉已下载的成品与中间文件 */
+  removeJob(id: number, deleteFiles?: boolean): Promise<void>
+  pauseAll(): Promise<void>
+  resumeAll(): Promise<void>
   clearFinished(): Promise<void>
+  /** 缓存占用（字节）：posters 海报缓存；temp 临时目录里没有任务在用的残留 */
+  cacheInfo(): Promise<{ posters: number; temp: number }>
+  /** 清掉海报缓存与没有任务在用的临时残留 */
+  clearCache(): Promise<void>
   openPath(path: string): Promise<void>
   showItem(path: string): Promise<void>
-  chooseDir(): Promise<string>
+  /** 选文件夹；start 为对话框初始位置（缺省下载目录） */
+  chooseDir(start?: string): Promise<string>
   youkuQrStart(): Promise<QRStart>
   youkuQrPoll(): Promise<QRPoll>
   youkuRenew(): Promise<string>

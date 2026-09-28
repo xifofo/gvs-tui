@@ -4,7 +4,7 @@
 import { app, protocol } from 'electron'
 import { createDecipheriv, createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { headersFor, referer } from '@tui/media.ts'
 import { lookBundledFFmpeg } from '@tui/tools.ts'
@@ -87,17 +87,113 @@ function heicToJpeg(src: Buffer, dir: string, key: string): Promise<Buffer> {
   )
 }
 
-async function load(url: string, provider: string): Promise<{ body: Buffer; type: string }> {
-  const dir = join(app.getPath('userData'), 'posters')
-  mkdirSync(dir, { recursive: true })
+function cacheDir(): string {
+  return join(app.getPath('userData'), 'posters')
+}
+
+/**
+ * 缓存 key：完整 URL 去掉「每次请求都变」的签名参数后取 sha1。
+ * 只留 origin+pathname 是不够的：`/get?id=1` 和 `/get?id=2` 会撞成同一张图。
+ */
+const VOLATILE_PARAMS = [
+  'x-expires',
+  'x-signature',
+  'sign',
+  'signature',
+  'auth_key',
+  'expires',
+  'token',
+  't',
+  'ts',
+  'e',
+  's',
+]
+
+/** x-oss-process 会换出不同尺寸的图，属于资源本身，不能当签名参数丢掉。 */
+const KEEP_PARAMS = ['x-oss-process']
+
+export function cacheKeyFor(url: string): string {
   let stable = url
   try {
     const u = new URL(url)
-    stable = u.origin + u.pathname // 签名参数每次都变，按路径缓存
+    for (const k of [...u.searchParams.keys()]) {
+      const low = k.toLowerCase()
+      if (KEEP_PARAMS.includes(low)) continue
+      // x-oss-* 里同时有 algorithm/credential/date/expires/signature/signedheaders…
+      if (low.startsWith('x-oss-') || VOLATILE_PARAMS.includes(low)) u.searchParams.delete(k)
+    }
+    stable = u.toString()
   } catch {
-    /* keep raw */
+    /* 不是合法 URL：原样做 key，后面 fetch 会失败并记日志 */
   }
-  const key = createHash('sha1').update(stable).digest('hex')
+  return createHash('sha1').update(stable).digest('hex')
+}
+
+/** 海报缓存上限；超过就按 mtime 从旧到新删到 250MB 以下。 */
+const MAX_CACHE_BYTES = 300 * 1024 * 1024
+const TARGET_CACHE_BYTES = 250 * 1024 * 1024
+const SWEEP_INTERVAL = 60_000
+let lastSweep = 0
+
+function cacheFiles(dir: string): Array<{ path: string; size: number; mtime: number }> {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isFile())
+      .flatMap((d) => {
+        const p = join(dir, d.name)
+        try {
+          const st = statSync(p)
+          return [{ path: p, size: st.size, mtime: st.mtimeMs }]
+        } catch {
+          return [] // 正被 ffmpeg 改写 / 刚被删掉
+        }
+      })
+  } catch {
+    return []
+  }
+}
+
+/** 写完之后顺手收一次；一分钟最多扫一次，别把协议处理拖慢。 */
+function trimCache(dir: string): void {
+  const now = Date.now()
+  if (now - lastSweep < SWEEP_INTERVAL) return
+  lastSweep = now
+  const files = cacheFiles(dir)
+  let total = files.reduce((n, f) => n + f.size, 0)
+  if (total <= MAX_CACHE_BYTES) return
+  files.sort((a, b) => a.mtime - b.mtime)
+  for (const f of files) {
+    if (total <= TARGET_CACHE_BYTES) break
+    try {
+      rmSync(f.path, { force: true })
+      total -= f.size
+    } catch {
+      /* 下次再删 */
+    }
+  }
+}
+
+/** 海报缓存占用（字节）。 */
+export function posterCacheSize(): number {
+  return cacheFiles(cacheDir()).reduce((n, f) => n + f.size, 0)
+}
+
+/** 清空海报缓存。正在写入的临时文件删不掉就留着，下次清理再处理。 */
+export function clearPosterCache(): void {
+  for (const f of cacheFiles(cacheDir())) {
+    try {
+      rmSync(f.path, { force: true })
+    } catch {
+      /* ignore */
+    }
+  }
+  inflight.clear()
+}
+
+async function load(url: string, provider: string): Promise<{ body: Buffer; type: string }> {
+  const dir = cacheDir()
+  mkdirSync(dir, { recursive: true })
+  const key = cacheKeyFor(url)
   const cached = join(dir, `${key}.img`)
   if (existsSync(cached)) {
     const body = readFileSync(cached)
@@ -118,15 +214,18 @@ async function load(url: string, provider: string): Promise<{ body: Buffer; type
     type = 'image/jpeg'
   }
   writeFileSync(cached, body)
+  trimCache(dir)
   return { body, type }
 }
 
 export function handlePosterProtocol(): void {
   protocol.handle(POSTER_SCHEME, async (req) => {
     const u = new URL(req.url)
-    const target = u.searchParams.get('u') ?? ''
+    const raw = u.searchParams.get('u') ?? ''
     const provider = u.searchParams.get('p') ?? ''
-    if (!/^https?:\/\//.test(target)) return new Response(null, { status: 400 })
+    // 卡片上可能是协议相对地址（`//img.x/y.jpg`），补全后再校验。
+    const target = raw.startsWith('//') ? `https:${raw}` : raw
+    if (!/^https?:\/\//i.test(target)) return new Response(null, { status: 400 })
     let job = inflight.get(target)
     if (!job) {
       job = load(target, provider).finally(() => inflight.delete(target))
