@@ -70,12 +70,13 @@ export function optionWindow<T>(items: T[] | undefined, index: number, bodyH: nu
 }
 
 /**
- * Job log below the fixed title/status block, which owns the first two lines.
- * `offset` is the runtime's scroll position within the whole log.
+ * Job log below the fixed title/status block, which owns the first two lines,
+ * plus the info line (progress or full status) and the 日志 rule. `offset` is
+ * the runtime's scroll position within the whole log.
  */
 export function logWindow(lines: string[] | undefined, offset: number, bodyH: number) {
   const logs = (lines ?? []).slice(2)
-  const room = Math.max(1, bodyH - 3)
+  const room = Math.max(1, bodyH - 4)
   const start = Math.min(offset, Math.max(0, logs.length - room))
   return {
     total: logs.length,

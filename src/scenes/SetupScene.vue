@@ -3,7 +3,7 @@
 // the shell's refs (the shell forwards them to `bridge.set`), and tab switches
 // which one the shell focuses.
 import { computed, ref } from 'vue-termui'
-import { Box, Input, Text } from 'vue-termui'
+import { Box, Input, StyledText, Text, bold, fg } from 'vue-termui'
 import { ink } from '../lib/rows.ts'
 import { c } from '../lib/theme.ts'
 import type { Snapshot } from '../bridge.ts'
@@ -52,8 +52,11 @@ const fieldW = computed(() => fieldBoxW.value - 3)
       :paddingTop="1"
       :paddingBottom="1"
     >
-      <Text :content="ink(c.accent, '▌ GVS', true)" :height="1" />
-      <Text :content="ink(c.dim, '填入管理台签发的网关地址与 API Key')" :height="1" />
+      <!-- Same words as the header, so the card does not re-brand itself. -->
+      <Text
+        :content="new StyledText([fg(c.text)(bold('连接网关')), fg(c.faint)('   填入管理台签发的网关地址与 API Key')])"
+        :height="1"
+      />
       <Text
         :content="'网关地址'"
         :height="1"

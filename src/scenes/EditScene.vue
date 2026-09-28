@@ -28,6 +28,17 @@ defineExpose({ focus })
 
 const boxW = computed(() => Math.max(30, Math.min(72, bodyW.value - 2)))
 const fieldW = computed(() => boxW.value - 4)
+
+/** What the field expects, for the fields where the format is not obvious. */
+const FIELD_HINTS: Record<string, string> = {
+  下载目录: '绝对路径，例如 D:\\GVS',
+  下载线程: '1–16（路并发）',
+  '腾讯 Cookie': '整段粘贴浏览器 Cookie',
+  '抖音 Cookie': '整段粘贴浏览器 Cookie',
+  发布组: '留空则用默认前缀',
+  'TMDB Key': 'TMDB v3 API Key',
+}
+const hint = computed(() => FIELD_HINTS[props.state.editField ?? ''] ?? '')
 </script>
 
 <template>
@@ -35,6 +46,14 @@ const fieldW = computed(() => boxW.value - 4)
     <Text
       :content="ink(c.text, state.editField || '编辑', true)"
       :height="1"
+      :width="bodyW"
+      :truncate="true"
+    />
+    <Text
+      :content="ink(c.faint, '回车保存 · esc 取消')"
+      :height="1"
+      :width="bodyW"
+      :truncate="true"
     />
     <Box
       :width="boxW"
@@ -58,5 +77,13 @@ const fieldW = computed(() => boxW.value - 4)
         :width="fieldW"
       />
     </Box>
+    <Text
+      v-if="hint"
+      :content="ink(c.faint, hint)"
+      :height="1"
+      :marginTop="1"
+      :width="bodyW"
+      :truncate="true"
+    />
   </Box>
 </template>

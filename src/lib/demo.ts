@@ -100,6 +100,10 @@ const SETTINGS = [
   { label: '红果合并', value: '开' },
   { label: '红果 NFO', value: '开' },
   { label: '红果封装', value: 'mkv' },
+  { label: '黄果 NFO', value: '开' },
+  { label: '黄果封装', value: 'mkv' },
+  { label: '抖音 Cookie', value: '空 · 回车粘贴' },
+  { label: '运行日志', value: '关' },
 ]
 
 /** A deterministic stand-in for a scannable QR block, sized like a real one. */

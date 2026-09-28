@@ -51,6 +51,7 @@ import {
   isMovieDetail,
   logWindow,
   resultWindow,
+  sliceList,
   tmdbWindow,
   workspaceSections,
 } from './lib/view'
@@ -217,18 +218,10 @@ const tmdbView = computed(() =>
 const logView = computed(() =>
   logWindow(state.value.jobDetailLines, state.value.logOffset ?? 0, bodyH.value),
 )
-
-const jobStats = computed(() => {
-  const list = jobs.value
-  return {
-    total: list.length,
-    done: list.filter((j) => j.status === '完成').length,
-    failed: list.filter((j) => j.status === '失败').length,
-    queued: list.filter((j) => j.status === '排队').length,
-    active: list.filter((j) => !['完成', '失败', '排队'].includes(j.status))
-      .length,
-  }
-})
+/** The jobs list's own window, exposed so the status line can report its range. */
+const jobView = computed(() =>
+  sliceList(jobs.value, state.value.cursor, Math.max(1, bodyH.value - 3)),
+)
 
 const busyLabel = computed(() => {
   switch (state.value.scene) {
@@ -276,10 +269,12 @@ const metaText = computed(() => {
       return logView.value.total
         ? `${logView.value.first}-${logView.value.last} / ${logView.value.total} 行`
         : ''
-    case 'jobs': {
-      const s = jobStats.value
-      return `${s.done} 完成 · ${s.active} 进行 · ${s.queued} 排队${s.failed ? ` · ${s.failed} 失败` : ''}`
-    }
+    // The header chips already carry the per-status counts, so the right side
+    // reports the visible window instead of repeating them.
+    case 'jobs':
+      return jobView.value.total
+        ? `${jobView.value.first}-${jobView.value.last} / ${jobView.value.total}`
+        : ''
     case 'settings':
       return `${settings.value.length} 项`
     default:
