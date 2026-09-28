@@ -1,3 +1,4 @@
+import { needsTunnel } from '@tui/tunnel-policy.ts'
 import { parseEpisodes as parseEps } from '@tui/episodes.ts'
 // 桌面端业务核心：把 tui/src/lib 的能力编排成界面可调用的方法。
 // 流程与 TUI runtime.ts 保持一致（探测 → 选画质/音轨 → TMDB → 入队），
@@ -309,7 +310,7 @@ export class Core {
     this.tunnelAbort = null
     this.tunnelOk = false
     this.tunnelErr = ''
-    if (!this.has('youku') && !this.has('tencent')) return
+    if (!needsTunnel(p => this.has(p as Provider))) return
     // 开发调试：同一 Key 只能有一条隧道，别顶掉正在用的那一个
     if (process.env.GVS_NO_TUNNEL) return
     await installTunnelWebSocket(this.cfg.host)

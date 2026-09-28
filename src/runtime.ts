@@ -1,3 +1,4 @@
+import { needsTunnel } from './lib/tunnel-policy.ts'
 import { parseEpisodes as parseEps, episodeCollections } from './lib/episodes.ts'
 import { startTencentDualQR, pollTencentQR, pollTencentDualQR, applyTencentLogin, tencentLabels, tencentPlayInput, type TencentMode } from './lib/tencent-qr.ts'
 import { fetchTencentAccount, txAccountSummary, type TxAccount } from './lib/tencent-account.ts'
@@ -857,7 +858,7 @@ export class Runtime {
           }`,
           'ok',
         )
-        if (!this.tunnelOn && (this.has('youku') || this.has('tencent'))) {
+        if (!this.tunnelOn && needsTunnel(p => this.has(p))) {
           this.tunnelOn = true
           this.tunnelAbort = new AbortController()
           // A tunnel that is torn down and redialled every few seconds must not
