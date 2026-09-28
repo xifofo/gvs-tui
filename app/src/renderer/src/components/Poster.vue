@@ -10,9 +10,13 @@ const props = withDefaults(defineProps<{ url?: string; provider?: string; title?
 
 const COLORS = ['#2b3a55', '#7a2e2e', '#3e5c3a', '#5b4a7a', '#8a5a1f', '#2f5f66', '#4a4a4a', '#6b2e4f']
 const failed = ref(false)
+const loaded = ref(false)
 watch(
   () => props.url,
-  () => (failed.value = false),
+  () => {
+    failed.value = false
+    loaded.value = false
+  },
 )
 const src = computed(() =>
   props.url && !failed.value ? `gvs-img://poster/?u=${encodeURIComponent(props.url)}&p=${encodeURIComponent(props.provider)}` : '',
@@ -25,8 +29,9 @@ const color = computed(() => {
 </script>
 
 <template>
-  <div class="poster" :style="{ background: color }" role="img" :aria-label="title ? `${title} 海报` : '海报'">
-    <img v-if="src" :src="src" alt="" loading="lazy" decoding="async" @error="failed = true" />
+  <div class="poster" :style="{ background: src ? 'var(--paper-2)' : color }" role="img" :aria-label="title ? `${title} 海报` : '海报'">
+    <span v-if="src && !loaded" class="sk wash" aria-hidden="true" />
+    <img v-if="src" :src="src" alt="" decoding="async" :class="{ on: loaded }" @load="loaded = true" @error="failed = true" />
     <span v-else-if="title" class="t" :style="{ fontSize: titleSize + 'px' }">{{ title }}</span>
   </div>
 </template>
@@ -37,6 +42,9 @@ const color = computed(() => {
   display: flex; flex-direction: column; justify-content: flex-end; padding: 12px;
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
-.poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .2s ease; }
+.poster img.on { opacity: 1; }
+.wash { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; }
+@media (prefers-reduced-motion: reduce) { .poster img { transition: none; } }
 .t { font-weight: 900; line-height: 1.15; text-wrap: balance; word-break: break-word; }
 </style>

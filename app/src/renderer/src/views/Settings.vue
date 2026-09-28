@@ -1,15 +1,26 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { PROVIDER_NAME, type SettingsPatch } from '@shared/api'
+import { PROVIDER_NAME, type Provider, type SettingsPatch } from '@shared/api'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
-import { errText, gvs, hasProvider, store, toast } from '../store'
+import Skeleton from '../components/Skeleton.vue'
+import { errText, gvs, hasProvider, human, store, toast, type SettingsTab } from '../store'
+
+const TABS: Array<{ key: SettingsTab; label: string }> = [
+  { key: 'download', label: '下载' },
+  { key: 'account', label: '平台账号' },
+  { key: 'gateway', label: '网关' },
+  { key: 'naming', label: '命名与刮削' },
+  { key: 'about', label: '关于' },
+]
 
 const s = computed(() => store.state!.settings)
 const form = reactive({
   host: '',
   key: '',
   outDir: '',
+  tmpDir: '',
   releaseGroup: '',
   tmdbKey: '',
   tmdbLang: '',
@@ -40,9 +51,11 @@ async function save(patch: SettingsPatch, what: string) {
   }
 }
 
-async function pickDir() {
-  const dir = await gvs('chooseDir')
-  if (dir) await save({ outDir: dir }, 'dir')
+async function pickDir(which: 'out' | 'tmp') {
+  const cur = which === 'tmp' ? form.tmpDir || form.outDir : form.outDir
+  const dir = await gvs('chooseDir', cur || undefined)
+  if (!dir) return
+  await save(which === 'tmp' ? { tmpDir: dir } : { outDir: dir }, which)
 }
 
 async function renew() {
@@ -61,6 +74,46 @@ function step(d: number) {
   void save({ threads: form.threads }, 'threads')
 }
 
+// ---- 缓存 ----
+const cache = ref<{ posters: number; temp: number } | null>(null)
+const cacheError = ref('')
+async function loadCache() {
+  cacheError.value = ''
+  try {
+    cache.value = await gvs('cacheInfo')
+  } catch (e) {
+    cacheError.value = errText(e)
+  }
+}
+watch(
+  () => store.view,
+  (v) => {
+    if (v === 'settings') void loadCache()
+  },
+  { immediate: true },
+)
+const clearing = ref(false)
+const askClear = ref(false)
+async function clearCache() {
+  askClear.value = false
+  clearing.value = true
+  try {
+    await gvs('clearCache')
+    toast('缓存已清理', 'ok')
+    await loadCache()
+  } catch (e) {
+    toast(errText(e), 'err')
+  } finally {
+    clearing.value = false
+  }
+}
+const cacheText = computed(() => {
+  const c = cache.value
+  if (!c) return '正在统计…'
+  return `海报 ${human(c.posters) || '0 B'} · 临时残留 ${human(c.temp) || '0 B'}`
+})
+
+// ---- 更新 ----
 const upd = computed(() => store.update)
 const updText = computed(() => {
   const u = upd.value
@@ -76,8 +129,8 @@ const updText = computed(() => {
   }
 })
 const updTone = computed(() => {
-  const s = upd.value?.status
-  return s === 'ready' || s === 'latest' ? 'ok' : s === 'available' || s === 'downloading' ? 'warn' : s === 'error' ? 'err' : ''
+  const st = upd.value?.status
+  return st === 'ready' || st === 'latest' ? 'ok' : st === 'available' || st === 'downloading' ? 'warn' : st === 'error' ? 'err' : ''
 })
 async function checkUpdate() {
   try {
@@ -87,185 +140,283 @@ async function checkUpdate() {
   }
 }
 
-const account = (p: string) => store.state?.accounts.find((a) => a.provider === p)
+const account = (p: Provider) => store.state?.accounts.find((a) => a.provider === p)
 const tone: Record<string, string> = { ok: 'ok', warn: 'warn', err: 'err', muted: '' }
 const onSystemDrive = computed(() => store.state?.platform === 'win32' && /^c:[\\/]/i.test(form.outDir))
+const tmpOnSystem = computed(() => !!form.tmpDir && store.state?.platform === 'win32' && /^c:[\\/]/i.test(form.tmpDir))
+const tmpText = computed(() => form.tmpDir || '自动（下载目录所在盘）')
 const tunnelText = computed(() => {
   const t = store.state!.tunnel
   if (!t.enabled) return { cls: '', text: '无需隧道' }
   return t.ok ? { cls: 'ok', text: '隧道正常' } : { cls: 'warn', text: t.err ? `隧道：${t.err}` : '隧道连接中' }
 })
+const showTencentCookie = ref(false)
+const showDouyinCookie = ref(false)
+const plat = (p: Provider) => hasProvider(p)
 </script>
 
 <template>
   <div class="page">
     <h1 class="h1">设置</h1>
+
     <div class="cols">
-      <div class="col">
-        <section class="card pad sec">
-          <h2 class="h2s">网关</h2>
-          <label class="field">网关地址<input v-model="form.host" class="input mono" autocomplete="off" /></label>
-          <label class="field">API Key
-            <input v-model="form.key" class="input mono" :placeholder="s.keyMasked || 'sk_live_…'" autocomplete="off" />
-          </label>
-          <div class="row">
-            <span class="chip ok">{{ store.state!.keyName || '已连接' }}</span>
-            <span class="chip" :class="tunnelText.cls">{{ tunnelText.text }}</span>
-            <button
-              type="button"
-              class="btn sm"
-              style="margin-left: auto"
-              :disabled="saving === 'gw' || (form.host === s.host && !form.key)"
-              @click="save({ host: form.host, key: form.key || undefined }, 'gw')"
-            >
-              <span v-if="saving === 'gw'" class="spin" />保存并重连
-            </button>
-          </div>
-        </section>
+      <nav class="tabs" aria-label="设置分类">
+        <button v-for="t in TABS" :key="t.key" type="button" class="tab" :class="{ on: store.settingsTab === t.key }" :aria-current="store.settingsTab === t.key" @click="store.settingsTab = t.key">
+          {{ t.label }}
+        </button>
+      </nav>
 
-        <section class="card pad sec">
-          <h2 class="h2s">外观</h2>
-          <div class="font">
-            <span class="big">字</span>
-            <span class="dim small">界面字体随应用一起安装，不依赖系统字体，旧版 Win10 也不会缺字。</span>
-          </div>
-        </section>
-
-        <section class="card pad sec">
-          <h2 class="h2s">媒体工具</h2>
-          <div v-for="t in store.state!.tools" :key="t.name" class="tool">
-            <Icon :name="t.ok ? 'check' : 'x'" :size="16" :stroke="2.5" :style="{ color: t.ok ? 'var(--ok)' : 'var(--err)' }" />
-            <span class="tn">{{ t.name }}</span>
-            <span class="muted small" style="margin-left: auto">{{ t.note }}</span>
-          </div>
-          <div v-if="!store.state!.tools.length" class="muted small row"><span class="spin" />检查中…</div>
-        </section>
-
-        <section class="card pad sec">
-          <h2 class="h2s">关于与更新</h2>
-          <div class="row">
-            <span>GVS <b class="mono">{{ store.state!.version }}</b></span>
-            <span class="chip" :class="updTone">{{ updText }}</span>
-          </div>
-          <div v-if="upd?.status === 'downloading'" class="progress"><div :style="{ width: upd.percent + '%' }" /></div>
-          <div class="row">
-            <button type="button" class="btn sm" :disabled="upd?.status === 'checking' || upd?.status === 'downloading'" @click="checkUpdate">
-              <span v-if="upd?.status === 'checking'" class="spin" />检查更新
-            </button>
-            <button v-if="upd?.status === 'ready'" type="button" class="btn sm outline" @click="gvs('installUpdate')">立即重启安装</button>
-            <button v-else-if="upd?.status === 'available' && upd.url" type="button" class="btn sm outline" @click="gvs('installUpdate')">前往下载</button>
-          </div>
-          <span class="muted small">{{ upd?.auto ? '有新版本会自动下载，下次退出时安装。' : '有新版本时会在这里提示。' }}</span>
-        </section>
-      </div>
-
-      <div class="col">
-        <section class="card pad sec">
-          <h2 class="h2s">平台账号</h2>
-          <div v-if="hasProvider('youku')" class="acct">
-            <div class="ah">
-              <PlatformLogo provider="youku" :size="24" /><b>{{ PROVIDER_NAME.youku }}</b>
-              <span class="chip" :class="tone[account('youku')?.tone ?? 'muted']">{{ account('youku')?.short }}</span>
-              <div class="aa">
-                <button type="button" class="btn sm" :disabled="saving === 'renew'" @click="renew">续期</button>
-                <button type="button" class="btn sm" @click="store.qr = 'youku'"><Icon name="qr" :size="15" />扫码</button>
-              </div>
-            </div>
-            <span class="muted small">{{ account('youku')?.summary }}</span>
-          </div>
-          <div v-if="hasProvider('tencent')" class="acct">
-            <div class="ah">
-              <PlatformLogo provider="tencent" :size="24" /><b>{{ PROVIDER_NAME.tencent }}</b>
-              <span class="chip" :class="tone[account('tencent')?.tone ?? 'muted']">{{ account('tencent')?.short }}</span>
-              <div class="aa"><button type="button" class="btn sm" @click="store.qr = 'tencent'"><Icon name="qr" :size="15" />双扫码</button></div>
-            </div>
-            <span class="muted small">{{ account('tencent')?.summary }}</span>
-            <label class="field">或粘贴 Cookie<textarea v-model="form.tencentCookie" class="input" spellcheck="false" /></label>
-            <div class="row end">
-              <button type="button" class="btn sm" :disabled="form.tencentCookie === s.tencentCookie" @click="save({ tencentCookie: form.tencentCookie }, 'tx')">保存 Cookie</button>
-            </div>
-          </div>
-          <div v-for="p in (['hongguo', 'huangguo'] as const).filter(hasProvider)" :key="p" class="acct">
-            <div class="ah"><PlatformLogo :provider="p" :size="24" /><b>{{ PROVIDER_NAME[p] }}</b><span class="chip">无需登录</span></div>
-          </div>
-          <div v-if="hasProvider('douyin')" class="acct">
-            <div class="ah">
-              <PlatformLogo provider="douyin" :size="24" /><b>{{ PROVIDER_NAME.douyin }}</b>
-              <span class="chip" :class="tone[account('douyin')?.tone ?? 'muted']">{{ account('douyin')?.short }}</span>
-            </div>
-            <label class="field">网页登录 Cookie（需含 sessionid）<textarea v-model="form.douyinCookie" class="input" spellcheck="false" /></label>
-            <div class="row end">
-              <button type="button" class="btn sm" :disabled="form.douyinCookie === s.douyinCookie" @click="save({ douyinCookie: form.douyinCookie }, 'dy')">保存 Cookie</button>
-            </div>
-          </div>
-        </section>
-      </div>
-
-      <div class="col">
-        <section class="card pad sec">
+      <div class="panel">
+        <!-- 下载 -->
+        <section v-if="store.settingsTab === 'download'" class="card">
           <h2 class="h2s">下载</h2>
-          <div class="row bottom">
-            <label class="field grow">保存到<input :value="form.outDir" class="input mono" readonly @click="pickDir" /></label>
-            <button type="button" class="btn" @click="pickDir">更改…</button>
+
+          <div class="srow">
+            <div class="sl">
+              <span class="st">保存到</span>
+              <span class="sd mono mid" :title="form.outDir">{{ form.outDir || '未设置' }}</span>
+              <span v-if="onSystemDrive" class="sd warn-text">当前在系统盘，大文件容易把系统盘占满。</span>
+            </div>
+            <div class="sc">
+              <button type="button" class="btn sm" :disabled="saving === 'out'" @click="pickDir('out')"><span v-if="saving === 'out'" class="spin" />更改…</button>
+              <button type="button" class="btn sm" :disabled="!form.outDir" @click="gvs('openPath', form.outDir)"><Icon name="folder" :size="15" />打开</button>
+            </div>
           </div>
-          <span class="muted small">没配过时，Windows 会选空间最大的非系统盘，目录是该盘下的 GVS。点「更改」可以换成任意文件夹。</span>
-          <span v-if="onSystemDrive" class="muted small" style="color: var(--orange-text)">当前在系统盘，大文件容易把系统盘占满。</span>
-          <div class="row bottom">
-            <div class="field grow">
-              <span>分片并发</span>
+
+          <div class="srow">
+            <div class="sl">
+              <span class="st">临时目录</span>
+              <span class="sd mono mid" :title="form.tmpDir">{{ tmpText }}</span>
+              <span class="sd">下载分片、解密和封装的中间文件放这里；和下载目录同盘时完成后直接改名，最快。</span>
+              <span v-if="tmpOnSystem" class="sd warn-text">临时目录在系统盘，会和下载目录之间来回拷贝大文件。</span>
+            </div>
+            <div class="sc">
+              <button type="button" class="btn sm" :disabled="saving === 'tmp'" @click="pickDir('tmp')"><span v-if="saving === 'tmp'" class="spin" />更改…</button>
+              <button type="button" class="btn sm" :disabled="!form.tmpDir" @click="save({ tmpDir: '' }, 'tmp')">恢复自动</button>
+            </div>
+          </div>
+
+          <div class="srow">
+            <div class="sl">
+              <span class="st">分片并发</span>
+              <span class="sd">同时下载的分片数，网络好可以调高。1 ~ 16。</span>
+            </div>
+            <div class="sc">
               <div class="stepper">
                 <button type="button" aria-label="减少" @click="step(-1)">−</button>
                 <span class="mono">{{ form.threads }}</span>
                 <button type="button" aria-label="增加" @click="step(1)">+</button>
               </div>
             </div>
-            <label class="field grow">发布组
-              <input v-model="form.releaseGroup" class="input" @change="save({ releaseGroup: form.releaseGroup }, 'rg')" />
-            </label>
           </div>
-          <label v-if="hasProvider('hongguo')" class="toggle">红果写入 NFO
-            <input v-model="form.hongguoNfo" type="checkbox" @change="save({ hongguoNfo: form.hongguoNfo }, 'hn')" />
-            <span class="track"><span class="knob" /></span>
-          </label>
-          <label v-if="hasProvider('huangguo')" class="toggle">黄果写入 NFO
-            <input v-model="form.huangguoNfo" type="checkbox" @change="save({ huangguoNfo: form.huangguoNfo }, 'yn')" />
-            <span class="track"><span class="knob" /></span>
-          </label>
+
+          <div class="srow">
+            <div class="sl">
+              <span class="st">缓存</span>
+              <span class="sd">{{ cacheError || cacheText }}</span>
+            </div>
+            <div class="sc">
+              <button type="button" class="btn sm" :disabled="clearing || !!cacheError" @click="askClear = true"><span v-if="clearing" class="spin" /><Icon v-else name="trash" :size="15" />清理</button>
+            </div>
+          </div>
         </section>
 
-        <section class="card pad sec">
-          <h2 class="h2s">TMDB 刮削</h2>
-          <span class="muted small">填了 Key，优酷/腾讯下载时会自动匹配 TMDB，按 Jellyfin/Plex 的习惯命名。</span>
-          <label class="field">API Key<input v-model="form.tmdbKey" class="input mono" autocomplete="off" @change="save({ tmdbKey: form.tmdbKey }, 'tk')" /></label>
-          <label class="field">语言<input v-model="form.tmdbLang" class="input mono" @change="save({ tmdbLang: form.tmdbLang }, 'tl')" /></label>
+        <!-- 平台账号 -->
+        <section v-else-if="store.settingsTab === 'account'" class="card">
+          <h2 class="h2s">平台账号</h2>
+
+          <div v-if="plat('youku')" class="srow">
+            <div class="sl">
+              <span class="st acct"><PlatformLogo provider="youku" :size="20" />{{ PROVIDER_NAME.youku }}
+                <span class="chip" :class="tone[account('youku')?.tone ?? 'muted']">{{ account('youku')?.short }}</span>
+              </span>
+              <span class="sd">{{ account('youku')?.summary }}</span>
+            </div>
+            <div class="sc">
+              <button type="button" class="btn sm" :disabled="saving === 'renew'" @click="renew"><span v-if="saving === 'renew'" class="spin" />续期</button>
+              <button type="button" class="btn sm" @click="store.qr = 'youku'"><Icon name="qr" :size="15" />扫码</button>
+            </div>
+          </div>
+
+          <div v-if="plat('tencent')" class="srow wrap">
+            <div class="sl">
+              <span class="st acct"><PlatformLogo provider="tencent" :size="20" />{{ PROVIDER_NAME.tencent }}
+                <span class="chip" :class="tone[account('tencent')?.tone ?? 'muted']">{{ account('tencent')?.short }}</span>
+              </span>
+              <span class="sd">{{ account('tencent')?.summary }}</span>
+            </div>
+            <div class="sc">
+              <button type="button" class="btn sm" @click="store.qr = 'tencent'"><Icon name="qr" :size="15" />双扫码</button>
+              <button type="button" class="btn sm" @click="showTencentCookie = !showTencentCookie">{{ showTencentCookie ? '收起' : '粘贴 Cookie' }}</button>
+            </div>
+            <div v-if="showTencentCookie" class="field-full">
+              <textarea v-model="form.tencentCookie" class="input" spellcheck="false" placeholder="粘贴腾讯视频网页 Cookie" />
+              <div class="field-act">
+                <button type="button" class="btn sm" :disabled="form.tencentCookie === s.tencentCookie" @click="save({ tencentCookie: form.tencentCookie }, 'tx')">保存 Cookie</button>
+              </div>
+            </div>
+          </div>
+
+          <div v-for="p in (['hongguo', 'huangguo'] as Provider[]).filter(plat)" :key="p" class="srow">
+            <div class="sl">
+              <span class="st acct"><PlatformLogo :provider="p" :size="20" />{{ PROVIDER_NAME[p] }}<span class="chip">无需登录</span></span>
+              <span class="sd">公开接口，不需要账号。</span>
+            </div>
+          </div>
+
+          <div v-if="plat('douyin')" class="srow wrap">
+            <div class="sl">
+              <span class="st acct"><PlatformLogo provider="douyin" :size="20" />{{ PROVIDER_NAME.douyin }}
+                <span class="chip" :class="tone[account('douyin')?.tone ?? 'muted']">{{ account('douyin')?.short }}</span>
+              </span>
+              <span class="sd">{{ account('douyin')?.summary }}</span>
+            </div>
+            <div class="sc">
+              <button type="button" class="btn sm" @click="showDouyinCookie = !showDouyinCookie">{{ showDouyinCookie ? '收起' : '粘贴 Cookie' }}</button>
+            </div>
+            <div v-if="showDouyinCookie" class="field-full">
+              <textarea v-model="form.douyinCookie" class="input" spellcheck="false" placeholder="网页登录 Cookie（需含 sessionid）" />
+              <div class="field-act">
+                <button type="button" class="btn sm" :disabled="form.douyinCookie === s.douyinCookie" @click="save({ douyinCookie: form.douyinCookie }, 'dy')">保存 Cookie</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 网关 -->
+        <section v-else-if="store.settingsTab === 'gateway'" class="card">
+          <h2 class="h2s">网关</h2>
+          <div class="srow wrap">
+            <div class="sl"><span class="st">网关地址</span><span class="sd">地址和 Key 找网关管理员要，只保存在这台电脑上。</span></div>
+            <div class="field-full"><input v-model="form.host" class="input mono" autocomplete="off" /></div>
+          </div>
+          <div class="srow wrap">
+            <div class="sl"><span class="st">API Key</span><span class="sd">换 Key 时填新的，留空则保持不变。</span></div>
+            <div class="field-full"><input v-model="form.key" class="input mono" :placeholder="s.keyMasked || 'sk_live_…'" autocomplete="off" /></div>
+          </div>
+          <div class="srow">
+            <div class="sl">
+              <span class="st">状态</span>
+              <span class="sd">保存后会断开重连一次。</span>
+            </div>
+            <div class="sc">
+              <span class="chip ok">{{ store.state!.keyName || '已连接' }}</span>
+              <span class="chip" :class="tunnelText.cls">{{ tunnelText.text }}</span>
+              <button type="button" class="btn sm outline" :disabled="saving === 'gw' || (form.host === s.host && !form.key)" @click="save({ host: form.host, key: form.key || undefined }, 'gw')">
+                <span v-if="saving === 'gw'" class="spin" />保存并重连
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 命名与刮削 -->
+        <section v-else-if="store.settingsTab === 'naming'" class="card">
+          <h2 class="h2s">命名与刮削</h2>
+
+          <div class="srow">
+            <div class="sl"><span class="st">发布组</span><span class="sd">文件名结尾的组名后缀。</span></div>
+            <div class="sc"><input v-model="form.releaseGroup" class="input" style="width: 200px" @change="save({ releaseGroup: form.releaseGroup }, 'rg')" /></div>
+          </div>
+
+          <div class="srow wrap">
+            <div class="sl"><span class="st">TMDB API Key</span><span class="sd">填了 Key，优酷/腾讯下载时会自动匹配 TMDB，按 Jellyfin/Plex 的习惯命名。</span></div>
+            <div class="field-full"><input v-model="form.tmdbKey" class="input mono" autocomplete="off" @change="save({ tmdbKey: form.tmdbKey }, 'tk')" /></div>
+          </div>
+
+          <div class="srow">
+            <div class="sl"><span class="st">TMDB 语言</span><span class="sd">刮削时优先取的标题语言。</span></div>
+            <div class="sc"><input v-model="form.tmdbLang" class="input mono" style="width: 160px" @change="save({ tmdbLang: form.tmdbLang }, 'tl')" /></div>
+          </div>
+
+          <template v-for="p in (['hongguo', 'huangguo'] as Provider[]).filter(plat)" :key="p">
+            <div class="srow">
+              <div class="sl"><span class="st acct"><PlatformLogo :provider="p" :size="18" />{{ PROVIDER_NAME[p] }}写入 NFO</span><span class="sd">生成供 Jellyfin / Emby 读取的元数据文件。</span></div>
+              <div class="sc">
+                <label class="toggle">
+                  <input :checked="p === 'hongguo' ? form.hongguoNfo : form.huangguoNfo" type="checkbox" @change="(e) => save(p === 'hongguo' ? { hongguoNfo: (e.target as HTMLInputElement).checked } : { huangguoNfo: (e.target as HTMLInputElement).checked }, p === 'hongguo' ? 'hn' : 'yn')" />
+                  <span class="track"><span class="knob" /></span>
+                </label>
+              </div>
+            </div>
+            <div class="srow">
+              <div class="sl"><span class="st">{{ PROVIDER_NAME[p] }}封装格式</span><span class="sd">MKV 兼容性最好，MP4 更通用。</span></div>
+              <div class="sc">
+                <div class="seg" style="width: 180px">
+                  <button v-for="f in ['mkv', 'mp4']" :key="f" type="button" :class="{ on: (p === 'hongguo' ? form.hongguoFmt : form.huangguoFmt) === f }" @click="save(p === 'hongguo' ? { hongguoFmt: f } : { huangguoFmt: f }, p === 'hongguo' ? 'hf' : 'yf')">{{ f.toUpperCase() }}</button>
+                </div>
+              </div>
+            </div>
+          </template>
+        </section>
+
+        <!-- 关于 -->
+        <section v-else class="card">
+          <h2 class="h2s">关于</h2>
+          <div class="srow">
+            <div class="sl"><span class="st">版本</span><span class="sd mono">GVS {{ store.state!.version }} · {{ store.state!.platform }}</span></div>
+            <div class="sc"><span class="chip" :class="updTone">{{ updText }}</span></div>
+          </div>
+          <div v-if="upd?.status === 'downloading'" class="srow"><div class="sl"><div class="progress"><div :style="{ width: upd.percent + '%' }" /></div></div></div>
+          <div class="srow">
+            <div class="sl"><span class="st">更新</span><span class="sd">{{ upd?.auto ? '有新版本会自动下载，下次退出时安装。' : '有新版本时会在这里提示。' }}</span></div>
+            <div class="sc">
+              <button type="button" class="btn sm" :disabled="upd?.status === 'checking' || upd?.status === 'downloading'" @click="checkUpdate">
+                <span v-if="upd?.status === 'checking'" class="spin" />检查更新
+              </button>
+              <button v-if="upd?.status === 'ready'" type="button" class="btn sm outline" @click="gvs('installUpdate')">立即重启安装</button>
+              <button v-else-if="upd?.status === 'available' && upd.url" type="button" class="btn sm outline" @click="gvs('installUpdate')">前往下载</button>
+            </div>
+          </div>
+          <div class="srow">
+            <div class="sl"><span class="st">媒体工具</span><span class="sd">下载、解密和封装都要用到，缺哪个会在任务里报错。</span></div>
+          </div>
+          <div v-for="t in store.state!.tools" :key="t.name" class="srow tool">
+            <div class="sl"><span class="st acct"><Icon :name="t.ok ? 'check' : 'x'" :size="15" :stroke="2.5" :style="{ color: t.ok ? 'var(--ok)' : 'var(--err)' }" />{{ t.name }}</span></div>
+            <div class="sc"><span class="muted small">{{ t.note }}</span></div>
+          </div>
+          <div v-if="!store.state!.tools.length" class="srow"><div class="sl"><span class="sd row"><span class="spin" />检查中…</span></div></div>
         </section>
       </div>
     </div>
+
+    <ConfirmDialog
+      v-if="askClear"
+      title="清理缓存？"
+      :message="cacheText"
+      confirm-text="清理"
+      checkbox="同时删掉没有任务在用的临时残留"
+      @confirm="clearCache"
+      @cancel="askClear = false"
+    />
   </div>
 </template>
 
 <style scoped>
-.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: start; }
-.col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.sec { display: flex; flex-direction: column; gap: 14px; }
-.h2s { font-size: 17px; font-weight: 700; }
+.cols { display: flex; gap: 28px; align-items: flex-start; }
+.tabs { width: 200px; flex-shrink: 0; position: sticky; top: 0; display: flex; flex-direction: column; gap: 4px; }
+.tab {
+  height: 40px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2);
+  font-size: 14px; font-weight: 500; text-align: left; cursor: pointer;
+}
+.tab:hover { background: var(--paper-2); }
+.tab.on { background: var(--ink); color: var(--paper); font-weight: 700; }
+.panel { flex-grow: 1; min-width: 0; max-width: 760px; }
+.card { overflow: hidden; }
+.card > .h2s { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
 .small { font-size: 13px; }
-.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.row.end { justify-content: flex-end; }
-.row.bottom { align-items: flex-end; flex-wrap: nowrap; }
-.grow { flex-grow: 1; min-width: 0; }
-.font { padding: 12px 14px; background: var(--paper); border-radius: 8px; display: flex; gap: 12px; align-items: center; }
-.big { font-family: var(--font-display); font-size: 26px; font-weight: 800; line-height: 1; }
-.tool { display: flex; align-items: center; gap: 10px; font-size: 14px; }
-.tn { font-weight: 500; }
-.acct { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
-.acct:first-of-type { border-top: 0; padding-top: 0; }
-.ah { display: flex; align-items: center; gap: 10px; font-size: 15px; }
-.aa { margin-left: auto; display: flex; gap: 6px; }
-.stepper { height: 40px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); display: flex; align-items: center; }
-.stepper button { width: 40px; height: 38px; border: 0; background: transparent; font-size: 18px; cursor: pointer; }
-.stepper span { flex-grow: 1; text-align: center; font-size: 15px; }
-@media (max-width: 1280px) {
-  .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.row { display: flex; align-items: center; gap: 8px; }
+.acct { display: flex; align-items: center; gap: 8px; }
+.srow.wrap { flex-wrap: wrap; }
+.field-full { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.field-act { display: flex; justify-content: flex-end; }
+textarea.input { height: 72px; }
+.stepper { height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); display: flex; align-items: center; }
+.stepper button { width: 34px; height: 34px; border: 0; background: transparent; font-size: 17px; cursor: pointer; }
+.stepper span { flex-grow: 1; min-width: 34px; text-align: center; font-size: 15px; }
+.warn-text { color: var(--orange-text); }
+.tool .st { font-weight: 500; }
+@media (max-width: 1100px) {
+  .cols { gap: 18px; }
+  .tabs { width: 160px; }
 }
 </style>

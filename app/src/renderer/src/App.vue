@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { store } from './store'
+import { onBeforeUnmount, onMounted } from 'vue'
+import { back, modalOpen, store } from './store'
 import Sidebar from './components/Sidebar.vue'
 import TopBar from './components/TopBar.vue'
 import Toasts from './components/Toasts.vue'
@@ -11,6 +12,15 @@ import Detail from './views/Detail.vue'
 import Quality from './views/Quality.vue'
 import Downloads from './views/Downloads.vue'
 import Settings from './views/Settings.vue'
+
+function onKey(e: KeyboardEvent) {
+  if (store.view !== 'detail' && store.view !== 'quality') return
+  if (modalOpen()) return
+  if (e.key === 'Escape') back('search')
+  else if (e.altKey && e.key === 'ArrowLeft') back('search')
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <template>
@@ -21,14 +31,16 @@ import Settings from './views/Settings.vue'
     <main class="main">
       <TopBar />
       <div class="body">
-        <KeepAlive :include="['DiscoverView']">
-          <Discover v-if="store.view === 'discover'" />
-          <Search v-else-if="store.view === 'search'" />
-          <Detail v-else-if="store.view === 'detail'" />
-          <Quality v-else-if="store.view === 'quality'" />
-          <Downloads v-else-if="store.view === 'downloads'" />
-          <Settings v-else-if="store.view === 'settings'" />
-        </KeepAlive>
+        <Transition name="page" mode="out-in" :duration="140">
+          <KeepAlive :include="['DiscoverView']">
+            <Discover v-if="store.view === 'discover'" key="discover" />
+            <Search v-else-if="store.view === 'search'" key="search" />
+            <Detail v-else-if="store.view === 'detail'" key="detail" />
+            <Quality v-else-if="store.view === 'quality'" key="quality" />
+            <Downloads v-else-if="store.view === 'downloads'" key="downloads" />
+            <Settings v-else-if="store.view === 'settings'" key="settings" />
+          </KeepAlive>
+        </Transition>
       </div>
     </main>
   </div>

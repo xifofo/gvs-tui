@@ -4,6 +4,7 @@ import { PROVIDER_NAME } from '@shared/api'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
+import Skeleton from '../components/Skeleton.vue'
 import { back, openQuality, store } from '../store'
 
 const d = computed(() => store.detail)
@@ -77,17 +78,50 @@ const meta = computed(() => {
     .join(' · ')
 })
 const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2, '0')
+
+/** 还没拿到详情时：先用卡片带上来的标题/海报撑住骨架 */
+const hint = computed(() => store.detailHint ?? {})
+const hintPoster = computed(() => hint.value.poster ?? '')
+const descOpen = ref(false)
+/** 4 行以上的简介才给展开按钮（按字符数估，不引额外测量） */
+const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
 </script>
 
 <template>
   <div class="page">
     <button type="button" class="back" @click="back('search')"><Icon name="back" :size="16" />返回</button>
 
-    <div v-if="store.detailLoading" class="empty"><span class="spin" />正在加载详情…</div>
+    <template v-if="store.detailLoading">
+      <div class="hero">
+        <div class="wrap">
+          <Poster v-if="hintPoster" class="poster" :url="hintPoster" :title="hint.title ?? ''" :title-size="22" />
+          <Skeleton v-else class="poster-sk" w="172" h="244" r="8" />
+        </div>
+        <div class="info">
+          <Skeleton w="140" h="14" />
+          <h1 v-if="hint.title" class="title">{{ hint.title }}</h1>
+          <Skeleton v-else w="58%" h="42" r="8" />
+          <Skeleton w="42%" h="15" />
+          <div class="chips"><Skeleton w="52" h="24" r="6" /><Skeleton w="88" h="24" r="6" /></div>
+          <Skeleton w="96%" h="14" /><Skeleton w="92%" h="14" /><Skeleton w="70%" h="14" />
+        </div>
+      </div>
+      <section class="card eps">
+        <div class="eps-h">
+          <Skeleton w="120" h="19" r="6" />
+          <div class="sk-tools"><Skeleton w="120" h="36" r="8" /><Skeleton w="58" h="36" r="8" /><Skeleton w="58" h="36" r="8" /></div>
+        </div>
+        <div class="sk-grid">
+          <Skeleton v-for="i in 56" :key="i" h="40" r="6" />
+        </div>
+        <div class="sk-foot"><Skeleton w="110" h="16" /><Skeleton w="176" h="46" r="8" /></div>
+      </section>
+    </template>
     <div v-else-if="store.detailError" class="error-box">{{ store.detailError }}</div>
     <template v-else-if="d">
       <div class="hero">
-        <Poster class="poster" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" />
+        <span v-if="d.poster" class="hero-bg" :style="{ backgroundImage: `url(${d.poster})` }" aria-hidden="true" />
+        <div class="wrap"><Poster class="poster" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" /></div>
         <div class="info">
           <div class="src dim"><PlatformLogo :provider="d.provider" :size="18" /><span>{{ PROVIDER_NAME[d.provider] }}</span><span v-if="d.category">· {{ d.category }}</span></div>
           <h1 class="title">{{ d.title }}</h1>
@@ -97,7 +131,8 @@ const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2,
             <span v-if="d.drm" class="chip">DRM · {{ d.drm }}</span>
             <span v-if="d.score" class="chip mono">{{ d.score }}</span>
           </div>
-          <p v-if="d.desc" class="desc">{{ d.desc }}</p>
+          <p v-if="d.desc" class="desc" :class="{ open: descOpen }">{{ d.desc }}</p>
+          <button v-if="descLong" type="button" class="linkish more" :aria-expanded="descOpen" @click="descOpen = !descOpen">{{ descOpen ? '收起' : '展开' }}</button>
         </div>
       </div>
 
@@ -165,14 +200,25 @@ const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2,
 
 <style scoped>
 .back { margin-bottom: -8px; }
-.hero { display: flex; gap: 28px; }
-.poster { width: 172px; height: 244px; }
-.info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
+.hero { display: flex; gap: 28px; position: relative; }
+.hero-bg {
+  position: absolute; inset: -20px -32px auto; height: 300px; z-index: 0; pointer-events: none;
+  background-size: cover; background-position: center 20%; filter: blur(48px) saturate(1.3); opacity: .35;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .5) 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .5) 55%, transparent 100%);
+}
+.hero > *:not(.hero-bg) { position: relative; z-index: 1; }
+.wrap { flex-shrink: 0; }
+.poster { width: 172px; height: 244px; box-shadow: 6px 6px 0 var(--ink); }
+.poster-sk { box-shadow: 6px 6px 0 var(--ink); }
+.info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding-top: 4px; }
 .src { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .title { font-family: var(--font-display); font-size: 44px; font-weight: 800; letter-spacing: -.5px; line-height: 1.05; }
 .meta { font-size: 15px; }
 .desc { font-size: 14px; line-height: 1.7; color: var(--ink-2); max-width: 720px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.eps { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.desc.open { -webkit-line-clamp: unset; }
+.more { margin-top: -6px; }
+.eps { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; position: relative; z-index: 1; background: var(--card); }
 .eps-h { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .h2s { font-size: 17px; font-weight: 700; }
 .small { font-size: 13px; }
@@ -183,7 +229,8 @@ const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2,
 .collection-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
 .ep.detailed { height: auto; min-height: 62px; display: flex; gap: 10px; align-items: center; text-align: left; padding: 10px; }
 .episode-title { font-family: var(--font-body); font-size: 13px; line-height: 1.5; }
-.grid { display: grid; gap: 8px; max-height: 420px; overflow-y: auto; padding: 2px; }
+/* 和整页一起滚：内层再套一个滚动区会让 sticky 底栏压住最后几行 */
+.grid { display: grid; gap: 8px; padding: 2px; }
 .ep { height: 40px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--card); font-size: 14px; cursor: pointer; }
 .ep:hover { border-color: var(--ink); }
 .ep.on { background: var(--orange); border-color: var(--ink); font-weight: 700; }
@@ -199,4 +246,7 @@ const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2,
 }
 .foot .n { font-size: 18px; }
 .foot .btn { margin-left: auto; }
+.sk-tools { margin-left: auto; display: flex; gap: 8px; }
+.sk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+.sk-foot { display: flex; align-items: center; justify-content: space-between; padding-top: 4px; }
 </style>

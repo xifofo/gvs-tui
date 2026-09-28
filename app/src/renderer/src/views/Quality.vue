@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { AudioView, EnqueueRequest, NamingPreview, TmdbHit } from '@shared/api'
 import Icon from '../components/Icon.vue'
+import Skeleton from '../components/Skeleton.vue'
 import { back, errText, go, gvs, human, openQuality, store, toast } from '../store'
 
 const d = computed(() => store.detail)
@@ -154,6 +155,8 @@ function qname(q: { stream: string; hdr: string; label: string }): string {
   return r && !q.label.includes(r) ? `${r} · ${q.label}` : q.label
 }
 const sep = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).slice(-2).join('/')
+const tmpFull = computed(() => store.state?.settings.tmpDir || '')
+const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目录同盘 .gvs-tmp'))
 </script>
 
 <template>
@@ -164,7 +167,40 @@ const sep = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).slice(-2).joi
       <span class="muted">已选 {{ count }} {{ noun }} · 按第一{{ noun === '集' ? '集' : '个' }}探测，整批沿用</span>
     </div>
 
-    <div v-if="store.probing" class="empty"><span class="spin" />正在向平台取画质…</div>
+    <div v-if="store.probing" class="cols">
+      <div class="left">
+        <fieldset class="fs abox">
+          <legend class="sr-only">音轨</legend>
+          <div class="alegend">
+            <span class="atitle">音轨</span>
+            <span class="muted small row"><span class="spin" />正在向平台取画质…</span>
+          </div>
+          <div class="agroup">
+            <Skeleton w="56" h="30" r="8" />
+            <div class="achips"><Skeleton w="96" h="34" r="8" /><Skeleton w="112" h="34" r="8" /><Skeleton w="88" h="34" r="8" /></div>
+          </div>
+          <div class="agroup">
+            <Skeleton w="56" h="30" r="8" />
+            <div class="achips"><Skeleton w="80" h="34" r="8" /><Skeleton w="104" h="34" r="8" /></div>
+          </div>
+        </fieldset>
+        <fieldset class="fs">
+          <legend>视频</legend>
+          <div v-for="i in 4" :key="i" class="opt sk-opt">
+            <Skeleton w="20" h="20" r="50%" />
+            <span class="ot"><Skeleton w="128" h="16" /><Skeleton w="180" h="12" /></span>
+            <Skeleton w="150" h="13" />
+          </div>
+        </fieldset>
+      </div>
+      <aside class="card hard out">
+        <h2 class="h2s">输出</h2>
+        <div class="blk"><Skeleton w="72" h="13" /><Skeleton w="100%" h="38" r="8" /></div>
+        <div class="blk"><Skeleton w="84" h="13" /><Skeleton w="100%" h="58" r="8" /></div>
+        <Skeleton w="100%" h="16" />
+        <Skeleton w="100%" h="52" r="8" />
+      </aside>
+    </div>
     <div v-else-if="store.probeError" class="error-box">
       取画质失败：{{ store.probeError }}
       <div style="margin-top: 10px"><button type="button" class="btn sm" @click="openQuality">重试</button></div>
@@ -240,6 +276,9 @@ const sep = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).slice(-2).joi
         <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="go('settings')">
           <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
         </button>
+        <button type="button" class="dir mono tmp" :title="tmpFull" @click="go('settings')">
+          <Icon name="file" :size="16" />临时文件：{{ tmpText }}
+        </button>
 
         <div v-if="totalSize" class="sum"><span class="dim">预计占用</span><span class="mono">约 {{ human(totalSize) }} · {{ count }} {{ noun }}</span></div>
 
@@ -301,7 +340,10 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .hit:hover, .hit.on { background: var(--paper-2); }
 .name { padding: 10px 12px; background: var(--ink); color: var(--paper); border-radius: 8px; font-size: 12px; line-height: 1.7; word-break: break-all; }
 .name span { color: var(--orange); }
-.dir { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
+.dir { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
 .dir:hover { color: var(--orange-text); }
+.tmp { color: var(--ink-3); font-size: 12px; }
+.sk-opt { cursor: default; gap: 14px; }
+.sk-opt .ot { flex-grow: 1; gap: 6px; }
 .sum { display: flex; justify-content: space-between; font-size: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 </style>

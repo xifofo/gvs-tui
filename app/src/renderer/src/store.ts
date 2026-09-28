@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 import type {
   AppState,
+  Card,
   DetailView,
   EpisodeView,
   GvsApi,
@@ -13,6 +14,7 @@ import type {
 } from '@shared/api'
 
 export type View = 'discover' | 'search' | 'detail' | 'quality' | 'downloads' | 'settings'
+export type SettingsTab = 'download' | 'account' | 'gateway' | 'naming' | 'about'
 
 // 参数可能是 Vue 响应式代理，IPC 的结构化克隆不认；统一转成纯数据再发。
 export const gvs = <K extends keyof GvsApi>(method: K, ...args: Parameters<GvsApi[K]>): ReturnType<GvsApi[K]> =>
@@ -36,8 +38,13 @@ export const store = reactive({
   detail: null as DetailView | null,
   detailLoading: false,
   detailError: '',
+  /** 卡片上已有的标题/海报：详情接口没给时兜底，骨架屏也能先显示 */
+  detailHint: null as { title?: string; poster?: string } | null,
   /** 选中的集 vid */
   picked: [] as string[],
+
+  settingsTab: 'download' as SettingsTab,
+  dlFilter: 'all' as 'all' | 'active' | 'paused' | 'failed' | 'done',
 
   probe: null as ProbeResult | null,
   probeEpisodes: [] as EpisodeView[],
@@ -45,9 +52,14 @@ export const store = reactive({
   probeError: '',
 
   qr: null as null | 'youku' | 'tencent',
+  /** 打开着的确认框数量：Esc 返回时要避开 */
+  dialogCount: 0,
   update: null as UpdateState | null,
   toasts: [] as Toast[],
 })
+
+/** 还有弹窗挡在前面（Esc 归弹窗管） */
+export const modalOpen = () => store.qr !== null || store.dialogCount > 0
 
 let toastId = 0
 export function toast(message: string, tone: Tone = 'muted'): void {
@@ -111,15 +123,18 @@ export async function runSearch(raw: string): Promise<void> {
 
 let searchGen = 0
 
-async function openDetailWith(load: () => Promise<DetailView>): Promise<void> {
+async function openDetailWith(load: () => Promise<DetailView>, hint?: { title?: string; poster?: string } | null): Promise<void> {
   go('detail')
   store.detail = null
   store.detailError = ''
   store.detailLoading = true
   store.picked = []
+  store.detailHint = hint ?? null
   try {
     const d = await load()
     store.detail = d
+    // 提示里的海报/标题兜住接口没给的情况
+    if (hint?.poster && !d.poster) d.poster = hint.poster
     // 只有一集/一个版本时直接选上；多集不预选，让用户自己挑
     if (d.focusVid && d.episodes.some(e => e.vid === d.focusVid)) store.picked = [d.focusVid]
     else if (d.episodes.length === 1) store.picked = [d.episodes[0]!.vid]
@@ -130,8 +145,22 @@ async function openDetailWith(load: () => Promise<DetailView>): Promise<void> {
   }
 }
 
-export function openDetail(provider: Provider, id: string): Promise<void> {
-  return openDetailWith(() => gvs('detail', provider, id))
+export function openDetail(provider: Provider, id: string, hint?: { title?: string; poster?: string }): Promise<void> {
+  return openDetailWith(() => gvs('detail', provider, id, hint), hint)
+}
+
+/** 优酷单视频：id 是 vid，走链接解析 */
+export function openVideo(vid: string, hint?: { title?: string; poster?: string }): Promise<void> {
+  return openDetailWith(() => gvs('detailFromLink', { kind: 'youku', vid }), hint)
+}
+
+/** 卡片统一入口：能开详情就开详情，只能搜就搜，预约类不动作 */
+export function openCard(c: Card): void {
+  if (c.target === 'unavailable') return
+  const hint = { title: c.title, poster: c.poster }
+  if (c.video) void openVideo(c.id, hint)
+  else if (c.target === 'detail' && c.id) void openDetail(c.provider, c.id, hint)
+  else void runSearch(c.query || c.title)
 }
 
 export async function openQuality(): Promise<void> {
@@ -165,6 +194,16 @@ export function initStore(): void {
 
 export function hasProvider(p: Provider): boolean {
   return !!store.state?.providers.includes(p)
+}
+
+/** 相对时间：刚刚 / 3 分钟前 / 3 小时前 / 2 天前 */
+export function ago(ms: number): string {
+  if (!ms) return ''
+  const d = Date.now() - ms
+  if (d < 60e3) return '刚刚'
+  if (d < 3600e3) return `${Math.floor(d / 60e3)} 分钟前`
+  if (d < 86400e3) return `${Math.floor(d / 3600e3)} 小时前`
+  return `${Math.floor(d / 86400e3)} 天前`
 }
 
 export function human(bytes: number): string {
