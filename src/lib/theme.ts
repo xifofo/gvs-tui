@@ -11,6 +11,8 @@ export const c = {
   sunken: '#121b17',
   /** Hairlines and box borders. */
   line: '#30463c',
+  /** Background for ` text ` chips — one step lighter than `panel`. */
+  chip: '#22322b',
   /** Text hierarchies, brightest first. */
   text: '#e8eee9',
   dim: '#a2b2a8',
@@ -23,8 +25,8 @@ export const c = {
   ok: '#34d399',
   warn: '#fbbf24',
   err: '#f87171',
-  /** Reserved for metadata chips (DRM/codec), used sparingly. */
-  violet: '#a2b2a8',
+  /** Reserved for metadata chips (DRM/codec/VIP), used sparingly. */
+  violet: '#b39ddb',
 } as const
 
 export type Tone = 'info' | 'ok' | 'warn' | 'err'

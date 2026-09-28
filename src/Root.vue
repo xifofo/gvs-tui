@@ -42,9 +42,8 @@ import SettingsScene from './scenes/SettingsScene.vue'
 import SetupScene from './scenes/SetupScene.vue'
 import TmdbScene from './scenes/TmdbScene.vue'
 import WorkspaceScene from './scenes/WorkspaceScene.vue'
-import { colsLine, ink } from './lib/rows'
-import type { Col } from './lib/rows'
-import { displayWidth, padStart } from './lib/text'
+import { chipChunks, colsLine, ink } from './lib/rows'
+import { clip, displayWidth, padStart } from './lib/text'
 import { FLOW, GLOBAL_HINTS, HINTS, SCENE_TITLES } from './lib/scene-meta'
 import { c, hostLabel, providerName, toneColor } from './lib/theme'
 import {
@@ -52,7 +51,6 @@ import {
   isMovieDetail,
   logWindow,
   resultWindow,
-  selectedEpisodeCount,
   tmdbWindow,
   workspaceSections,
 } from './lib/view'
@@ -129,10 +127,10 @@ onKeyDown((event) => {
   }
 
   // Platform switch:
-  // - Alt/⌥+1..3: Mac Option sets event.option; many terminals send ESC+digit as event.meta
-  // - Ctrl+1..3: Windows Terminal often steals Alt+digit for tab switching
+  // - Alt/⌥+1..5: Mac Option sets event.option; many terminals send ESC+digit as event.meta
+  // - Ctrl+1..5: Windows Terminal often steals Alt+digit for tab switching
   // - Never ⌘/super+digit (iTerm/VS Code/Finder window switching)
-  const digit = ['1', '2', '3'].includes(name)
+  const digit = ['1', '2', '3', '4', '5'].includes(name)
   const altLike = !!(event.option || event.meta) && !event.super
   const platformShortcut = digit && (altLike || event.ctrl)
   if (platformShortcut || /^f[1-4]$/.test(name)) {
@@ -173,12 +171,14 @@ onKeyDown((event) => {
 
 // --- layout budgets -------------------------------------------------------
 // Chrome is fixed height, so the body budget only depends on the terminal size
-// — never on transient text.
+// — never on transient text. `showGap` reserves the one row between the header
+// and the body that used to hold the full-width rule; the scenes' bodyH must
+// not change, so the row stays (blank) instead of being given back.
 const W = computed(() => Math.max(24, Math.floor(Number(width.value) || 80)))
 const H = computed(() => Math.max(8, Math.floor(Number(height.value) || 24)))
 const bodyW = computed(() => W.value - 2)
-const showRule = computed(() => H.value >= 18)
-const bodyH = computed(() => Math.max(3, H.value - (showRule.value ? 4 : 3)))
+const showGap = computed(() => H.value >= 18)
+const bodyH = computed(() => Math.max(3, H.value - (showGap.value ? 4 : 3)))
 
 useInterval(() => {
   bridge.tickQR()
@@ -203,7 +203,6 @@ const detail = computed(() => state.value.detail)
 const ws = computed(() => state.value.workspace)
 const wsSections = computed(() => workspaceSections(ws.value))
 const isMovie = computed(() => isMovieDetail(detail.value))
-const selectedCount = computed(() => selectedEpisodeCount(episodes.value))
 
 // --- status line ----------------------------------------------------------
 // The scenes render the windows; the status line reports their ranges, so both
@@ -256,10 +255,16 @@ const metaText = computed(() => {
       return tmdbView.value.total
         ? `${tmdbView.value.first}-${tmdbView.value.last} / ${tmdbView.value.total}`
         : ''
-    case 'detail':
-      return isMovie.value
-        ? `已选 ${selectedCount.value} / ${episodes.value.length} 个版本`
-        : `已选 ${selectedCount.value} / ${episodes.value.length}`
+    // The right half must not repeat what `say('已选 n 集')` already put on the
+    // left, so it reports where the cursor is instead — they read together as
+    // `已选 12 集 … E21 · 21 / 151`.
+    case 'detail': {
+      const total = episodes.value.length
+      const at = Math.max(0, Math.min(state.value.cursor, total - 1))
+      return total
+        ? `E${String(episodes.value[at]?.number ?? at + 1).padStart(2, '0')} · ${at + 1} / ${total}`
+        : ''
+    }
     case 'quality':
       return audioTab(state.value)
         ? `音轨 ${state.value.audioIndex + 1} / ${audios.value.length}`
@@ -348,44 +353,91 @@ const headerProvider = computed(() => {
   )
 })
 
-/** `› 红果 › 选集 › 画质 › 匹配 › 确认`, or `› 红果 › 发现` outside the wizard. */
+/** Scenes that browse a platform: only these put the provider in the breadcrumb. */
+const PROVIDER_CRUMBS = new Set([
+  'workspace', 'home', 'filters', 'search', 'results', 'detail', 'quality', 'tmdb', 'confirm',
+])
+
+/** ` GVS ` chip + a space, then `› 红果 › 选集 › 画质`, or just `设置` off-flow. */
 function crumbChunks(cells: number): TextChunk[] {
   const scene = state.value.scene
+  const brand = chipChunks('GVS', c.bg, c.accent)
+  const chunks: TextChunk[] = [
+    bold(brand[0]!),
+    { __isChunk: true, text: ' ' },
+  ]
+  let used = 6
+  const push = (text: string, color: string, strong = false) => {
+    if (used + displayWidth(text) > cells) return
+    const chunk = fg(color)(text)
+    chunks.push(strong ? bold(chunk) : chunk)
+    used += displayWidth(text)
+  }
+  if (PROVIDER_CRUMBS.has(scene)) {
+    const provider = providerName(headerProvider.value)
+    push('› ', c.faint)
+    push(provider, c.dim)
+    push(' › ', c.faint)
+  }
   const step = FLOW.indexOf(scene)
-  const provider = providerName(headerProvider.value)
-  const chunks: TextChunk[] = [fg(c.faint)('› '), fg(c.dim)(provider), fg(c.faint)(' › ')]
-  let used = displayWidth(`› ${provider} › `)
   const parts =
     step < 0
       ? [[SCENE_TITLES[scene] ?? 'GVS', c.text, true] as const]
       : FLOW.map((id, i) => [SCENE_TITLES[id]!, i === step ? c.accent : i < step ? c.dim : c.faint, i === step] as const)
   parts.forEach(([title, color, strong], i) => {
-    const text = `${i ? ' › ' : ''}${title}`
-    if (used + displayWidth(text) > cells) return
-    chunks.push(strong ? fg(color)(bold(text)) : fg(color)(text))
-    used += displayWidth(text)
+    push(`${i ? ' › ' : ''}${title}`, color, strong)
   })
   chunks.push({ __isChunk: true, text: ' '.repeat(Math.max(0, cells - used)) })
   return chunks
 }
 
-const headerLine = computed(() => {
-  const right = `${hostLabel(state.value.host)}  ${state.value.tunnelOk ? '● 隧道' : '○ 隧道'}`
-  const cols: Col[] = [
-    { text: '▌ ', cells: 2, color: c.accent, bold: true },
-    { text: 'GVS ', cells: 4, color: c.accent, bold: true },
-    { chunks: crumbChunks, grow: true },
-  ]
-  if (bridge.preview || state.value.simulated)
-    cols.push({ text: 'PREVIEW  ', cells: 9, align: 'right', color: c.warn })
-  cols.push({
-    text: right,
-    cells: displayWidth(right),
-    align: 'right',
-    color: state.value.tunnelOk ? c.ok : c.faint,
-  })
-  return colsLine(cols, bodyW.value)
+/**
+ * Right-aligned chrome: `PREVIEW` chip (preview/simulated only), gateway host,
+ * tunnel light. Narrow terminals drop the host first, then the PREVIEW chip —
+ * the tunnel stays, it is a live connection indicator.
+ */
+function headerRight(cells: number): TextChunk[] {
+  const preview = bridge.preview || state.value.simulated
+  const host = hostLabel(state.value.host)
+  const tunnel = state.value.tunnelOk ? '● 隧道' : '○ 隧道'
+  const GAP = 2
+  const CHIP = 9
+  const tunnelW = displayWidth(tunnel)
+  // The tunnel is never dropped, so the chip and the host share what is left:
+  // `PREVIEW  ` + host + `  ` + `● 隧道`.
+  const free = cells - tunnelW
+  const keepChip = preview && free - CHIP - GAP >= 6 + GAP
+  const hostRoom = Math.max(0, free - (keepChip ? CHIP + GAP : 0) - GAP)
+  const showHost = hostRoom >= 6
+  const hostText = showHost ? clip(host, hostRoom) : ''
+  const used =
+    (keepChip ? CHIP + GAP : 0) + (showHost ? displayWidth(hostText) + GAP : 0) + tunnelW
+  const chunks: TextChunk[] = [{ __isChunk: true, text: ' '.repeat(Math.max(0, cells - used)) }]
+  if (keepChip) chunks.push(...chipChunks('PREVIEW', c.warn), { __isChunk: true, text: '  ' })
+  if (showHost) chunks.push(fg(c.faint)(hostText), { __isChunk: true, text: '  ' })
+  chunks.push(fg(state.value.tunnelOk ? c.ok : c.faint)(tunnel))
+  return chunks
+}
+
+/** Cells the right chrome wants, capped so the crumb always keeps some room. */
+const headerRightW = computed(() => {
+  const preview = bridge.preview || state.value.simulated
+  const wanted =
+    (preview ? 11 : 0) + displayWidth(hostLabel(state.value.host)) + 2 + displayWidth('● 隧道')
+  // ` GVS  设置` plus slack is the least the crumb may keep, so the right side
+  // yields (host first, then chip) instead of squeezing the breadcrumb out.
+  return Math.min(wanted, Math.max(0, bodyW.value - 14))
 })
+
+const headerLine = computed(() =>
+  colsLine(
+    [
+      { chunks: crumbChunks, grow: true },
+      { chunks: () => headerRight(headerRightW.value), cells: headerRightW.value },
+    ],
+    bodyW.value,
+  ),
+)
 </script>
 
 <template>
@@ -407,13 +459,7 @@ const headerLine = computed(() => {
         :truncate="true"
       />
     </Box>
-    <Text
-      v-if="showRule"
-      :content="'─'.repeat(W)"
-      :width="W"
-      :height="1"
-      :fg="c.line"
-    />
+    <Text v-if="showGap" :content="' '" :width="W" :height="1" />
 
     <!-- body -->
     <Box

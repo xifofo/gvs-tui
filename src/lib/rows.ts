@@ -5,7 +5,7 @@
 import { StyledText, bg, bold, fg } from 'vue-termui'
 import type { TextChunk } from 'vue-termui'
 import { c } from './theme.ts'
-import { column, displayWidth } from './text.ts'
+import { clip, column, displayWidth } from './text.ts'
 
 /** Two-cell cursor bar shown on the selected row. */
 export const MARK = '▌ '
@@ -57,6 +57,23 @@ export function colsLine(cols: Col[], width: number, selected = false): StyledTe
 export function barChunks(pct: number, cells: number, color = c.accent): TextChunk[] {
   const filled = Math.round(Math.max(0, Math.min(1, pct)) * cells)
   return [fg(color)('█'.repeat(filled)), fg(c.line)('░'.repeat(Math.max(0, cells - filled)))]
+}
+
+/** ` 标签 ` on the chip background — short badges (platform, DRM, VIP) inline. */
+export function chipChunks(text: string, color = c.dim, bgColor = c.chip): TextChunk[] {
+  return [bg(bgColor)(fg(color)(` ${text} `))]
+}
+
+/** `── 优酷 ──────────` group separator, exactly `width` cells wide. */
+export function ruleLine(title: string, width: number): StyledText {
+  const head = `── ${clip(title, Math.max(0, width - 4))} `
+  const room = Math.max(0, width - displayWidth(head))
+  return new StyledText([fg(c.accent)(bold(head)), fg(c.line)('─'.repeat(room))])
+}
+
+/** A plain `─` hairline exactly `width` cells wide. */
+export function hr(width: number): StyledText {
+  return ink(c.line, '─'.repeat(Math.max(0, width)))
 }
 
 /** ` 红果 ` tab. The active one sits on the selection slate in the accent color. */

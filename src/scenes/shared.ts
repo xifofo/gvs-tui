@@ -9,7 +9,11 @@ import type { StyledText } from 'vue-termui'
 /** Fixed order of the platform tabs; the digit prefix is part of the label. */
 export const PLATFORM_ORDER = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin'] as const
 
-/** `1 优酷  2 腾讯 …`, plus `推荐 / 榜单` when the screen has both modes. */
+/**
+ * `1 优酷  2 腾讯 …`, plus `推荐 / 榜单` when the screen has both modes.
+ * The active tab is accent bold on the selection slate; platforms this Key
+ * cannot browse stay flat in c.faint.
+ */
 export function platformBar(
   providers: string[],
   width: number,
@@ -21,7 +25,7 @@ export function platformBar(
   PLATFORM_ORDER.forEach((id, i) => {
     const label = `${i + 1} ${providerName(id)}`
     cols.push({
-      chunks: () => tabChunks(label, id === current, allowed.has(id)),
+      chunks: () => tabChunks(label, id === current && allowed.has(id), allowed.has(id)),
       cells: tabsWidth([label]),
     })
   })
