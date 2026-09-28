@@ -43,14 +43,30 @@ export function resultWindow(rows: Row[] | undefined, cursor: number, bodyH: num
   return sliceList(rows, cursor, bodyH - 3)
 }
 
-/** Visible TMDB candidates: two rows per hit, so half the body each. */
+/** Rows one TMDB card takes, the blank line between two of them, and the title
+ * block the scene draws above the first card. */
+const TMDB_CARD_ROWS = 2
+const TMDB_GAP_ROWS = 1
+const TMDB_HEADER_ROWS = 2
+
+/** Rows the quality/audio table spends on chrome: tabs, head and hairline. */
+const OPTION_CHROME_ROWS = 5
+
+/**
+ * Visible TMDB candidates. Cards are two rows tall and separated by a blank
+ * line — `n` of them cost `3n - 1` rows — so the window is the largest `n` that
+ * fits in the body minus the scene's own title block. The scene and the status
+ * line call this, so they can never disagree about what is on screen.
+ */
 export function tmdbWindow(hits: TMDBHit[] | undefined, cursor: number, bodyH: number): ListView<TMDBHit> {
-  return sliceList(hits, cursor, Math.max(1, Math.floor(bodyH / 2)))
+  const per = TMDB_CARD_ROWS + TMDB_GAP_ROWS
+  const room = Math.max(1, Math.floor((bodyH - TMDB_HEADER_ROWS + TMDB_GAP_ROWS) / per))
+  return sliceList(hits, cursor, room)
 }
 
 /** Visible quality or audio rows — both tables have the same chrome above. */
 export function optionWindow<T>(items: T[] | undefined, index: number, bodyH: number): ListView<T> {
-  return sliceList(items, index, bodyH - 6)
+  return sliceList(items, index, bodyH - OPTION_CHROME_ROWS)
 }
 
 /**
