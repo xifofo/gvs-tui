@@ -89,11 +89,13 @@ export type EpisodeView = {
   title: string
   number: number
   group: string
+  collection?: string
   duration: number
   languages: Array<{ vid: string; lang: string; langcode?: string }>
 }
 
 export type DetailView = {
+  focusVid?: string
   provider: Provider
   id: string
   title: string

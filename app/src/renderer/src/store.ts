@@ -121,7 +121,8 @@ async function openDetailWith(load: () => Promise<DetailView>): Promise<void> {
     const d = await load()
     store.detail = d
     // 只有一集/一个版本时直接选上；多集不预选，让用户自己挑
-    if (d.episodes.length === 1) store.picked = [d.episodes[0]!.vid]
+    if (d.focusVid && d.episodes.some(e => e.vid === d.focusVid)) store.picked = [d.focusVid]
+    else if (d.episodes.length === 1) store.picked = [d.episodes[0]!.vid]
   } catch (e) {
     store.detailError = errText(e)
   } finally {

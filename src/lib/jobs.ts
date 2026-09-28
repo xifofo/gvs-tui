@@ -45,6 +45,7 @@ export type DlTask = {
   year: number
   plot: string
   kind?: MediaKind
+  collection?: string
   edition?: string
   languages?: Array<{ vid: string; lang: string }>
 }
@@ -177,6 +178,7 @@ async function runTask(
       height: t.height,
       codec: t.codec || 'H264',
       edition: t.edition,
+      collection: t.collection,
       source: sourceTag(t.provider),
       group: t.provider === 'douyin' ? '' : (t.group.trim() || cfg.releaseGroup),
       tmdbId: t.tmdbId,

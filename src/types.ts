@@ -19,6 +19,8 @@ export type Episode = {
   duration?: number
   /** Platform grouping, e.g. 正片 / 预告. */
   group?: string
+  /** Official Tencent collection, preserved in selection and download paths. */
+  collection?: string
   /** Other dvd.audiolang vids (国语/英语) to probe with this title. */
   languages?: Array<{ vid: string; lang: string; langcode?: string }>
 }
@@ -133,6 +135,8 @@ export type Snapshot = {
   rows?: Row[]
   /** 列表还有下一页（网关 hasMore），光标到底会自动续。 */
   listMore?: boolean
+  episodeGroups?: string[]
+  episodeGroup?: string
   episodes?: Episode[]
   qualities?: Quality[]
   audios?: Audio[]

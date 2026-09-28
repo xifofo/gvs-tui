@@ -1,3 +1,4 @@
+import { parseEpisodes as parseEps } from '@tui/episodes.ts'
 // 桌面端业务核心：把 tui/src/lib 的能力编排成界面可调用的方法。
 // 流程与 TUI runtime.ts 保持一致（探测 → 选画质/音轨 → TMDB → 入队），
 // 只是去掉了按键状态机，改成显式参数。
@@ -132,44 +133,13 @@ function toEpisodeView(e: Episode): EpisodeView {
     title: e.title,
     number: e.number,
     group: e.group ?? '',
+    collection: e.collection,
     duration: e.duration ?? 0,
     languages: e.languages ?? [],
   }
 }
 
 /** runtime.ts parseEps */
-function parseEps(data: Record<string, unknown>): Episode[] {
-  const arr = Array.isArray(data.episodes) ? data.episodes : []
-  const eps: Episode[] = []
-  for (const [i, it] of arr.entries()) {
-    if (!isObj(it)) continue
-    let n = i + 1
-    if (typeof it.ep === 'number') n = it.ep
-    else if (typeof it.number === 'number') n = it.number
-    else if (typeof it.number === 'string') {
-      const x = Number.parseInt(it.number, 10)
-      if (Number.isFinite(x)) n = x
-    } else if (typeof it.stage === 'string') {
-      const x = Number.parseInt(it.stage, 10)
-      if (Number.isFinite(x)) n = x
-    }
-    const kind = firstStr(it, 'kind', 'group')
-    const title = firstStr(it, 'title', 'name')
-    const dur = anyInt(it.duration) || anyInt(it.duration_ms ? Number(it.duration_ms) / 1000 : 0)
-    const extra = /周边|花絮|彩蛋|预告|预约|trailer|advert|extra|clip/i.test(`${kind} ${title}`) || it.is_trailer === true
-    // 分组标错时，够长的节目仍然是正片。短须知、预告继续隐藏。
-    if (extra && dur < 600) continue
-    eps.push({
-      title: firstStr(it, 'title', 'name'),
-      vid: firstStr(it, 'vid', 'id'),
-      number: n,
-      selected: false,
-      duration: anyInt(it.duration) || anyInt(it.duration_ms ? Number(it.duration_ms) / 1000 : 0) || undefined,
-      group: firstStr(it, 'kind', 'group', 'stage'),
-    })
-  }
-  return eps
-}
 
 function pickTags(...srcs: Array<Record<string, unknown>>): string[] {
   for (const src of srcs) {
@@ -752,7 +722,11 @@ export class Core {
       return buildDetail('youku', link.vid, data, title, [one])
     }
     if (link.kind === 'tencent') {
-      if (link.cid) return this.detail('tencent', link.cid)
+      if (link.cid) {
+        const view = await this.detail('tencent', link.cid)
+        view.focusVid = link.vid || undefined
+        return view
+      }
       const data = await this.invoke('tencent', 'resolve', link.url ? { url: link.url } : { vid: link.vid })
       const cid = asString(data.cid)
       if (cid) return this.detail('tencent', cid)
@@ -882,6 +856,7 @@ export class Core {
         vid: ep.vid,
         season: movie ? 0 : 1,
         episode: movie ? 0 : ep.number || i + 1,
+        collection: ep.collection,
         height: 0,
         quality: q.stream || q.id,
         caption: q.caption,
@@ -928,6 +903,7 @@ export class Core {
       height: t.height,
       codec: t.codec || 'H264',
       edition: t.edition,
+      collection: t.collection,
       source: sourceTag(t.provider),
       group: t.group.trim() || this.cfg.releaseGroup,
       tmdbId: t.tmdbId,

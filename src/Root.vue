@@ -1720,6 +1720,11 @@ function jobLine(job: Job, selected: boolean): StyledText {
           wrapMode="none"
         />
         <Text
+          v-if="(state.episodeGroups?.length ?? 0) > 1"
+          :content="ink(c.accent, `[ / ] 切换栏目 · ${state.episodeGroup} · ${state.episodeGroups?.join(' / ')}`)"
+          :width="bodyW" :height="1" wrapMode="none" :truncate="true"
+        />
+        <Text
           v-if="selectedEpisode && !isMovie"
           :content="episodeLine"
           :width="bodyW"

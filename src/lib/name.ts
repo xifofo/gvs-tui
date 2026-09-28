@@ -13,6 +13,7 @@ export type Naming = {
   codec: string
   audio?: string
   /** 电影配音版本，如 英语版 / 国语版。 */
+  collection?: string
   edition?: string
   dv?: boolean
   source: string
@@ -69,6 +70,7 @@ export function folder(n: Naming, outDir: string): string {
   if (n.tmdbId > 0) base = `${base} {tmdb-${n.tmdbId}}`
   let dir = join(outDir, sanitizePath(base))
   if (n.kind === 'show' && n.season > 0) dir = join(dir, `Season ${String(n.season).padStart(2, '0')}`)
+  if (n.source === 'TX' && n.collection && n.collection !== '正片') dir = join(dir, sanitizePath(n.collection))
   return dir
 }
 

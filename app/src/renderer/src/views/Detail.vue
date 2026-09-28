@@ -7,14 +7,27 @@ import Poster from '../components/Poster.vue'
 import { back, openQuality, store } from '../store'
 
 const d = computed(() => store.detail)
-const eps = computed(() => d.value?.episodes ?? [])
+const collection = ref('')
+const collections = computed(() => {
+  const names = [...new Set((d.value?.episodes ?? []).map(e => e.collection).filter((g): g is string => !!g))]
+  return names.includes('正片') ? ['正片', ...names.filter(g => g !== '正片')] : names
+})
+const eps = computed(() => (d.value?.episodes ?? []).filter(e => !collection.value || e.collection === collection.value))
 const picked = computed(() => new Set(store.picked))
 const range = ref('')
 const anchor = ref(-1)
 watch(d, () => {
   range.value = ''
   anchor.value = -1
-})
+  collection.value = d.value?.episodes.find(e => e.vid === d.value?.focusVid)?.collection ?? collections.value[0] ?? ''
+}, { immediate: true })
+
+function switchCollection(name: string) {
+  collection.value = name
+  store.picked = []
+  anchor.value = -1
+  range.value = ''
+}
 
 function setPicked(vids: string[]) {
   store.picked = eps.value.filter((e) => vids.includes(e.vid)).map((e) => e.vid)
@@ -55,11 +68,11 @@ const invert = () => setPicked(eps.value.filter((e) => !picked.value.has(e.vid))
 const clear = () => setPicked([])
 
 const isMovie = computed(() => d.value?.kind === 'movie')
-const cols = computed(() => (eps.value.length > 200 ? 'repeat(auto-fill, minmax(60px, 1fr))' : 'repeat(auto-fill, minmax(64px, 1fr))'))
+const cols = computed(() => collection.value ? 'repeat(auto-fill, minmax(250px, 1fr))' : (eps.value.length > 200 ? 'repeat(auto-fill, minmax(60px, 1fr))' : 'repeat(auto-fill, minmax(64px, 1fr))'))
 const meta = computed(() => {
   const v = d.value
   if (!v) return ''
-  return [v.year || '', v.episodeCount && !isMovie.value ? `${v.episodeCount} 集` : '', v.category, v.tags.join(' / ')]
+  return [v.year || '', v.episodeCount && !isMovie.value ? `${v.episodeCount} ${collections.value.length ? '条' : '集'}` : '', v.category, v.tags.join(' / ')]
     .filter(Boolean)
     .join(' · ')
 })
@@ -90,8 +103,8 @@ const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2,
 
       <section class="card eps">
         <div class="eps-h">
-          <h2 class="h2s">{{ isMovie ? '版本' : `正片 ${eps.length} 集` }}</h2>
-          <span v-if="!isMovie" class="muted small">预告已自动隐藏 · 按住 Shift 可连选</span>
+          <h2 class="h2s">{{ isMovie ? '版本' : `${collection || '正片'} ${eps.length} ${collection ? '条' : '集'}` }}</h2>
+          <span v-if="!isMovie" class="muted small">{{ collection ? '仅选择当前栏目 · 按住 Shift 可连选' : '预告已自动隐藏 · 按住 Shift 可连选' }}</span>
           <div v-if="!isMovie && eps.length > 1" class="tools">
             <form class="range" @submit.prevent="applyRange">
               <label for="range" class="small dim">范围</label>
@@ -103,14 +116,19 @@ const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2,
           </div>
         </div>
 
-        <div v-if="!eps.length" class="empty">这部没有返回可下载的正片</div>
+        <div v-if="collections.length > 1" class="collection-tabs" role="tablist" aria-label="节目栏目">
+          <button v-for="name in collections" :key="name" type="button" role="tab"
+            class="btn sm" :class="{ primary: collection === name }" :aria-selected="collection === name"
+            @click="switchCollection(name)">{{ name }}</button>
+        </div>
+        <div v-if="!eps.length" class="empty">当前栏目没有返回可下载的视频</div>
         <div v-else-if="isMovie" class="editions">
           <button
             v-for="(e, i) in eps"
             :key="e.vid"
             type="button"
             class="edition"
-            :class="{ on: picked.has(e.vid) }"
+            :class="{ on: picked.has(e.vid), detailed: !!collection }"
             :aria-pressed="picked.has(e.vid)"
             @click="toggle(i, $event)"
           >
@@ -125,17 +143,17 @@ const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2,
             :key="e.vid"
             type="button"
             class="ep mono"
-            :class="{ on: picked.has(e.vid) }"
+            :class="{ on: picked.has(e.vid), detailed: !!collection }"
             :aria-pressed="picked.has(e.vid)"
             :title="e.title"
             @click="toggle(i, $event)"
           >
-            {{ label(e.number) }}
+            <span>{{ label(e.number) }}</span><span v-if="collection" class="episode-title">{{ e.title }}</span>
           </button>
         </div>
 
         <div class="foot">
-          <span><b class="mono n">{{ store.picked.length }}</b> {{ d.pickNoun }}已选</span>
+          <span><b class="mono n">{{ store.picked.length }}</b> {{ collection ? '条' : d.pickNoun }}已选</span>
           <button type="button" class="btn primary" :disabled="!store.picked.length" @click="openQuality">
             下一步：选画质<Icon name="arrow" />
           </button>
@@ -162,6 +180,9 @@ const label = (n: number) => String(n).padStart(eps.value.length >= 100 ? 3 : 2,
 .range { height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; display: flex; align-items: center; gap: 8px; }
 .range:focus-within { border-color: var(--ink); }
 .range input { width: 80px; border: 0; outline: 0; font-size: 14px; background: transparent; }
+.collection-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.ep.detailed { height: auto; min-height: 62px; display: flex; gap: 10px; align-items: center; text-align: left; padding: 10px; }
+.episode-title { font-family: var(--font-body); font-size: 13px; line-height: 1.5; }
 .grid { display: grid; gap: 8px; max-height: 420px; overflow-y: auto; padding: 2px; }
 .ep { height: 40px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--card); font-size: 14px; cursor: pointer; }
 .ep:hover { border-color: var(--ink); }

@@ -1,3 +1,4 @@
+import { parseEpisodes as parseEps, episodeCollections } from './lib/episodes.ts'
 import { startTencentDualQR, pollTencentQR, pollTencentDualQR, applyTencentLogin, tencentLabels, tencentPlayInput, type TencentMode } from './lib/tencent-qr.ts'
 import { fetchTencentAccount, txAccountSummary, type TxAccount } from './lib/tencent-account.ts'
 import { Discovery, discoveryRows } from './lib/discovery'
@@ -127,6 +128,8 @@ export class Runtime {
   private listCursor = ''
   private listMore = false
   private eps: Episode[] = []
+  private episodeCatalog: Episode[] = []
+  private episodeGroup = ''
   private qualities: Quality[] = []
   private audios: Audio[] = []
   private audioIdx = 0
@@ -681,6 +684,8 @@ export class Runtime {
       rows: this.rows,
       listMore: this.listMore,
       episodes: this.eps.map((e) => ({ ...e })),
+      episodeGroups: episodeCollections(this.episodeCatalog),
+      episodeGroup: this.episodeGroup,
       qualities: this.qualities,
       audios: this.audios.map((a) => ({ ...a })),
       tmdbHits: this.tmdbHits,
@@ -960,6 +965,8 @@ export class Runtime {
         },
         detail: {
           eps: this.eps,
+          catalog: this.episodeCatalog,
+          group: this.episodeGroup,
           info: this.detailInfo,
           title: this.detailTitle,
           id: this.detailId,
@@ -998,6 +1005,8 @@ export class Runtime {
         }
         detail?: {
           eps: Episode[]
+          catalog?: Episode[]
+          group?: string
           info: Detail | null
           title: string
           id: string
@@ -1023,6 +1032,8 @@ export class Runtime {
         ['detail', 'quality', 'tmdb', 'confirm'].includes(prev.scene)
       ) {
         this.eps = p.detail.eps
+        this.episodeCatalog = p.detail.catalog ?? []
+        this.episodeGroup = p.detail.group ?? ''
         this.detailInfo = p.detail.info
         this.detailTitle = p.detail.title
         this.detailId = p.detail.id
@@ -1087,6 +1098,7 @@ export class Runtime {
             height: first.height,
             codec: first.codec || 'H264',
             edition: first.edition,
+            collection: first.collection,
             source: sourceTag(first.provider),
             group:
               first.provider === 'douyin'
@@ -1330,6 +1342,16 @@ export class Runtime {
   }
 
   private updateDetail(k: string, shift = false): void {
+    const groups = episodeCollections(this.episodeCatalog)
+    if ((k === '[' || k === ']') && groups.length > 1) {
+      const i = groups.indexOf(this.episodeGroup)
+      this.episodeGroup = groups[(i + (k === ']' ? 1 : groups.length - 1)) % groups.length]!
+      for (const ep of this.episodeCatalog) ep.selected = false
+      this.eps = this.episodeCatalog.filter(e => e.collection === this.episodeGroup)
+      this.cursor = this.selectAnchor = 0
+      this.say(`${this.episodeGroup} · ${this.eps.length} 条 · 仅选择当前栏目`)
+      return
+    }
     const n = this.eps.length
     if (!n) {
       if (k === 'esc') this.back()
@@ -1846,6 +1868,7 @@ export class Runtime {
       vid: ep.vid,
       season: movie ? 0 : 1,
       episode: movie ? 0 : ep.number || i + 1,
+      collection: ep.collection,
       height: 0,
       quality: '',
       group: this.cfg.releaseGroup,
@@ -2203,7 +2226,9 @@ export class Runtime {
       this.detailProv = 'douyin'
       this.detailTitle = desc
       this.detailInfo = null
-      this.eps = [
+      this.episodeCatalog = []
+    this.episodeGroup = ''
+    this.eps = [
         {
           vid: vid || asString(data.id),
           title: desc,
@@ -2370,6 +2395,8 @@ export class Runtime {
     this.detailTitle = asString(data.title) || `优酷视频 ${vid}`
     this.detailInfo = parseDetail(data, 'youku', this.detailTitle)
     const episode = parseEps(data).find((ep) => ep.vid === vid)
+    this.episodeCatalog = []
+    this.episodeGroup = ''
     this.eps = [
       episode ?? { vid, title: this.detailTitle, number: 1, selected: true },
     ]
@@ -2393,7 +2420,7 @@ export class Runtime {
     const withCid = links.find((l) => l.cid)
     if (withCid?.cid && (links.length === 1 || links.every((l) => !l.vid || l.cid === withCid.cid))) {
       this.detailId = withCid.cid
-      await this.detail('tencent', withCid.cid)
+      await this.detail('tencent', withCid.cid, links.length === 1 ? withCid.vid : '')
       return
     }
     const vids = links.map((l) => l.vid).filter(Boolean)
@@ -2424,6 +2451,8 @@ export class Runtime {
         Array.isArray(data.videos) && data.videos.length >= 2
           ? (data.videos as Array<Record<string, unknown>>)
           : vids.map((vid, i) => ({ vid, title: i === 0 ? title : vid }))
+      this.episodeCatalog = []
+      this.episodeGroup = ''
       this.eps = dualRows.slice(0, 2).map((row, i) => ({
         vid: asString(row.vid) || vids[i] || '',
         title: asString(row.title) || `视频 ${i + 1}`,
@@ -2460,7 +2489,7 @@ export class Runtime {
     this.emit()
   }
 
-  private async detail(provider: string, id: string): Promise<void> {
+  private async detail(provider: string, id: string, focusVid = ''): Promise<void> {
     if (!this.cli) return
     const generation = ++this.requestGeneration
     const trimmed = id.trim()
@@ -2484,12 +2513,15 @@ export class Runtime {
       )
       if (generation !== this.requestGeneration) return
       this.detailTitle = asString(data.title)
-      this.eps = parseEps(data)
+      this.episodeCatalog = parseEps(data)
+      this.episodeGroup = this.episodeCatalog.find(e => e.vid === focusVid)?.collection ?? episodeCollections(this.episodeCatalog)[0] ?? ''
+      this.eps = this.episodeGroup ? this.episodeCatalog.filter(e => e.collection === this.episodeGroup) : this.episodeCatalog
       this.detailInfo = parseDetail(data, provider, this.detailTitle)
       await this.applyMovieEditions(provider, data)
       if (generation !== this.requestGeneration) return
-      this.cursor = 0
-      this.selectAnchor = 0
+      this.cursor = Math.max(0, this.eps.findIndex(e => e.vid === focusVid))
+      for (const ep of this.eps) ep.selected = !!focusVid && ep.vid === focusVid
+      this.selectAnchor = this.cursor
       this.probeFailed = false
       if (generation !== this.requestGeneration) return
       this.scene = 'detail'
@@ -2810,44 +2842,4 @@ function parseDetail(
     kind: /电影/.test(category) ? 'movie' : 'show',
     year: anyInt(data.year) || anyInt(raw.year),
   }
-}
-
-function parseEps(data: Record<string, unknown>): Episode[] {
-  const arr = Array.isArray(data.episodes) ? data.episodes : []
-  const eps: Episode[] = []
-  for (const [i, it] of arr.entries()) {
-    if (!isObj(it)) continue
-    let n = i + 1
-    if (typeof it.ep === 'number') n = it.ep
-    else if (typeof it.number === 'number') n = it.number
-    else if (typeof it.number === 'string') {
-      const x = Number.parseInt(it.number, 10)
-      if (Number.isFinite(x)) n = x
-    } else if (typeof it.stage === 'string') {
-      const x = Number.parseInt(it.stage, 10)
-      if (Number.isFinite(x)) n = x
-    }
-    const kind = firstStr(it, 'kind', 'group')
-    const title = firstStr(it, 'title', 'name')
-    const dur =
-      anyInt(it.duration) ||
-      anyInt(it.duration_ms ? Number(it.duration_ms) / 1000 : 0)
-    const extra =
-      /周边|花絮|彩蛋|预告|预约|trailer|advert|extra|clip/i.test(`${kind} ${title}`) ||
-      it.is_trailer === true
-    // 分组标错时，够长的节目仍然是正片。短须知、预告继续隐藏。
-    if (extra && dur < 600) continue
-    eps.push({
-      title: firstStr(it, 'title', 'name'),
-      vid: firstStr(it, 'vid', 'id'),
-      number: n,
-      selected: false,
-      duration:
-        anyInt(it.duration) ||
-        anyInt(it.duration_ms ? Number(it.duration_ms) / 1000 : 0) ||
-        undefined,
-      group: firstStr(it, 'kind', 'group', 'stage'),
-    })
-  }
-  return eps
 }

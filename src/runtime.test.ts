@@ -340,3 +340,29 @@ test('shift-right selects a contiguous episode range', async () => {
   expect(eps[2]?.selected).toBe(true)
   expect(eps[3]?.selected).toBe(false)
 })
+
+test('Tencent collection switching scopes selection and restores tabs after navigation', async () => {
+  const r = await start()
+  const x = r as any
+  const data = { title: '综艺', episode_groups: [{ id: '正片' }, { id: '专访' }], episodes: [
+    { vid: 'm1', title: '第1期上', group: '正片', number: 1 },
+    { vid: 'm2', title: '第1期下', group: '正片', number: 2 },
+    { vid: 'i1', title: '采访', group: '专访', number: 1 },
+  ] }
+  x.cli.invoke = async () => data
+  x.detailProv = 'tencent'
+  await x.detail('tencent', 'cover')
+  expect(r.snapshot.episodeGroup).toBe('正片')
+  r.handleKey('a')
+  expect(r.snapshot.episodes!.filter(e => e.selected)).toHaveLength(2)
+  r.handleKey(']')
+  expect(r.snapshot.episodeGroup).toBe('专访')
+  expect(r.snapshot.episodes!.map(e => e.vid)).toEqual(['i1'])
+  expect(r.snapshot.episodes!.some(e => e.selected)).toBe(false)
+  r.handleKey('f4'); r.handleKey('esc')
+  expect(r.snapshot.episodeGroup).toBe('专访')
+  expect(r.snapshot.episodeGroups).toEqual(['正片', '专访'])
+  await x.detail('tencent', 'cover', 'i1')
+  expect(r.snapshot.episodeGroup).toBe('专访')
+  expect(r.snapshot.episodes!.find(e => e.vid === 'i1')?.selected).toBe(true)
+})
