@@ -1,12 +1,18 @@
 <script setup lang="ts">
-// 筛选: the options of every filter on the current section, one row each.
+// 筛选: the options of every filter on the current section, one row each,
+// grouped under the filter title with a blank line between groups.
+//
+// The cursor is an option index (the runtime owns it, `filterRows` keeps that
+// order); the blank line between groups is decoration inserted while drawing,
+// so windowing still slices by option index and no row is lost.
 import { computed } from 'vue-termui'
-import { Box, StyledText, Text, bold, fg } from 'vue-termui'
+import { Box, StyledText, Text } from 'vue-termui'
 import { colsLine, markCol } from '../lib/rows.ts'
 import type { Col } from '../lib/rows.ts'
 import { c } from '../lib/theme.ts'
 import { sliceList, workspaceSections } from '../lib/view.ts'
 import type { Snapshot } from '../bridge.ts'
+import PageHeader from '../components/PageHeader.vue'
 
 const props = defineProps<{
   state: Snapshot
@@ -28,12 +34,30 @@ const filterRows = computed(
       f.options.map((o) => ({ ...o, key: f.key, title: f.title })),
     ) ?? [],
 )
+
+/** PageHeader takes two rows; the list gets what is left. */
+const listH = computed(() => Math.max(1, bodyH.value - 2))
 const filterView = computed(() =>
-  sliceList(filterRows.value, props.state.cursor, bodyH.value - 2),
+  sliceList(filterRows.value, props.state.cursor, listH.value),
 )
 
+/** The lines to draw: a blank spacer before a group's first option, cut to fit. */
+const visible = computed(() => {
+  const rows = filterView.value.rows
+  if (!rows.length) return [] as Array<{ spacer: boolean; index: number }>
+  const start = rows[0]!.index
+  const drawn: Array<{ spacer: boolean; index: number }> = []
+  for (const { index } of rows) {
+    if (index > start && filterRows.value[index - 1]!.key !== filterRows.value[index]!.key)
+      drawn.push({ spacer: true, index: -1 })
+    drawn.push({ spacer: false, index })
+  }
+  return drawn.slice(0, listH.value)
+})
+
 /** `▌ 体裁    ● 全部` — the group title only on its first option. */
-function filterLine(item: (typeof filterRows.value)[number], index: number): StyledText {
+function filterLine(index: number): StyledText {
+  const item = filterRows.value[index]!
   const on = index === props.state.cursor
   const first = filterRows.value[index - 1]?.key !== item.key
   const current = ws.value?.filters?.[item.key]
@@ -49,22 +73,20 @@ function filterLine(item: (typeof filterRows.value)[number], index: number): Sty
 </script>
 
 <template>
-  <Box flexDirection="column"
-    ><Text
-      :content="
-        new StyledText([
-          fg(c.text)(bold('筛选 ')),
-          fg(c.dim)(wsSections[ws?.sectionIndex ?? 0]?.title ?? ''),
-        ])
-      "
-      :height="1"
-      :marginBottom="1" /><Text
-      v-for="entry in filterView.rows"
-      :key="entry.item.key + entry.item.value"
-      :content="filterLine(entry.item, entry.index)"
-      :bg="entry.index === state.cursor ? c.sel : undefined"
+  <Box flexDirection="column" :width="bodyW">
+    <PageHeader
+      title="筛选"
+      :subtitle="wsSections[ws?.sectionIndex ?? 0]?.title ?? ''"
+      :width="bodyW"
+    />
+    <Text
+      v-for="(row, order) in visible"
+      :key="row.spacer ? `gap-${order}` : `opt-${row.index}`"
+      :content="row.spacer ? '' : filterLine(row.index)"
+      :bg="!row.spacer && row.index === state.cursor ? c.sel : undefined"
       :height="1"
       :width="bodyW"
       :truncate="true"
-  /></Box>
+    />
+  </Box>
 </template>

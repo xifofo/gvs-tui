@@ -207,8 +207,9 @@ const isMovie = computed(() => isMovieDetail(detail.value))
 // --- status line ----------------------------------------------------------
 // The scenes render the windows; the status line reports their ranges, so both
 // derive them from the same helpers in `lib/view`.
+// The results scene draws a two-row PageHeader above the list.
 const resultView = computed(() =>
-  resultWindow(state.value.rows, state.value.cursor, bodyH.value),
+  resultWindow(state.value.rows, state.value.cursor, Math.max(2, bodyH.value - 2)),
 )
 const tmdbView = computed(() =>
   tmdbWindow(state.value.tmdbHits, state.value.cursor, bodyH.value),

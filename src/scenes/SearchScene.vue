@@ -4,7 +4,8 @@
 // `bridge.set`) and the shell focuses it on scene change.
 import { computed, ref } from 'vue-termui'
 import { Box, Input, StyledText, Text, bold, fg } from 'vue-termui'
-import { ink } from '../lib/rows.ts'
+import { chipChunks, colsLine, ruleLine } from '../lib/rows.ts'
+import { displayWidth } from '../lib/text.ts'
 import { c, providerName } from '../lib/theme.ts'
 import type { Snapshot } from '../bridge.ts'
 import { platformBar } from './shared.ts'
@@ -29,9 +30,30 @@ function focus(): void {
 defineExpose({ focus })
 
 const providers = computed(() => props.state.providers ?? [])
+const platform = computed(() => providerName(providers.value[props.state.providerIndex] || ''))
 const searchPlatformLine = computed(() =>
   platformBar(providers.value, bodyW.value, providers.value[props.state.providerIndex] || ''),
 )
+
+/** ` 优酷  https://…` — the platform chip in a fixed column, the example in c.dim. */
+const LINK_LABEL = 6
+function linkLine(name: string, example: string): StyledText {
+  const chip = ` ${name} `
+  const pad = Math.max(0, LINK_LABEL - displayWidth(chip))
+  return colsLine(
+    [
+      { chunks: () => [...chipChunks(name), { __isChunk: true, text: ' '.repeat(pad) }], cells: LINK_LABEL },
+      { text: example, grow: true, color: c.dim },
+    ],
+    bodyW.value,
+  )
+}
+
+const LINKS: Array<[string, string]> = [
+  ['优酷', 'https://v.youku.com/v_show/id_xxx.html'],
+  ['腾讯', 'https://v.qq.com/x/cover/xxx.html'],
+  ['抖音', '分享口令整段粘贴即可'],
+]
 </script>
 
 <template>
@@ -46,8 +68,8 @@ const searchPlatformLine = computed(() =>
     <Text
       :content="
         new StyledText([
-          fg(c.text)(bold('搜索片名')),
-          fg(c.faint)(`，在 ${providerName(providers[state.providerIndex] || '')} 中查找；也可以直接粘贴链接`),
+          fg(c.text)(bold('搜索')),
+          fg(c.faint)(`  在 ${platform} 中查找片名，也可以直接粘贴链接`),
         ])
       "
       :height="1"
@@ -80,26 +102,16 @@ const searchPlatformLine = computed(() =>
       />
     </Box>
     <Text
-      :content="ink(c.faint, '支持的链接')"
+      :content="ruleLine('支持的链接', bodyW)"
       :height="1"
       :marginTop="1"
       :width="bodyW"
       :truncate="true"
     />
     <Text
-      :content="ink(c.dim, '  优酷  https://v.youku.com/v_show/id_xxx.html')"
-      :height="1"
-      :width="bodyW"
-      :truncate="true"
-    />
-    <Text
-      :content="ink(c.dim, '  腾讯  https://v.qq.com/x/cover/xxx.html')"
-      :height="1"
-      :width="bodyW"
-      :truncate="true"
-    />
-    <Text
-      :content="ink(c.dim, '  抖音  分享口令整段粘贴即可')"
+      v-for="[name, example] in LINKS"
+      :key="name"
+      :content="linkLine(name, example)"
       :height="1"
       :width="bodyW"
       :truncate="true"
