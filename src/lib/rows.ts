@@ -54,13 +54,13 @@ export function colsLine(cols: Col[], width: number, selected = false): StyledTe
 }
 
 /** `████░░░░` — filled cells use the accent, the empty track stays quiet. */
-export function barChunks(pct: number, cells: number, color = c.accent): TextChunk[] {
+export function barChunks(pct: number, cells: number, color: string = c.accent): TextChunk[] {
   const filled = Math.round(Math.max(0, Math.min(1, pct)) * cells)
   return [fg(color)('█'.repeat(filled)), fg(c.line)('░'.repeat(Math.max(0, cells - filled)))]
 }
 
 /** ` 标签 ` on the chip background — short badges (platform, DRM, VIP) inline. */
-export function chipChunks(text: string, color = c.dim, bgColor = c.chip): TextChunk[] {
+export function chipChunks(text: string, color: string = c.dim, bgColor: string = c.chip): TextChunk[] {
   return [bg(bgColor)(fg(color)(` ${text} `))]
 }
 
@@ -89,7 +89,7 @@ export function tabsWidth(labels: string[]): number {
 }
 
 /** Cursor column shared by every pickable list. */
-export function markCol(selected: boolean, color = c.accent): Col {
+export function markCol(selected: boolean, color: string = c.accent): Col {
   return { text: selected ? MARK : '  ', cells: 2, color: selected ? color : undefined, bold: false }
 }
 
@@ -120,7 +120,7 @@ export function kvLine(
   value: string,
   width: number,
   selected: boolean,
-  valueColor = c.dim,
+  valueColor: string = c.dim,
   labelCells = 16,
 ): StyledText {
   const cells = Math.min(labelCells, Math.max(8, Math.floor(width / 3)))

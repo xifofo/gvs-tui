@@ -304,7 +304,7 @@ const statusLeftW = computed(() =>
   Math.max(10, bodyW.value - statusRightW.value - 1),
 )
 
-const hints = computed(() => {
+const hints = computed((): Array<[string, string]> => {
   if (state.value.scene === 'quality' && !audios.value.length)
     return [
       ['⏎', '继续'],

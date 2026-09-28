@@ -124,7 +124,7 @@ const audioView = computed(() =>
 const tabsLine = computed(() => {
   const chunks: TextChunk[] = [
     { __isChunk: true, text: ' '.repeat(INSET) },
-    ...tabChunks(`画质 ${qualities.value.length} 档`, !onAudioTab),
+    ...tabChunks(`画质 ${qualities.value.length} 档`, !onAudioTab.value),
   ]
   if (audios.value.length)
     chunks.push(
@@ -132,7 +132,7 @@ const tabsLine = computed(() => {
         audios.value.every((a) => a.embedded)
           ? '内嵌音轨 · 随画质切换'
           : `音轨 ${audios.value.length} 条 · 已选 ${audioPicked.value}`,
-        onAudioTab,
+        onAudioTab.value,
       ),
     )
   return colsLine(
