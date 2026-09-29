@@ -2,18 +2,18 @@
 import { computed } from 'vue'
 import { PROVIDER_NAME } from '@shared/api'
 import mark from '../assets/gvs-mark.svg'
-import { go, gvs, store, type View } from '../store'
+import { go, gvs, section, store, type View } from '../store'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
 
-const nav: Array<{ view: View; label: string; icon: string; also?: View[] }> = [
+const nav: Array<{ view: View; label: string; icon: string }> = [
   { view: 'discover', label: '发现', icon: 'compass' },
-  { view: 'search', label: '搜索', icon: 'search', also: ['detail', 'quality'] },
+  { view: 'search', label: '搜索', icon: 'search' },
   { view: 'downloads', label: '下载', icon: 'download' },
   { view: 'settings', label: '设置', icon: 'gear' },
 ]
 
-const active = (n: (typeof nav)[number]) => store.view === n.view || !!n.also?.includes(store.view)
+const active = (n: (typeof nav)[number]) => section() === n.view
 const activeJobs = computed(() => store.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length)
 const toneColor: Record<string, string> = { ok: 'var(--side-ok)', warn: 'var(--side-warn)', err: '#ff8a7a', muted: 'var(--side-muted)' }
 const host = computed(() => {

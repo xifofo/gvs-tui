@@ -84,6 +84,16 @@ export function back(fallback: View = 'discover'): void {
   store.view = store.history.pop() ?? fallback
 }
 
+/** 侧栏高亮：详情/画质页归到进来的那一栏（发现或搜索） */
+export function section(): View {
+  if (store.view !== 'detail' && store.view !== 'quality') return store.view
+  for (let i = store.history.length - 1; i >= 0; i--) {
+    const v = store.history[i]
+    if (v === 'discover' || v === 'search') return v
+  }
+  return 'search'
+}
+
 export async function runSearch(raw: string): Promise<void> {
   const q = raw.trim()
   if (!q) return

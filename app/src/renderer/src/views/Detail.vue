@@ -240,8 +240,9 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
 .box { width: 20px; height: 20px; border-radius: 5px; border: 2px solid var(--ink); display: flex; align-items: center; justify-content: center; }
 .edition.on .box { background: var(--orange); }
 .et { font-weight: 500; flex-grow: 1; }
+/* sticky 以滚动容器的内容盒为界：抵掉 .page 的 40px 底内边距，才能贴住窗口底边 */
 .foot {
-  position: sticky; bottom: 0; margin: 0 -20px -18px; padding: 14px 20px 18px; background: var(--card);
+  position: sticky; bottom: -40px; margin: 0 -20px -18px; padding: 14px 20px 18px; background: var(--card);
   border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; display: flex; align-items: center; gap: 16px;
 }
 .foot .n { font-size: 18px; }

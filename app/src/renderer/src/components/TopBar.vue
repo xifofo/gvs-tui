@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { go, runSearch, store, toast, errText } from '../store'
+import { go, hasProvider, runSearch, store, toast, errText } from '../store'
 import Icon from './Icon.vue'
 
 const text = ref(store.query)
@@ -29,6 +29,11 @@ onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 const running = computed(() => store.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length)
+// 只有优酷/腾讯支持粘贴播放页链接；Key 没这两家权限就别提链接
+const placeholder = computed(() => {
+  const sites = [hasProvider('youku') && '优酷', hasProvider('tencent') && '腾讯'].filter(Boolean)
+  return sites.length ? `搜剧名，或直接粘贴${sites.join(' / ')}链接` : '搜剧名'
+})
 const shortcut = computed(() => (store.state?.platform === 'darwin' ? '⌘ K' : 'Ctrl K'))
 </script>
 
@@ -42,7 +47,7 @@ const shortcut = computed(() => (store.state?.platform === 'darwin' ? '⌘ K' : 
         ref="input"
         v-model="text"
         type="search"
-        placeholder="搜剧名，或直接粘贴优酷 / 腾讯链接"
+        :placeholder="placeholder"
         autocomplete="off"
       />
       <span class="kbd mono">{{ shortcut }}</span>

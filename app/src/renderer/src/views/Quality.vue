@@ -56,6 +56,14 @@ const audioGroups = computed(() => {
   }
   return groups
 })
+/** 音轨全部内嵌在视频里（红果/黄果）：没得选，只用一行说明，别摆一排不能点的芯片 */
+const embeddedOnly = computed(() => audios.value.length > 0 && audios.value.every((a) => a.embedded))
+const embeddedNote = computed(() =>
+  audios.value
+    .map((a) => [a.lang, a.label].filter((t) => t && !t.includes('未提供')).join(' '))
+    .filter(Boolean)
+    .join('、'),
+)
 const pickedCount = computed(() => audios.value.filter((a) => a.embedded || audioIds.value.includes(a.id)).length)
 function pickAll() {
   audioIds.value = audios.value.filter((a) => !a.embedded).map((a) => a.id)
@@ -140,6 +148,13 @@ const spec = (q: { width: number; height: number; size: number; fps: number }) =
   [q.width && q.height ? `${q.width}×${q.height}` : '', q.fps ? `${q.fps}帧` : '', q.size ? `每${noun.value === '集' ? '集' : '个'}约 ${human(q.size)}` : '']
     .filter(Boolean)
     .join(' · ')
+const CODEC_NAME: Record<string, string> = { bytevc1: 'H.265', bytevc2: 'H.266', h264: 'H.264', avc: 'H.264', h265: 'H.265', hevc: 'H.265', av1: 'AV1' }
+/** 码流名给人看：红果的 id 是「1080p|bytevc1|」这种拼接串，去掉空段和标题里已有的部分，编码换成通用名 */
+function streamCode(q: { stream: string; label: string }): string {
+  const label = q.label.toLowerCase()
+  const parts = q.stream.split('|').map((t) => t.trim()).filter((t) => t && !label.includes(t.toLowerCase()))
+  return [...new Set(parts.map((t) => CODEC_NAME[t.toLowerCase()] ?? t))].join(' · ')
+}
 /** 同是「4K · 60fps」的几档靠码流名区分：杜比视界 / HDR / SDR */
 function range(q: { stream: string; hdr: string; label: string }): string {
   const t = `${q.stream} ${q.hdr}`.toLowerCase()
@@ -209,7 +224,11 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
       <div class="left">
         <div v-if="probe.warning" class="warn-box">{{ probe.warning }}</div>
         <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
-        <fieldset v-if="audios.length" class="fs abox">
+        <div v-if="embeddedOnly" class="abox aline">
+          <span class="atitle">音轨</span>
+          <span class="muted">随视频内嵌{{ embeddedNote ? `：${embeddedNote}` : '，无需选择' }}</span>
+        </div>
+        <fieldset v-else-if="audios.length" class="fs abox">
           <legend class="sr-only">音轨</legend>
           <div class="alegend">
             <span class="atitle">音轨</span>
@@ -238,7 +257,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
             <span class="radio"><span v-if="q.index === qIndex" /></span>
             <span class="ot">
               <span class="on-t">{{ qname(q) }}</span>
-              <span v-if="q.stream" class="mono muted code">{{ q.stream }}</span>
+              <span v-if="streamCode(q)" class="mono muted code">{{ streamCode(q) }}</span>
             </span>
             <span class="spec dim">{{ spec(q) }}</span>
           </label>
@@ -312,6 +331,7 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .abox { padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; gap: 10px; }
 .alegend { display: flex; align-items: baseline; gap: 10px; }
 .atitle { font-size: 16px; font-weight: 700; }
+.aline { display: flex; align-items: baseline; gap: 12px; }
 .aq { margin-left: auto; display: flex; gap: 12px; }
 .agroup { display: flex; align-items: center; gap: 14px; }
 .glang { width: 56px; flex-shrink: 0; font-size: 13px; font-weight: 700; color: var(--ink-2); }
