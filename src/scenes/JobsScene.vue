@@ -49,7 +49,7 @@ function detail(job: Job): { text: string; color: string } {
   if (job.status === '失败') return { text: job.err || '失败', color: c.err }
   if (job.status === '完成')
     return job.note
-      ? { text: `降级：${job.note}`, color: c.warn }
+      ? { text: `提示：${job.note}`, color: c.warn }
       : { text: job.log ? baseName(job.log) : '完成', color: c.faint }
   return { text: job.log || job.status, color: c.faint }
 }

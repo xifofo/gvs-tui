@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test'
-import { assertAudioContinuity, assertMediaDuration, frameCrcTiming, relativePresentationStarts } from './media-timing.ts'
+import { assertAudioContinuity, assertMediaDuration, frameCrcTiming, relativePresentationStarts, isEac3ProbeError } from './media-timing.ts'
+
+test('only the known successful EAC3 probe is eligible for first-packet repair', () => {
+  const error = '读取原始时间戳失败 (0) a:0 C:/audio.bin: [eac3 @ 0x123] exponent -1 is out-of-range\n[eac3 @ 0x123] error decoding the audio block'
+  expect(isEac3ProbeError(error)).toBe(true)
+  expect(isEac3ProbeError(error.replace('(0)', '(1)'))).toBe(false)
+  expect(isEac3ProbeError(error + '\nFile ended prematurely')).toBe(false)
+  expect(isEac3ProbeError('轨道没有有效的呈现时间戳')).toBe(false)
+})
 
 test('one shared origin preserves positive, negative and multi-audio relative starts', () => {
   expect(relativePresentationStarts(0, [2500], [0])).toEqual([0, 2500])

@@ -3,7 +3,7 @@ import { statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { truncate } from './util.ts'
 import { ensureFFmpeg } from './tools.ts'
-import { firstPresentationMs, relativePresentationStarts } from './media-timing.ts'
+import { firstPresentationMs, relativePresentationStarts, isEac3ProbeError, dropFirstAudioPacket } from './media-timing.ts'
 import { moveFileSync } from './file-move.ts'
 import { removeScratch, scratchDir } from './scratch.ts'
 
@@ -99,17 +99,35 @@ export async function mkvmergeMux(
   audios: MuxAudio[],
   outPath: string,
   onProgress?: (n: number, total: number) => void,
+  onWarning?: (message: string) => void,
 ): Promise<void> {
   const ffmpeg = await ensureFFmpeg()
   const report: Record<string, unknown> = { version: 1, video: videoPath, audio: audios.map(a => ({ path: a.path, delayMs: a.delayMs ?? 0 })) }
   let work = ''
   try {
+    work = scratchDir(outPath, 'gvs-mux-')
     const sourceVideoMs = await firstPresentationMs(ffmpeg, videoPath, 'v:0')
     const sourceAudioMs: number[] = []
-    for (const a of audios) sourceAudioMs.push(await firstPresentationMs(ffmpeg, a.path, 'a:0'))
+    audios = audios.map(a => ({ ...a }))
+    const repairs: Array<{ track: number; message: string }> = []
+    for (const [i, a] of audios.entries()) {
+      try {
+        sourceAudioMs.push(await firstPresentationMs(ffmpeg, a.path, 'a:0'))
+      } catch (e) {
+        if (!(e instanceof Error) || !isEac3ProbeError(e.message)) throw e
+        const repaired = join(work, `audio-${i}-repaired.mka`)
+        await dropFirstAudioPacket(ffmpeg, a.path, repaired)
+        const start = await firstPresentationMs(ffmpeg, repaired, 'a:0')
+        a.path = repaired
+        sourceAudioMs.push(start)
+        const message = `音轨 ${i + 1} 已跳过异常首帧，保留后续时间戳；完整音轨解码校验通过`
+        repairs.push({ track: i, message })
+        report.audioRepairs = repairs
+        onWarning?.(message)
+      }
+    }
     const expected = relativePresentationStarts(sourceVideoMs, sourceAudioMs, audios.map(a => a.delayMs ?? 0))
     Object.assign(report, { sourceVideoMs, sourceAudioMs, expectedStartsMs: expected })
-    work = scratchDir(outPath, 'gvs-mux-')
     const initial = join(work, 'initial.mkv')
     // Do not apply negative adjustments before measuring: that could discard
     // early packets. Correction is done on a single shared Matroska timeline.

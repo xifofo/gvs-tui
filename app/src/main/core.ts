@@ -966,7 +966,7 @@ export class Core {
       v.note = e.note ?? ''
       v.state = e.err ? 'failed' : 'done'
       if (!e.err) v.output = e.log
-      if (!e.err) this.emit.toast(`${v.groupTitle} ${v.label} 下载完成`, 'ok')
+      if (!e.err) this.emit.toast(`${v.groupTitle} ${v.label} 下载完成${v.note ? `：${v.note}` : ''}`, v.note ? 'warn' : 'ok')
     } else v.state = 'running'
     this.pushJobs()
   }

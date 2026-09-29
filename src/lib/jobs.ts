@@ -427,8 +427,12 @@ async function dlTencent(
       mux.push({ path: dest, title: audio.label, lang: audio.lang })
     }
     emit('封装', 0.86, out)
-    await mkvmergeMux(mkvmerge, raw, mux, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`))
-    return note
+    const repairs: string[] = []
+    await mkvmergeMux(mkvmerge, raw, mux, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), message => {
+      repairs.push(message)
+      runLog(`tencent audio repair vid=${t.vid} ${message}`)
+    })
+    return [note, ...repairs].filter(Boolean).join('；')
   } finally {
     for (const path of temps) {
       try { unlinkSync(path) } catch { /* keep */ }

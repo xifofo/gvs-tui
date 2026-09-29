@@ -1,5 +1,37 @@
 import { spawn } from 'node:child_process'
 
+export function isEac3ProbeError(message: string): boolean {
+  const detail = message.match(/读取原始时间戳失败 \(0\)[\s\S]*?: (\[eac3 @ [\s\S]*)$/)?.[1]
+  if (!detail) return false
+  const lines = detail.trim().split(/\r?\n/)
+  return lines.some(line => /exponent -?\d+ is out-of-range/.test(line)) && lines.every(line =>
+    /^\[eac3 @ [^\]]+\] (?:exponent -?\d+ is out-of-range|error decoding the audio block)$/.test(line.trim()))
+}
+
+/** Drop exactly one compressed packet, preserving all remaining packet PTS.
+ * Decode the entire candidate before accepting it: later corruption is fatal.
+ */
+export async function dropFirstAudioPacket(ffmpeg: string, source: string, dest: string): Promise<void> {
+  const run = (args: string[], probing: boolean) => new Promise<void>((resolve, reject) => {
+    const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-v', 'error', ...args],
+      { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
+    let errors = '', overflow = false
+    child.stderr.on('data', (b: Buffer) => {
+      errors += b.toString()
+      if (errors.length > 16000) { overflow = true; errors = errors.slice(-16000) }
+    })
+    child.once('error', reject)
+    child.once('close', code => {
+      const known = probing && isEac3ProbeError(`读取原始时间戳失败 (0) a:0 source: ${errors}`)
+      if (code !== 0 || overflow || (errors.trim() && !known)) reject(new Error(`首帧修复校验失败 (${code}): ${errors.slice(-4000)}`))
+      else resolve()
+    })
+  })
+  await run(['-copyts', '-i', source, '-map', '0:a:0', '-c', 'copy', '-bsf:a', 'noise=drop=eq(n\\,0)',
+    '-avoid_negative_ts', 'disabled', '-y', dest], true)
+  await run(['-i', dest, '-map', '0:a:0', '-f', 'null', '-'], false)
+}
+
 export type TrackTiming = {
   id: number
   type: string
