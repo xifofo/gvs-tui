@@ -8,11 +8,14 @@ export const CDN_REFRESH_RETRIES = 5
 export async function retryCdnRefresh<T>(
   operation: () => Promise<T>,
   note?: (retry: number, total: number, delayMs: number, status: number) => void,
-  wait: (ms: number) => Promise<unknown> = sleep,
+  wait: (ms: number, signal?: AbortSignal) => Promise<unknown> = sleep,
+  signal?: AbortSignal,
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try { return await operation() }
     catch (e) {
+      // A pause/cancel must never be read as a CDN status message.
+      if (signal?.aborted) throw signal.reason ?? e
       if (e instanceof HlsRefreshError) throw e
       const message = e instanceof Error ? e.message : String(e)
       const status = e instanceof CdnDenied ? e.status
@@ -23,7 +26,7 @@ export async function retryCdnRefresh<T>(
       }
       const delayMs = Math.min(2000 * 2 ** attempt, 12000)
       note?.(attempt + 1, CDN_REFRESH_RETRIES, delayMs, status)
-      await wait(delayMs)
+      await wait(delayMs, signal)
     }
   }
 }

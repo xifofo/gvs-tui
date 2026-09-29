@@ -1,16 +1,17 @@
 import { spawn } from 'node:child_process'
-import { createReadStream, createWriteStream, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { createReadStream, createWriteStream, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { once } from 'node:events'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web'
-import { asString, human, isObj, sleep } from './util.ts'
+import { asString, combinedSignal, human, isObj, sleep } from './util.ts'
 import { mkvmergeRemux } from './mkvmerge.ts'
 import { ensureFFmpeg, ensureM3u8dl, ensureMkvmerge, ensurePackager } from './tools.ts'
 import { createHlsRelay, type RelayEvent } from './hls-relay.ts'
 import { moveFileSync } from './file-move.ts'
-import { removeScratch, scratchDir } from './scratch.ts'
+import { removeScratch, scratchDir, scratchDirIn } from './scratch.ts'
 
 /** A CDN refused us (403/410 …) — usually the signed URL expired mid-flight. */
 export class CdnDenied extends Error {
@@ -54,25 +55,28 @@ async function openStream(
   from: number,
   note?: RetryNote,
   headers?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<{ res: Response; body: ReadableStream<Uint8Array> | null }> {
   let lastErr: unknown = null
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    signal?.throwIfAborted()
     try {
-      const res = await fetch(src, { headers: headersFor(ref, from, headers) })
+      const res = await fetch(src, { headers: headersFor(ref, from, headers), signal })
       if (res.ok || res.status === 206) return { res, body: res.body }
       if (RESPECT_AFTER.has(res.status)) {
         const wait = Number(res.headers.get('retry-after') ?? 0) * 1000
-        if (wait > 0 && attempt < MAX_ATTEMPTS) await sleep(Math.min(wait, 10_000))
+        if (wait > 0 && attempt < MAX_ATTEMPTS) await sleep(Math.min(wait, 10_000), signal)
       }
       if (!RETRY_STATUS.has(res.status)) throw new CdnDenied(res.status, src)
       lastErr = new CdnDenied(res.status, src)
       note?.(attempt, MAX_ATTEMPTS, `HTTP ${res.status}`)
     } catch (e) {
+      signal?.throwIfAborted()
       if (e instanceof CdnDenied && e.status !== 403 && e.status !== 410) throw e
       lastErr = e
       note?.(attempt, MAX_ATTEMPTS, e instanceof Error ? e.message : String(e))
     }
-    if (attempt < MAX_ATTEMPTS) await sleep(Math.min(500 * 2 ** (attempt - 1), 8000))
+    if (attempt < MAX_ATTEMPTS) await sleep(Math.min(500 * 2 ** (attempt - 1), 8000), signal)
   }
   throw lastErr instanceof Error ? lastErr : new Error('cdn unreachable')
 }
@@ -297,8 +301,8 @@ export function speedCB(
   }
 }
 
-async function cdnResponse(src: string, ref: string, headers?: Record<string, string>): Promise<Response> {
-  const { res } = await openStream(src, ref, 0, undefined, headers)
+async function cdnResponse(src: string, ref: string, headers?: Record<string, string>, signal?: AbortSignal): Promise<Response> {
+  const { res } = await openStream(src, ref, 0, undefined, headers, signal)
   return res
 }
 
@@ -310,19 +314,125 @@ const SEGMENT_BUFFER_BYTES = 64 << 20
 type RangeProbe = { total: number; ranges: boolean }
 
 /** Ask for one byte to learn the size and whether the CDN honours `Range`. */
-async function probeRange(src: string, ref: string, headers?: Record<string, string>): Promise<RangeProbe> {
+async function probeRange(src: string, ref: string, headers?: Record<string, string>, signal?: AbortSignal): Promise<RangeProbe> {
   try {
     const requestHeaders = new Headers(headersFor(ref, 0, headers))
     requestHeaders.set('Range', 'bytes=0-0')
-    const res = await fetch(src, { headers: requestHeaders })
+    const res = await fetch(src, { headers: requestHeaders, signal })
     const cr = res.headers.get('content-range') ?? ''
     const total = Number(cr.split('/')[1] ?? 0)
     await res.body?.cancel().catch(() => {})
     if (res.status === 206 && total > 0) return { total, ranges: true }
     const len = Number(res.headers.get('content-length') ?? 0)
     return { total: len, ranges: false }
-  } catch {
+  } catch (e) {
+    // A stop is not a probe failure: falling back to the single-connection
+    // path here would restart the whole transfer instead of resuming.
+    if (signal?.aborted) throw signal.reason ?? e
     return { total: 0, ranges: false }
+  }
+}
+
+/**
+ * Byte-range resume is only safe against the exact same bytes. A retry after a
+ * CDN denial re-resolves the URL and may pair a different rendition with a
+ * different key, and the offset into `dest` would then splice two streams. So
+ * every partial transfer records an identity hash of (CDN path + cipher/key)
+ * and is discarded when that identity changed. The key is hashed, never
+ * stored, so a work folder left behind by a failure leaks nothing.
+ */
+export function sourceIdentity(src: string, cipher?: HlsCipher, key?: string): string {
+  let path = src
+  try {
+    const url = new URL(src)
+    path = `${url.origin}${url.pathname}`
+  } catch { /* not an absolute URL: use it verbatim */ }
+  const proof = key ? `key:${key}` : cipher ? `${cipher.method}:${cipher.key}:${cipher.iv}` : ''
+  return createHash('sha256').update(`${path}|${proof}`).digest('hex').slice(0, 32)
+}
+
+/**
+ * `.partN` chunks are only reusable when they were split the same way. The span
+ * depends on `threads` and the total size, so a changed thread count (or a new
+ * CDN URL for different bytes) would silently splice two different streams.
+ * The sidecar records all three; a mismatch drops the completed chunks.
+ */
+type PartPlan = { threads: number; total: number }
+export type PartPlanRead = { fingerprint: string | undefined; headerTotal: number }
+
+function partsPath(dest: string): string {
+  return `${dest}.parts.json`
+}
+
+function readPartsPlan(dest: string): PartPlanRead {
+  let fingerprint: string | undefined
+  let headerTotal = 0
+  try {
+    const raw = JSON.parse(readFileSync(partsPath(dest), 'utf8')) as Record<string, unknown>
+    const plan = raw.plan && typeof raw.plan === 'object' ? raw.plan as PartPlan : raw as unknown as PartPlan
+    const head = Number(raw.headerTotal ?? 0)
+    if (Number.isFinite(head) && head > 0) headerTotal = head
+    if (Number.isFinite(plan?.threads) && Number.isFinite(plan?.total)) {
+      fingerprint = `${plan.threads}:${plan.total}:${String(raw.identity ?? '')}`
+    }
+  } catch { /* first run or a torn sidecar */ }
+  return { fingerprint, headerTotal }
+}
+
+function writePartsPlan(dest: string, plan: PartPlan, headerTotal: number, identity: string | undefined): void {
+  try { writeFileSync(partsPath(dest), `${JSON.stringify({ version: 1, plan, headerTotal, identity })}\n`) } catch { /* resume is best effort */ }
+}
+
+function dropParts(dest: string, parts: number): void {
+  for (let i = 0; i < parts; i++) {
+    try { unlinkSync(partPath(dest, i)) } catch { /* already gone */ }
+  }
+  try { unlinkSync(partsPath(dest)) } catch { /* already gone */ }
+}
+
+function resumePath(dest: string): string {
+  return `${dest}.resume.json`
+}
+
+/** Bytes already on disk for `dest`, but only when they belong to this source. */
+function resumableBytes(dest: string, identity: string | undefined): number {
+  let have = 0
+  try { have = statSync(dest).size } catch { return 0 }
+  if (!have) return 0
+  // No identity to compare (older callers) keeps the historical behaviour.
+  if (!identity) return have
+  let saved = ''
+  try {
+    saved = String((JSON.parse(readFileSync(resumePath(dest), 'utf8')) as Record<string, unknown>).identity ?? '')
+  } catch { /* no sidecar: the bytes cannot be attributed */ }
+  if (saved === identity) return have
+  // Unknown or foreign bytes must never be spliced into this download.
+  try { unlinkSync(dest) } catch { /* the append below would still be wrong */ }
+  try { unlinkSync(resumePath(dest)) } catch { /* already gone */ }
+  return 0
+}
+
+function writeResumeState(dest: string, identity: string | undefined, have: number): void {
+  if (!identity) return
+  try { writeFileSync(resumePath(dest), `${JSON.stringify({ version: 1, identity, have })}\n`) } catch { /* resume is best effort */ }
+}
+
+function clearResumeState(dest: string): void {
+  try { unlinkSync(resumePath(dest)) } catch { /* already gone */ }
+}
+
+/** Stable, filesystem-safe folder name for one track inside the job work dir. */
+export function workTagOf(explicit: string | undefined, dest: string): string {
+  const raw = explicit || basename(dest)
+  return raw.replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'track'
+}
+
+/** Empty a deterministic scratch parent so retries never accumulate folders. */
+function removeStaleChildren(parent: string): void {
+  let names: string[] = []
+  try { names = readdirSync(parent) } catch { return }
+  for (const name of names) {
+    try { rmSync(join(parent, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* in use */ }
   }
 }
 
@@ -360,17 +470,28 @@ async function downloadParallel(
   cb?: (n: number, total: number) => void,
   note?: RetryNote,
   headers?: Record<string, string>,
+  signal?: AbortSignal,
+  identity?: string,
 ): Promise<void> {
   const parts = Math.max(2, threads)
   const span = Math.ceil(total / parts)
   const sizes = new Array<number>(parts).fill(0)
   const ends = new Array<number>(parts).fill(0)
+  // A different split (threads / byte count / source identity) means the chunks
+  // on disk belong to another download; reusing them would splice two streams.
+  const current = readPartsPlan(dest)
+  const reusable = current.fingerprint === `${parts}:${total}:${identity ?? ''}`
+  if (!reusable) {
+    if (current.fingerprint) note?.(1, MAX_ATTEMPTS, '分片参数已变化，丢弃旧的临时分片')
+    dropParts(dest, Math.max(parts, 16))
+  }
   let done = 0
   for (let i = 0; i < parts; i++) {
     ends[i] = Math.min(total, (i + 1) * span)
     sizes[i] = Math.min(partSize(partPath(dest, i)), ends[i] - i * span)
     done += sizes[i]
   }
+  writePartsPlan(dest, { threads: parts, total }, total, identity)
   cb?.(done, total)
 
   await Promise.all(
@@ -379,6 +500,7 @@ async function downloadParallel(
       const end = ends[i] - 1
       const path = partPath(dest, i)
       while (sizes[i] < end - start + 1) {
+        signal?.throwIfAborted()
         const from = start + sizes[i]
         let attempt = 0
         for (;;) {
@@ -386,7 +508,7 @@ async function downloadParallel(
           try {
             const requestHeaders = new Headers(headersFor(ref, from, headers))
             requestHeaders.set('Range', `bytes=${from}-${end}`)
-            const res = await fetch(src, { headers: requestHeaders })
+            const res = await fetch(src, { headers: requestHeaders, signal })
             if (res.status !== 206) {
               await res.body?.cancel().catch(() => {})
               throw new Error('cdn ignored range')
@@ -399,18 +521,23 @@ async function downloadParallel(
               done += chunk.length
               cb?.(done, total)
             })
-            await pipeline(node, file)
+            await pipeline(node, file, { signal })
             break
           } catch (e) {
+            // Stopping must not be reported as a CDN retry, and must not fall
+            // through to the merge step below.
+            if (signal?.aborted) throw signal.reason ?? e
             if (attempt >= MAX_ATTEMPTS) throw e
             note?.(attempt, MAX_ATTEMPTS, `分片 ${i + 1}/${parts} 续传`)
-            await sleep(Math.min(800 * 2 ** (attempt - 1), 6000))
+            await sleep(Math.min(800 * 2 ** (attempt - 1), 6000), signal)
           }
         }
       }
     }),
   )
 
+  // Assigning every chunk before truncating `dest` keeps the blob on disk if we
+  // are stopped in between: the parts are still there for the next resume.
   const out = createWriteStream(dest, { flags: 'w' })
   for (let i = 0; i < parts; i++) {
     const path = partPath(dest, i)
@@ -424,6 +551,7 @@ async function downloadParallel(
     try { unlinkSync(path) } catch { /* keep */ }
   }
   await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())))
+  try { unlinkSync(partsPath(dest)) } catch { /* already gone */ }
   cb?.(total, total)
 }
 
@@ -579,8 +707,26 @@ export function reHttpFailureMonitor(): { feed: (chunk: string) => number } {
   }
 }
 
-export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: ProgressCB, fatalError?: () => Error | undefined, cwd?: string): Promise<string> {
+/**
+ * RE spawns shaka-packager / ffmpeg as children. On Windows `child.kill()` would
+ * leave them running and holding the output files, so the whole tree is killed.
+ */
+function killTree(pid: number | undefined): void {
+  if (pid === undefined) return
+  if (process.platform === 'win32') {
+    try { spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) } catch { /* already exited */ }
+    return
+  }
+  try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+}
+
+export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: ProgressCB, fatalError?: () => Error | undefined, cwd?: string, signal?: AbortSignal): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>()
+  if (signal?.aborted) {
+    // Never start (and then have to kill) a downloader for a stopped job.
+    reject(signal.reason ?? new Error('已停止'))
+    return promise
+  }
   const child = spawn(bin, args, {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -594,9 +740,20 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   let output = ''
   let deniedStatus = 0
   let exhausted = false
+  let stopped = false
   let phase: PlaylistPhase = 'download'
   let decryptAt = 0
   const failures = reHttpFailureMonitor()
+  const stop = () => {
+    if (stopped) return
+    stopped = true
+    killTree(child.pid)
+  }
+  const onAbort = () => stop()
+  if (signal) {
+    if (signal.aborted) stop()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
   const bumpPhase = (next: PlaylistPhase) => {
     const order: PlaylistPhase[] = ['download', 'merge', 'decrypt']
     if (order.indexOf(next) > order.indexOf(phase)) phase = next
@@ -623,7 +780,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     // gives up, never on the first 403 (or a historical 403 followed by success).
     if (deniedStatus && /retry attempts have been exhausted/i.test(output)) {
       exhausted = true
-      child.kill()
+      stop()
     }
   }
   child.stdout.setEncoding('utf8')
@@ -631,7 +788,8 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   child.stdout.on('data', collect)
   child.stderr.on('data', collect)
   const logWatch = (logFile || cwd || fatalError) ? setInterval(() => {
-    if (fatalError?.()) { child.kill(); return }
+    if (stopped) return
+    if (fatalError?.()) { stop(); return }
     if (exhausted) return
     let log = ''
     if (logFile) {
@@ -641,7 +799,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
         if (status) deniedStatus = status
         if (deniedStatus && /retry attempts have been exhausted/i.test(log)) {
           exhausted = true
-          child.kill()
+          stop()
         }
       } catch { /* log is not created yet */ }
     }
@@ -649,9 +807,18 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     emitSidecar()
   }, 250) : undefined
   const stopLogWatch = () => { clearInterval(logWatch) }
-  child.once('error', (e) => { stopLogWatch(); reject(new Error(`无法启动 N_m3u8DL-RE: ${e.message}`)) })
-  child.once('close', (code, signal) => {
+  child.once('error', (e) => {
     stopLogWatch()
+    signal?.removeEventListener('abort', onAbort)
+    if (signal?.aborted) { reject(signal.reason ?? new Error('aborted')); return }
+    reject(new Error(`无法启动 N_m3u8DL-RE: ${e.message}`))
+  })
+  child.once('close', (code, killSignal) => {
+    stopLogWatch()
+    signal?.removeEventListener('abort', onAbort)
+    // A caller stop is not a download error: report it as the abort. An
+    // internal stop (exhausted retries / fatal relay) still reports below.
+    if (stopped && signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }
     const fatal = fatalError?.()
     if (fatal) { reject(fatal); return }
     let file = ''
@@ -664,7 +831,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     if (code === 0 && !failed) resolve(text)
     else {
       const slow = /Download speed too slow/i.test(text) ? 'Download speed too slow! ' : ''
-      reject(new Error(`N_m3u8DL-RE 下载失败 (${signal || code}): ${slow}${text.slice(-4000)}`))
+      reject(new Error(`N_m3u8DL-RE 下载失败 (${killSignal || code}): ${slow}${text.slice(-4000)}`))
     }
   })
   return promise
@@ -676,14 +843,15 @@ export type HlsCipher = { method: string; key: string; iv: string }
 
 /** Tencent mirrors may answer with a 200 "Forbidden" HTML page from some
  * networks; return the first candidate that actually serves a playlist. */
-export async function firstLivePlaylist(urls: string[], ref: string): Promise<string> {
+export async function firstLivePlaylist(urls: string[], ref: string, signal?: AbortSignal): Promise<string> {
   const tried: string[] = []
   for (const u of urls) {
     try {
-      const res = await fetch(u, { headers: headersFor(ref), signal: AbortSignal.timeout(15_000) })
+      const res = await fetch(u, { headers: headersFor(ref), signal: combinedSignal(signal, 15_000) })
       if ((await res.text()).trimStart().startsWith('#EXTM3U')) return u
       tried.push(`${new URL(u).host} HTTP ${res.status}`)
     } catch (e) {
+      signal?.throwIfAborted()
       tried.push(`${u.split('/')[2] ?? u} ${e instanceof Error ? e.message : String(e)}`)
     }
   }
@@ -691,13 +859,13 @@ export async function firstLivePlaylist(urls: string[], ref: string): Promise<st
 }
 
 /** True when the first media segment is not plaintext MPEG-TS. */
-export async function hlsSegmentsEncrypted(src: string, ref: string): Promise<boolean> {
-  const res = await fetch(src, { headers: headersFor(ref) })
+export async function hlsSegmentsEncrypted(src: string, ref: string, signal?: AbortSignal): Promise<boolean> {
+  const res = await fetch(src, { headers: headersFor(ref), signal })
   const playlist = await res.text()
   if (!playlist.trimStart().startsWith('#EXTM3U')) throw new Error(`播放列表不可用（HTTP ${res.status}）`)
   const first = playlist.split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith('#'))
   if (!first) throw new Error('播放列表没有分片')
-  const seg = await fetch(new URL(first, res.url || src), { headers: { ...headersFor(ref), Range: 'bytes=0-376' } })
+  const seg = await fetch(new URL(first, res.url || src), { headers: { ...headersFor(ref), Range: 'bytes=0-376' }, signal })
   const b = new Uint8Array(await seg.arrayBuffer())
   return !(b[0] === 0x47 && b[188] === 0x47)
 }
@@ -720,10 +888,31 @@ export async function downloadPlaylist(opts: {
   transport?: 'node' | 're'
   refreshSource?: () => Promise<{ src: string; key?: string }>
   onRefresh?: (attempt: number, total: number) => void
+  /**
+   * Explicit parent for RE's scratch folder. When set, the folder is a
+   * deterministic child of it so a resume can reuse downloaded segments;
+   * otherwise it sits beside `dest` for same-volume renames.
+   */
+  workDir?: string
+  /** Whitespace-free suffix identifying this track inside `workDir`. */
+  workTag?: string
+  signal?: AbortSignal
+  /** Reports the fallback to system temp when `workDir` cannot be created. */
+  log?: (msg: string) => void
 }): Promise<void> {
+  opts.signal?.throwIfAborted()
   const executable = await ensureM3u8dl()
   mkdirSync(dirname(opts.dest), { recursive: true })
-  const workDir = scratchDir(opts.dest, 'gvs-re-')
+  const tag = workTagOf(opts.workTag, opts.dest)
+  if (opts.workDir) {
+    // A deterministic parent means an aborted run could otherwise pile up
+    // `re-*` folders forever; RE cannot be trusted to resume those fragments
+    // cheaply, so a restart always starts from an empty folder.
+    removeStaleChildren(join(opts.workDir, tag))
+  }
+  const workDir = opts.workDir
+    ? scratchDirIn(join(opts.workDir, tag), 're-', opts.log)
+    : scratchDir(opts.dest, 'gvs-re-')
   const logFile = join(workDir, 're.log')
   const errorLog = `${opts.dest}.download-error.log`
   let diagnostics = ''
@@ -746,6 +935,7 @@ export async function downloadPlaylist(opts: {
           return next.src
         } : undefined,
         onRefresh: opts.onRefresh,
+        signal: opts.signal,
         onResponse: event => { relayEvents.push(event); if (relayEvents.length > 1500) relayEvents.shift() },
       })
       source = relay.url
@@ -819,9 +1009,11 @@ export async function downloadPlaylist(opts: {
     }
     for (let slowRestart = 0; ; slowRestart++) {
       try {
-        diagnostics = await runM3u8dl(executable, args, logFile, report, relay?.error, workDir)
+        diagnostics = await runM3u8dl(executable, args, logFile, report, relay?.error, workDir, opts.signal)
         break
       } catch (e) {
+        // A pause/cancel must not be treated as RE's zero-speed watchdog.
+        if (opts.signal?.aborted) throw e
         // RE's hard-coded 20s zero-speed watchdog may fire while play() is
         // issuing fresh signed URLs. Wait for that same refresh, then reuse
         // the exact RE work directory and stable local playlist/segment ids.
@@ -829,6 +1021,7 @@ export async function downloadPlaylist(opts: {
         await relay.waitForRefresh()
       }
     }
+    opts.signal?.throwIfAborted()
     const found = pickREOutput(workDir)
     if (!found) {
       const status = reHttpFailureMonitor().feed(diagnostics + '\n')
@@ -872,24 +1065,29 @@ export async function downloadProgress(
   threads = 1,
   cipher?: HlsCipher,
   headers?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (/\.(?:m3u8|mpd)/i.test(src)) {
     const tmp = /\.mkv$/i.test(dest) ? `${dest}.re.mp4` : dest
-    await downloadPlaylist({ src, dest: tmp, ref, threads, cb, cipher, headers })
+    await downloadPlaylist({ src, dest: tmp, ref, threads, cb, cipher, headers, signal })
     if (tmp !== dest) {
       const mkvmerge = await ensureMkvmerge()
-      await mkvmergeRemux(mkvmerge, tmp, dest, cb)
+      await mkvmergeRemux(mkvmerge, tmp, dest, cb, signal)
       try { unlinkSync(tmp) } catch { /* keep */ }
     }
     return
   }
   if (cipher) throw new Error('加密片源只支持 HLS 播放列表下载')
+  // One identity for this call: a refreshed URL therefore discards the bytes
+  // downloaded from the previous one instead of appending to them.
+  const identity = sourceIdentity(src, cipher)
   if (threads > 1) {
-    const probe = await probeRange(src, ref, headers)
+    const probe = await probeRange(src, ref, headers, signal)
     if (probe.ranges && probe.total >= PARALLEL_MIN_BYTES) {
       try {
-        return await downloadParallel(src, dest, ref, probe.total, threads, cb, note, headers)
+        return await downloadParallel(src, dest, ref, probe.total, threads, cb, note, headers, signal, identity)
       } catch (e) {
+        if (signal?.aborted) throw e
         if (e instanceof Error && /cdn ignored range/.test(e.message)) {
           note?.(1, MAX_ATTEMPTS, 'CDN 不支持分段，改用单连接')
         } else {
@@ -898,7 +1096,7 @@ export async function downloadProgress(
       }
     }
   }
-  return downloadSingle(src, dest, ref, cb, note, headers)
+  return downloadSingle(src, dest, ref, cb, note, headers, signal, identity)
 }
 
 async function downloadSingle(
@@ -908,15 +1106,12 @@ async function downloadSingle(
   cb?: (n: number, total: number) => void,
   note?: RetryNote,
   headers?: Record<string, string>,
+  signal?: AbortSignal,
+  identity?: string,
 ): Promise<void> {
-  let have = 0
-  try {
-    have = statSync(dest).size
-  } catch {
-    have = 0
-  }
+  let have = resumableBytes(dest, identity)
   for (let round = 1; round <= MAX_ATTEMPTS; round++) {
-    const { res, body } = await openStream(src, ref, have, note, headers)
+    const { res, body } = await openStream(src, ref, have, note, headers, signal)
     if (!body) throw new Error('cdn empty body')
     const len = Number(res.headers.get('content-length') ?? 0)
     const total = have + len
@@ -928,14 +1123,19 @@ async function downloadSingle(
       cb?.(n, total)
     })
     try {
-      await pipeline(node, file)
+      await pipeline(node, file, { signal })
       cb?.(n, total)
+      clearResumeState(dest)
       return
     } catch (e) {
+      if (signal?.aborted) throw signal.reason ?? e
       have = n
       if (round === MAX_ATTEMPTS) throw e
+      // Treat the partial file as valid for this source so the next round
+      // resumes from it instead of restarting (or discarding) the bytes.
+      writeResumeState(dest, identity, have)
       note?.(round, MAX_ATTEMPTS, `传输中断，从 ${human(have)} 续传`)
-      await sleep(Math.min(1000 * 2 ** (round - 1), 8000))
+      await sleep(Math.min(1000 * 2 ** (round - 1), 8000), signal)
     }
   }
 }
@@ -960,10 +1160,15 @@ export async function appendURLs(
   threads: number,
   onEach?: (index: number, total: number) => void,
   note?: RetryNote,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!urls.length) return
+  signal?.throwIfAborted()
+  const identity = sourceIdentity(urls[0]!)
+  const baseline = resumableBytes(dest, identity)
+  let flushedBytes = baseline
   // 分片走并发：实测同一批优酷分片，单连接 11.7 MB/s、8 并发 81 MB/s（输出 sha256 完全一致）。
-  const first = await fetchBuffer(urls[0]!, ref, note)
+  const first = await fetchBuffer(urls[0]!, ref, note, signal)
   const limit = Math.max(1, Math.min(16, threads))
   const window = limit * 2
   const file = createWriteStream(dest, { flags: 'a' })
@@ -986,6 +1191,7 @@ export async function appendURLs(
       pending.delete(flushed)
       bufferedBytes -= ready.length
       await push(ready)
+      flushedBytes += ready.length
       flushed++
       onEach?.(flushed, urls.length)
     }
@@ -997,13 +1203,14 @@ export async function appendURLs(
 
   const worker = async () => {
     for (;;) {
+      signal?.throwIfAborted()
       while (issued < urls.length && (issued - flushed >= window || bufferedBytes > SEGMENT_BUFFER_BYTES)) {
         await flushReady()
-        await sleep(10)
+        await sleep(10, signal)
       }
       if (issued >= urls.length) return
       const index = issued++
-      const buf = await fetchBuffer(urls[index]!, ref, note)
+      const buf = await fetchBuffer(urls[index]!, ref, note, signal)
       bufferedBytes += buf.length
       pending.set(index, buf)
       await flushReady()
@@ -1013,24 +1220,31 @@ export async function appendURLs(
   try {
     await Promise.all(Array.from({ length: limit }, worker))
     await flushReady()
+    clearResumeState(dest)
+  } catch (e) {
+    // Only the bytes already written in order belong to this source, so a
+    // retry appends after them instead of re-fetching the whole list.
+    writeResumeState(dest, identity, flushedBytes)
+    throw e
   } finally {
     await push(Buffer.alloc(0))
     await new Promise<void>((resolve, reject) => file.end((err?: Error | null) => (err ? reject(err) : resolve())))
   }
 }
 
-async function fetchBuffer(src: string, ref: string, note?: RetryNote): Promise<Buffer> {
+async function fetchBuffer(src: string, ref: string, note?: RetryNote, signal?: AbortSignal): Promise<Buffer> {
   let lastErr: unknown = null
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const { res, body } = await openStream(src, ref, 0, note)
+      const { res, body } = await openStream(src, ref, 0, note, undefined, signal)
       if (!body) throw new Error('cdn empty body')
       return Buffer.from(await res.arrayBuffer())
     } catch (e) {
+      if (signal?.aborted) throw signal.reason ?? e
       lastErr = e
       if (attempt >= MAX_ATTEMPTS) break
       note?.(attempt, MAX_ATTEMPTS, `分片重试`)
-      await sleep(Math.min(500 * 2 ** (attempt - 1), 6000))
+      await sleep(Math.min(500 * 2 ** (attempt - 1), 6000), signal)
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error('segment fetch failed')

@@ -4,12 +4,23 @@ import { parseEpisodes as parseEps } from '@tui/episodes.ts'
 // 流程与 TUI runtime.ts 保持一致（探测 → 选画质/音轨 → TMDB → 入队），
 // 只是去掉了按键状态机，改成显式参数。
 import { app } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import QRCode from 'qrcode'
 import { GwClient, ReloginRequired, type KeyInfo } from '@tui/client.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
 import { fallbackSections } from '@tui/discovery.ts'
-import { JobHub, bindYoukuAudioTracksToTask, nextJobID, type DlTask, type JobEvt } from '@tui/jobs.ts'
+import {
+  JobHub,
+  bindYoukuAudioTracksToTask,
+  discardJobWork,
+  jobWorkDir,
+  nextJobID,
+  seedJobID,
+  tmpRoot,
+  type DlTask,
+  type JobEvt,
+} from '@tui/jobs.ts'
 import { extractTencentLinks, extractYoukuVideoId } from '@tui/link.ts'
 import { youkuSpokenLangKey } from '@tui/media.ts'
 import { filename, folder, sourceTag, tierHeight, dots, type Naming } from '@tui/name.ts'
@@ -21,7 +32,7 @@ import { fetchTencentAccount, txAccountSummary, type TxAccount } from '@tui/tenc
 import { tmdbSearch } from '@tui/tmdb.ts'
 import { ensureTools, lookBundledFFmpeg, lookMP4Box, lookMkvmerge, lookM3u8dl } from '@tui/tools.ts'
 import { runTunnel } from '@tui/tunnel.ts'
-import { anyInt, asString, firstStr, isObj } from '@tui/util.ts'
+import { anyInt, asString, isObj } from '@tui/util.ts'
 import { pollYoukuQR } from '@tui/youku-qr.ts'
 import {
   accountSummary,
@@ -59,6 +70,8 @@ import {
   type Tone,
 } from '@shared/api'
 import { installTunnelWebSocket } from './env'
+import { detailPoster, posterOf, toCards } from './cards'
+import { clearPosterCache, posterCacheSize } from './posters'
 
 const SIGN_DEAD_RE = /not found|revoked|invalid Yk-Sign|yk_sign not found/i
 
@@ -68,64 +81,78 @@ type Emit = {
   toast: (message: string, tone: Tone) => void
 }
 
-type JobRecord = { view: JobView; task: DlTask }
+/** 任务是按 pin 里的配置跑的，所以显示的路径也用 pin，别串到用户后来改的设置上。 */
+type JobRecord = { view: JobView; task: DlTask; pin: Pin }
+
+/** 入队那一刻钉住的配置：继续下载要写回同样的路径与分片布局。key / cookie / sign 永不落盘。 */
+export type Pin = {
+  outDir: string
+  tmpDir: string
+  threads: number
+  releaseGroup: string
+  hongguoFmt: string
+  huangguoFmt: string
+  hongguoNfo: boolean
+  huangguoNfo: boolean
+}
+
+/** jobs.json：重启后把排队/进行中的任务还成「已暂停」。 */
+type JobsFile = { version: 1; jobs: Array<{ view: JobView; task: DlTask; pin: Pin }> }
+const JOBS_VERSION = 1
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '')
 
-function posterOf(...objs: Array<Record<string, unknown> | undefined>): string {
-  for (const o of objs) {
-    if (!o) continue
-    const v = firstStr(o, 'poster', 'cover', 'img', 'pic', 'thumb', 'thumbnail', 'vThumbUrl', 'image', 'coverUrl', 'cover_url', 'horizontal_pic', 'vertical_pic')
-    if (v && /^https?:\/\//.test(v)) return v
+function pinOf(cfg: FileConfig): Pin {
+  return {
+    outDir: cfg.outDir,
+    tmpDir: cfg.tmpDir,
+    threads: cfg.threads,
+    releaseGroup: cfg.releaseGroup,
+    hongguoFmt: cfg.hongguoFmt,
+    huangguoFmt: cfg.huangguoFmt,
+    hongguoNfo: cfg.hongguoNfo,
+    huangguoNfo: cfg.huangguoNfo,
   }
-  return ''
 }
 
-/** 网关 browse/search 条目 → 卡片（字段取法与 TUI discoveryRows / parseSearch 一致，多带海报）。 */
-function toCards(provider: Provider, data: Record<string, unknown>): Card[] {
-  const items = Array.isArray(data.items) ? data.items : Array.isArray(data.list) ? data.list : []
-  const seen = new Set<string>()
-  const out: Card[] = []
-  for (const raw of items) {
-    if (!isObj(raw)) continue
-    const meta = isObj(raw.meta) ? raw.meta : {}
-    const title = str(raw.title || raw.name || raw.seriesName || meta.title)
-    let id = str(raw.seriesId || raw.showId || raw.cid || raw.id || raw.vid || meta.seriesId || meta.showId || meta.cid)
-    if (id === '<nil>' || id === 'null') id = ''
-    const kind = str(raw.kind || meta.kind)
-    if (!title || /advert|广告|trailer|预告|channel/.test(kind)) continue
-    const key = id && !id.includes('://') ? id : title
-    if (seen.has(key)) continue
-    seen.add(key)
-    let target: Card['target'] = id && !id.includes('://') ? 'detail' : 'search'
-    let reason = ''
-    const t = isObj(raw.target) ? raw.target : isObj(meta.target) ? meta.target : null
-    if (t && t.type === 'search') target = 'search'
-    if (data.contentType === 'reservation' || kind === 'reservation' || kind === '预约') {
-      target = 'unavailable'
-      reason = '预约内容尚不可下载'
-    }
-    if (t && t.type === 'detail' && str(t.id)) id = str(t.id)
-    const year = str(raw.year || meta.year)
-    const eps = anyInt(raw.episodeCount ?? meta.episodeCount ?? raw.episode_count)
-    const category = str(raw.category || meta.category)
-    const metaBits = [category !== '首页' ? category : '', year, eps > 1 ? `${eps} 集` : ''].filter(Boolean)
-    out.push({
-      provider,
-      id,
-      title,
-      poster: posterOf(raw, meta),
-      desc: str(raw.subtitle || raw.desc || meta.subtitle || meta.subTitle || meta.desc || raw.feature),
-      meta: metaBits.join(' · '),
-      score: str(raw.score || meta.score),
-      rank: data.contentType === 'rank' && Number(raw.rank) > 0 ? Number(raw.rank) : undefined,
-      vip: raw.vip === true || raw.is_vip === true || meta.vip === true,
-      target,
-      reason,
-    })
+/**
+ * 临时目录：空 = 自动（放在下载目录所在的盘）。
+ * 填了就归一成绝对路径，并且当场验证能建、能写——不然要等到下载到一半才报错。
+ */
+function normalizeTmpDir(raw: string): string {
+  const v = (raw ?? '').trim()
+  if (!v) return ''
+  const abs = resolve(v)
+  try {
+    mkdirSync(abs, { recursive: true })
+    const probe = join(abs, `.gvs-write-test-${process.pid}`)
+    writeFileSync(probe, 'ok')
+    unlinkSync(probe)
+  } catch (e) {
+    throw new Error(`临时目录不可写：${abs}（${e instanceof Error ? e.message : String(e)}）`)
   }
-  return out
+  return abs
+}
+
+/** 某目录下的直接子项大小（目录递归，符号链接不跟随）。 */
+function treeSize(path: string): number {
+  let st: ReturnType<typeof statSync>
+  try {
+    st = statSync(path)
+  } catch {
+    return 0
+  }
+  if (!st.isDirectory()) return st.size
+  let total = 0
+  let names: string[] = []
+  try {
+    names = readdirSync(path)
+  } catch {
+    return 0
+  }
+  for (const n of names) total += treeSize(join(path, n))
+  return total
 }
 
 function toEpisodeView(e: Episode): EpisodeView {
@@ -153,7 +180,7 @@ function pickTags(...srcs: Array<Record<string, unknown>>): string[] {
 }
 
 /** runtime.ts parseDetail + 海报 */
-function buildDetail(provider: Provider, id: string, data: Record<string, unknown>, fallbackTitle: string, eps: Episode[]): DetailView {
+function buildDetail(provider: Provider, id: string, data: Record<string, unknown>, fallbackTitle: string, eps: Episode[], hint?: { title?: string; poster?: string }): DetailView {
   const raw = isObj(data.raw) ? data.raw : {}
   const show = isObj(data.show) ? data.show : {}
   const category = asString(data.category) || asString(raw.category) || asString(show.category)
@@ -162,8 +189,8 @@ function buildDetail(provider: Provider, id: string, data: Record<string, unknow
   return {
     provider,
     id,
-    title: asString(data.title) || asString(raw.title) || asString(show.title) || fallbackTitle,
-    poster: posterOf(data, raw, show),
+    title: asString(data.title) || asString(raw.title) || asString(show.title) || fallbackTitle || hint?.title || '',
+    poster: detailPoster(data) || hint?.poster || '',
     desc: asString(data.desc) || asString(raw.desc) || asString(data.intro) || asString(data.description),
     category,
     year: anyInt(data.year) || anyInt(raw.year),
@@ -215,6 +242,14 @@ function dedupeAudios(audios: Audio[], vidLang: Map<string, string>): Audio[] {
   return order.map((k) => best.get(k)!)
 }
 
+/** 隧道失败原因给人看：网关/WAF 的 403 回的是整页 HTML，原样显示只会是一串标签。 */
+function tunnelErrText(err: string): string {
+  if (!err) return ''
+  if (/route forbidden|\b403\b/i.test(err)) return '网关拒绝了隧道（403）：这个 Key 可能没有隧道权限，请联系网关管理员'
+  if (/\b401\b|unauthori[sz]ed/i.test(err)) return '网关拒绝了隧道（401）：Key 无效或已过期'
+  return err.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
+}
+
 function mask(key: string): string {
   if (!key) return ''
   if (key.length <= 10) return '••••'
@@ -245,6 +280,7 @@ export class Core {
 
   constructor(private readonly emit: Emit) {
     this.hub = new JobHub((e) => this.onJob(e))
+    this.loadJobs()
   }
 
   // ---------------------------------------------------------------- 生命周期
@@ -255,8 +291,131 @@ export class Core {
     else this.emit.state()
   }
 
-  shutdown(): void {
+  /**
+   * 退出前把在跑的任务停下来。
+   * Windows 上 Electron 退出不会杀子进程（N_m3u8DL-RE / ffmpeg 会继续写文件），
+   * 所以先等 cancelAll 把进程收掉（最多 3 秒），再把没停干净的任务标成已暂停。
+   */
+  async shutdown(): Promise<void> {
     this.tunnelAbort?.abort()
+    try {
+      await Promise.race([
+        this.hub.cancelAll('pause'),
+        new Promise<void>((r) => setTimeout(r, 3000)),
+      ])
+    } catch {
+      /* 尽力而为 */
+    }
+    let dirty = false
+    for (const rec of this.jobs.values()) {
+      if (rec.view.state !== 'running' && rec.view.state !== 'queued') continue
+      rec.view.state = 'paused'
+      rec.view.status = '已暂停'
+      rec.view.log = rec.view.log || '下次启动后点继续接着下'
+      rec.view.busy = undefined
+      dirty = true
+    }
+    if (dirty) {
+      this.emit.jobs(this.jobList())
+      this.flushJobs()
+    }
+  }
+
+  // ---------------------------------------------------------------- 任务持久化
+
+  private jobsPath(): string {
+    return join(app.getPath('userData'), 'jobs.json')
+  }
+
+  /** 读 jobs.json：已完成的留着当历史，排队/进行中的一律变成「已暂停」等用户点继续。 */
+  private loadJobs(): void {
+    let data: JobsFile
+    try {
+      data = JSON.parse(readFileSync(this.jobsPath(), 'utf8')) as JobsFile
+    } catch (e) {
+      // 坏文件不该拦住启动，但得留个痕。
+      runLog(`jobs load failed ${errText(e)}`)
+      return
+    }
+    if (data.version !== JOBS_VERSION || !Array.isArray(data.jobs)) return
+    let max = 0
+    let changed = false
+    for (const rec of data.jobs) {
+      if (!isObj(rec) || !isObj(rec.view) || !isObj(rec.task) || !isObj(rec.pin)) continue
+      const view = { ...rec.view } as JobView
+      const id = anyInt(view.id)
+      if (!id || this.jobs.has(id)) continue
+      view.busy = undefined
+      if (view.state === 'running' || view.state === 'queued') {
+        view.state = 'paused'
+        view.status = '已中断'
+        view.log = '上次退出时未完成，点继续接着下'
+        view.err = ''
+        changed = true
+      }
+      this.jobs.set(id, { view, task: rec.task as DlTask, pin: rec.pin as Pin })
+      if (id > max) max = id
+    }
+    // 加载的任务不发 toast、不自动续跑（客户端可能都还没连上网关）。
+    seedJobID(max)
+    // 转换过的状态立刻落盘，免得文件里一直留着「运行中」误导后面的启动。
+    if (changed) this.flushJobs()
+  }
+
+  private saveTimer: NodeJS.Timeout | null = null
+
+  /** 状态变化立刻写，进度变化合并到 2 秒后写。 */
+  private scheduleJobsSave(soon = false): void {
+    if (soon) {
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer)
+        this.saveTimer = null
+      }
+      this.flushJobs()
+      return
+    }
+    if (this.saveTimer) return
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null
+      this.flushJobs()
+    }, 2000)
+  }
+
+  /** 原子写：先写 .tmp 再 rename，半截文件不会把上次的任务列表弄丢。 */
+  private flushJobs(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
+    const path = this.jobsPath()
+    const out: JobsFile = {
+      version: JOBS_VERSION,
+      jobs: [...this.jobs.values()].map((r) => ({
+        view: { ...r.view, busy: undefined },
+        task: r.task,
+        pin: r.pin,
+      })),
+    }
+    try {
+      mkdirSync(dirname(path), { recursive: true })
+      const tmp = `${path}.tmp`
+      writeFileSync(tmp, `${JSON.stringify(out)}\n`)
+      renameSync(tmp, path)
+    } catch (e) {
+      runLog(`jobs save failed ${errText(e)}`)
+    }
+  }
+
+  /** 退出时调用：把还在跑的 pushJobs 收掉，不再往回写文件。 */
+  dispose(): void {
+    if (this.pushTimer) {
+      clearTimeout(this.pushTimer)
+      this.pushTimer = null
+    }
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
   }
 
   private async checkTools(): Promise<void> {
@@ -345,9 +504,16 @@ export class Core {
     return this.cli
   }
 
-  private invoke(p: string, action: string, input: Record<string, unknown>, skipSign = false) {
+  private async invoke(p: string, action: string, input: Record<string, unknown>, skipSign = false) {
     const cli = this.client()
-    return cli.invoke(p, action, input, cli.extra(this.cfg, p, skipSign))
+    try {
+      return await cli.invoke(p, action, input, cli.extra(this.cfg, p, skipSign))
+    } catch (e) {
+      // 网关只说「隧道未连接」，真正原因（比如 Key 没有隧道权限）在隧道状态里。
+      const why = tunnelErrText(this.tunnelErr)
+      if (why && /隧道未连接/.test(errText(e))) throw new Error(`${errText(e)}：${why}`)
+      throw e
+    }
   }
 
   // ---------------------------------------------------------------- 状态
@@ -359,7 +525,7 @@ export class Core {
       keyName: this.keyInfo?.name ?? '',
       keyError: this.keyError,
       providers: this.providers(),
-      tunnel: { ok: this.tunnelOk, err: this.tunnelErr, enabled: !!this.tunnelAbort },
+      tunnel: { ok: this.tunnelOk, err: tunnelErrText(this.tunnelErr), enabled: !!this.tunnelAbort },
       accounts: this.accounts(),
       settings: this.settingsView(),
       tools: this.tools,
@@ -375,6 +541,7 @@ export class Core {
       keyMasked: mask(c.key),
       hasKey: !!c.key,
       outDir: c.outDir,
+      tmpDir: c.tmpDir ?? '',
       releaseGroup: c.releaseGroup,
       tmdbKey: c.tmdbKey,
       tmdbLang: c.tmdbLang,
@@ -446,6 +613,7 @@ export class Core {
       (patch.key !== undefined && patch.key.trim() !== '' && patch.key.trim() !== c.key)
     if (reconnect) return this.setup(patch.host ?? c.host, patch.key?.trim() || c.key)
     if (patch.outDir !== undefined) c.outDir = normalizeOutDir(patch.outDir) || c.outDir
+    if (patch.tmpDir !== undefined) c.tmpDir = normalizeTmpDir(patch.tmpDir)
     if (patch.releaseGroup !== undefined) c.releaseGroup = patch.releaseGroup.trim()
     if (patch.tmdbKey !== undefined) c.tmdbKey = patch.tmdbKey.trim()
     if (patch.tmdbLang !== undefined) c.tmdbLang = patch.tmdbLang.trim() || 'zh-CN'
@@ -676,7 +844,7 @@ export class Core {
 
   // ---------------------------------------------------------------- 详情
 
-  async detail(provider: Provider, id: string): Promise<DetailView> {
+  async detail(provider: Provider, id: string, hint?: { title?: string; poster?: string }): Promise<DetailView> {
     const input: Record<string, unknown> = { id }
     if (provider === 'hongguo') input.seriesId = id
     else if (provider === 'youku') {
@@ -687,7 +855,8 @@ export class Core {
     } else if (provider === 'tencent') input.cid = id
     const data = await this.invoke(provider, 'detail', input)
     const eps = parseEps(data)
-    const view = buildDetail(provider, id, data, '', eps)
+    // 有些老片/短剧详情接口不给海报和片名，卡片上其实已经有，拿它兜底。
+    const view = buildDetail(provider, id, data, '', eps, hint)
     await this.applyMovieEditions(view, data)
     return view
   }
@@ -925,12 +1094,15 @@ export class Core {
     const cli = this.client()
     const { tasks, qualityLabel } = this.buildTasks(req)
     const groupId = `${req.detail.provider}:${req.detail.id}:${Date.now()}`
+    const pin = pinOf(this.cfg)
+    const now = Date.now()
     for (const t of tasks) {
       const id = nextJobID()
       const movie = t.kind === 'movie'
       const label = movie ? t.edition || '正片' : `S${String(t.season).padStart(2, '0')}E${String(t.episode).padStart(2, '0')}`
       this.jobs.set(id, {
         task: t,
+        pin,
         view: {
           id,
           groupId,
@@ -946,11 +1118,14 @@ export class Core {
           note: '',
           state: 'queued',
           output: '',
+          createdAt: now,
+          finishedAt: 0,
         },
       })
-      this.hub.enqueue({ ...this.cfg }, cli, id, t)
+      this.hub.enqueue(runCfg(this.cfg, pin), cli, id, t)
     }
     this.pushJobs()
+    this.persist(true)
     return tasks.length
   }
 
@@ -958,17 +1133,45 @@ export class Core {
     const rec = this.jobs.get(e.id)
     if (!rec) return
     const v = rec.view
-    v.status = e.status
-    v.pct = e.pct
-    v.log = e.log
-    v.err = e.err
-    if (e.done) {
+    // 暂停/取消的收尾事件只带状态，不要把进度和日志清掉。
+    if (!e.done) {
+      v.status = e.status
+      v.pct = e.pct
+      v.log = e.log
+      v.err = e.err
+      v.state = 'running'
+    } else if (e.stopped === 'pause') {
+      v.status = '已暂停'
+      v.state = 'paused'
+      if (e.log) v.log = e.log
+      v.err = ''
+      if (!v.pct) v.pct = e.pct
+    } else if (e.stopped === 'cancel') {
+      // removeJob 会把它从列表里删掉，这里不用管。
+      return
+    } else {
+      v.status = e.status
+      v.pct = e.pct
+      v.log = e.log
+      v.err = e.err
       v.note = e.note ?? ''
       v.state = e.err ? 'failed' : 'done'
+      v.finishedAt = Date.now()
       if (!e.err) v.output = e.log
       if (!e.err) this.emit.toast(`${v.groupTitle} ${v.label} 下载完成${v.note ? `：${v.note}` : ''}`, v.note ? 'warn' : 'ok')
-    } else v.state = 'running'
+    }
     this.pushJobs()
+    // 进度可以合并，状态变化要立刻落盘。
+    this.persist(e.done === true)
+  }
+
+  /** 任务自己的配置 = 当前设置 + 入队时钉住的那些，保证续传路径/分片布局不变。 */
+  private runCfg(rec: JobRecord): FileConfig {
+    return runCfg(this.cfg, rec.pin)
+  }
+
+  private persist(soon: boolean): void {
+    this.scheduleJobsSave(soon)
   }
 
   private pushTimer: NodeJS.Timeout | null = null
@@ -984,20 +1187,179 @@ export class Core {
     return [...this.jobs.values()].map((r) => ({ ...r.view }))
   }
 
+  /** 排队中的任务没有进程，直接挂起；在跑的让 hub 停进程（保留已下载的分片）。 */
+  async pauseJob(id: number): Promise<void> {
+    const rec = this.jobs.get(id)
+    if (!rec) return
+    if (rec.view.state === 'paused' || rec.view.state === 'done' || rec.view.state === 'failed') return
+    rec.view.busy = true
+    this.pushJobs()
+    try {
+      // 排队中的任务也交给 hub 摘掉：它可能已经排在队列里，光改状态会被泵起来接着跑。
+      // 排队中的是静默移除，正在跑的发 stopped:'pause' 并保留分片。
+      await this.hub.cancel(id, 'pause')
+    } finally {
+      const cur = this.jobs.get(id)
+      if (cur) {
+        cur.view.busy = undefined
+        // 停的那一刻刚好跑完/失败了，就按真实结果显示，别盖成「已暂停」。
+        if (cur.view.state === 'running' || cur.view.state === 'queued') {
+          cur.view.state = 'paused'
+          cur.view.status = '已暂停'
+          cur.view.err = ''
+        }
+        this.pushJobs()
+        this.persist(true)
+      }
+    }
+  }
+
+  /** 继续：保留进度重新排队，runner 会从已有分片接着下。 */
+  async resumeJob(id: number): Promise<void> {
+    const rec = this.jobs.get(id)
+    if (!rec || rec.view.busy) return
+    if (rec.view.state !== 'paused' && rec.view.state !== 'failed') return
+    // 没有网关连接就不排：不然状态会变成「排队中」然后再也没有下文。
+    const cli = this.client()
+    rec.view.busy = true
+    rec.view.state = 'queued'
+    rec.view.status = '排队中'
+    rec.view.err = ''
+    rec.view.log = ''
+    this.pushJobs()
+    this.persist(true)
+    try {
+      this.hub.enqueue(this.runCfg(rec), cli, id, rec.task)
+    } catch (e) {
+      rec.view.state = 'paused'
+      rec.view.status = '已暂停'
+      this.persist(true)
+      throw e
+    } finally {
+      const cur = this.jobs.get(id)
+      if (cur) {
+        cur.view.busy = undefined
+        this.pushJobs()
+      }
+    }
+  }
+
+  /** 从列表删除；在跑的先取消。deleteFiles 连成品和分片目录一起删。 */
+  async removeJob(id: number, deleteFiles = false): Promise<void> {
+    const rec = this.jobs.get(id)
+    if (!rec) return
+    // 以 hub 为准：状态是 paused 但进程还没收干净时（退出超时）也要能取消。
+    if (this.hub.isActive(id)) {
+      rec.view.busy = true
+      this.pushJobs()
+      try {
+        await this.hub.cancel(id, 'cancel')
+      } catch (e) {
+        runLog(`cancel ${id} failed ${errText(e)}`)
+      }
+    }
+    const cfg = this.runCfg(rec)
+    // 只从列表移除时文件一律不动；勾了「同时删除」才删成品和工作目录。
+    if (deleteFiles) {
+      try {
+        if (rec.view.state === 'done' && rec.view.output && existsSync(rec.view.output)) rmSync(rec.view.output, { force: true })
+      } catch (e) {
+        runLog(`remove output ${id} failed ${errText(e)}`)
+      }
+      try {
+        await discardJobWork(cfg, rec.task)
+      } catch (e) {
+        runLog(`discard work ${id} failed ${errText(e)}`)
+      }
+    }
+    this.jobs.delete(id)
+    this.pushJobs()
+    this.persist(true)
+  }
+
+  async pauseAll(): Promise<void> {
+    const ids = [...this.jobs.values()].filter((r) => r.view.state === 'running' || r.view.state === 'queued').map((r) => r.view.id)
+    for (const id of ids) await this.pauseJob(id)
+  }
+
+  async resumeAll(): Promise<void> {
+    const ids = [...this.jobs.values()].filter((r) => r.view.state === 'paused' || r.view.state === 'failed').map((r) => r.view.id)
+    for (const id of ids) await this.resumeJob(id)
+  }
+
   retryJob(id: number): void {
     const rec = this.jobs.get(id)
     if (!rec || rec.view.state !== 'failed') return
+    const cli = this.client() // 没有连接时保持 failed，别把按钮按成「排队中」
     Object.assign(rec.view, { status: '排队中', pct: 0, log: '', err: '', note: '', state: 'queued' })
-    this.hub.enqueue({ ...this.cfg }, this.client(), id, rec.task)
+    this.hub.enqueue(this.runCfg(rec), cli, id, rec.task)
     this.pushJobs()
+    this.persist(true)
   }
 
   clearFinished(): void {
     for (const [id, r] of this.jobs) if (r.view.state === 'done') this.jobs.delete(id)
     this.pushJobs()
+    this.persist(true)
+  }
+
+  // ---------------------------------------------------------------- 缓存 / 目录
+
+  /**
+   * 还在排队/正在跑/暂停/失败的任务，它的工作目录将来还会被用到（续传、重试要靠里面的分片），
+   * 所以不算「残留」。已完成的任务 runner 自己会清目录。
+   */
+  private heldWorkDirs(): string[] {
+    const dirs: string[] = []
+    for (const rec of this.jobs.values()) {
+      const s = rec.view.state
+      // 失败的也算：重试会从这些分片接着下。
+      if (s !== 'running' && s !== 'queued' && s !== 'paused' && s !== 'failed') continue
+      try {
+        dirs.push(jobWorkDir(this.runCfg(rec), rec.task))
+      } catch {
+        /* 配置缺字段时算不出来，跳过 */
+      }
+    }
+    return dirs
+  }
+
+  /** 未被任何任务持有的临时目录项（残留）。 */
+  private tempResidue(): string[] {
+    const root = tmpRoot(this.cfg)
+    const held = this.heldWorkDirs()
+    const used = (p: string) => held.some((u) => p === u || p.startsWith(`${u}/`) || p.startsWith(`${u}\\`))
+    let names: string[] = []
+    try {
+      names = readdirSync(root)
+    } catch {
+      return []
+    }
+    return names.map((n) => join(root, n)).filter((p) => !used(p))
+  }
+
+  cacheInfo(): { posters: number; temp: number } {
+    const temp = this.tempResidue().reduce((n, p) => n + treeSize(p), 0)
+    return { posters: posterCacheSize(), temp }
+  }
+
+  async clearCache(): Promise<void> {
+    clearPosterCache()
+    for (const p of this.tempResidue()) {
+      try {
+        rmSync(p, { recursive: true, force: true })
+      } catch {
+        /* 还被占着，下次再删 */
+      }
+    }
   }
 
   outDir(): string {
     return this.cfg.outDir
   }
+}
+
+/** 任务的运行配置：当前设置 + pin。key / cookie / sign 仍然来自当前设置。 */
+function runCfg(cfg: FileConfig, pin: Pin): FileConfig {
+  return { ...cfg, ...pin }
 }

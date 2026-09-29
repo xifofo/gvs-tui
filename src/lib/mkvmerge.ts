@@ -26,16 +26,17 @@ function watchOutput(phase?: Phase): () => void {
   return () => clearInterval(timer)
 }
 
-function run(bin: string, args: string[], phase?: Phase): Promise<void> {
+function run(bin: string, args: string[], phase?: Phase, signal?: AbortSignal): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>()
   const stop = watchOutput(phase)
-  const child = spawn(bin, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(bin, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
   let out = ''
   child.stdout.on('data', (d: Buffer) => { out += d.toString() })
   child.stderr.on('data', (d: Buffer) => { out += d.toString() })
-  child.on('error', (e) => { stop(); reject(e) })
+  child.on('error', (e) => { stop(); reject(signal?.aborted ? (signal.reason ?? e) : e) })
   child.on('close', (code) => {
     stop()
+    if (signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }
     // mkvmerge: 0 ok, 1 warnings but file written, 2 error
     if (code === 0 || code === 1) {
       if (phase?.cb) phase.cb(sizes(phase.inputs), Math.max(1, sizes(phase.inputs)))
@@ -65,8 +66,9 @@ export function mkvmergeRemux(
   inPath: string,
   outPath: string,
   onProgress?: (n: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  return run(mkvmerge, ['-o', outPath, inPath], { out: outPath, inputs: [inPath], cb: onProgress })
+  return run(mkvmerge, ['-o', outPath, inPath], { out: outPath, inputs: [inPath], cb: onProgress }, signal)
 }
 
 /**
@@ -99,6 +101,7 @@ export async function mkvmergeMux(
   audios: MuxAudio[],
   outPath: string,
   onProgress?: (n: number, total: number) => void,
+  signal?: AbortSignal,
   onWarning?: (message: string) => void,
 ): Promise<void> {
   const ffmpeg = await ensureFFmpeg()
@@ -106,26 +109,29 @@ export async function mkvmergeMux(
   let work = ''
   try {
     work = scratchDir(outPath, 'gvs-mux-')
-    const sourceVideoMs = await firstPresentationMs(ffmpeg, videoPath, 'v:0')
-    const sourceAudioMs: number[] = []
     audios = audios.map(a => ({ ...a }))
     const repairs: Array<{ track: number; message: string }> = []
-    for (const [i, a] of audios.entries()) {
-      try {
-        sourceAudioMs.push(await firstPresentationMs(ffmpeg, a.path, 'a:0'))
-      } catch (e) {
-        if (!(e instanceof Error) || !isEac3ProbeError(e.message)) throw e
-        const repaired = join(work, `audio-${i}-repaired.mka`)
-        await dropFirstAudioPacket(ffmpeg, a.path, repaired)
-        const start = await firstPresentationMs(ffmpeg, repaired, 'a:0')
-        a.path = repaired
-        sourceAudioMs.push(start)
-        const message = `音轨 ${i + 1} 已跳过异常首帧，保留后续时间戳；完整音轨解码校验通过`
-        repairs.push({ track: i, message })
-        report.audioRepairs = repairs
-        onWarning?.(message)
-      }
-    }
+    const [sourceVideoMs, ...sourceAudioMs] = await Promise.all([
+      firstPresentationMs(ffmpeg, videoPath, 'v:0', signal),
+      ...audios.map(async (a, i) => {
+        try {
+          return await firstPresentationMs(ffmpeg, a.path, 'a:0', signal)
+        } catch (e) {
+          signal?.throwIfAborted()
+          if (!(e instanceof Error) || !isEac3ProbeError(e.message)) throw e
+          const repaired = join(work, `audio-${i}-repaired.mka`)
+          await dropFirstAudioPacket(ffmpeg, a.path, repaired, signal)
+          const start = await firstPresentationMs(ffmpeg, repaired, 'a:0', signal)
+          a.path = repaired
+          const message = `音轨 ${i + 1} 已跳过异常首帧，保留后续时间戳；完整音轨解码校验通过`
+          repairs.push({ track: i, message })
+          report.audioRepairs = repairs
+          onWarning?.(message)
+          return start
+        }
+      }),
+    ])
+    signal?.throwIfAborted()
     const expected = relativePresentationStarts(sourceVideoMs, sourceAudioMs, audios.map(a => a.delayMs ?? 0))
     Object.assign(report, { sourceVideoMs, sourceAudioMs, expectedStartsMs: expected })
     const initial = join(work, 'initial.mkv')
@@ -133,12 +139,11 @@ export async function mkvmergeMux(
     // early packets. Correction is done on a single shared Matroska timeline.
     await run(mkvmerge, mkvmergeMuxArgs(initial, videoPath, audios.map(a => ({ ...a, delayMs: 0 }))), {
       out: initial, inputs: [videoPath, ...audios.map(a => a.path)], cb: onProgress,
-    })
-    const measure = async (path: string) => {
-      const starts = [await firstPresentationMs(ffmpeg, path, 'v:0')]
-      for (let i = 0; i < audios.length; i++) starts.push(await firstPresentationMs(ffmpeg, path, `a:${i}`))
-      return starts
-    }
+    }, signal)
+    const measure = async (path: string) => Promise.all([
+      firstPresentationMs(ffmpeg, path, 'v:0', signal),
+      ...audios.map((_, i) => firstPresentationMs(ffmpeg, path, `a:${i}`, signal)),
+    ])
     const initialStarts = await measure(initial)
     // mkvmerge's shift component accepts integer milliseconds (also on v58).
     const corrections = expected.map((v, i) => Math.round(v - initialStarts[i]!))
@@ -156,7 +161,7 @@ export async function mkvmergeMux(
       info.tracks.filter(t => t.type === 'subtitles').forEach(t => args.push('--sync', `${t.id}:${corrections[0]}`))
       args.push('--chapter-sync', String(corrections[0]), initial)
       result = join(work, 'aligned.mkv')
-      await run(mkvmerge, args, { out: result, inputs: [initial], cb: onProgress })
+      await run(mkvmerge, args, { out: result, inputs: [initial], cb: onProgress }, signal)
     }
     const finalStarts = result === initial ? initialStarts : await measure(result)
     report.finalStartsMs = finalStarts

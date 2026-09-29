@@ -31,6 +31,8 @@ type RelayOptions = {
   onRefresh?: (attempt: number, total: number) => void
   /** Injectable clock for deterministic retry tests. */
   wait?: (ms: number, signal: AbortSignal) => Promise<void>
+  /** Stops the relay (its in-flight upstream requests included) when the job is paused/cancelled. */
+  signal?: AbortSignal
 }
 
 function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
@@ -96,6 +98,16 @@ export async function createHlsRelay(source: string, headers: Record<string, str
   const active = new Set<AbortController>()
   let peakConcurrentRequests = 0, refreshes = 0, refreshElapsedMs = 0
   const lifetime = new AbortController()
+  const stopRelay = () => {
+    lifetime.abort(options.signal?.reason ?? new Error('已停止'))
+    for (const abort of active) abort.abort()
+  }
+  // One relay is created per track over a shared job signal, so detach again
+  // in close() instead of piling up listeners on it.
+  if (options.signal) {
+    if (options.signal.aborted) stopRelay()
+    else options.signal.addEventListener('abort', stopRelay, { once: true })
+  }
   let generation = 0
   let refreshInFlight: Promise<number> | undefined
   let fatal: Error | undefined
@@ -188,6 +200,8 @@ export async function createHlsRelay(source: string, headers: Record<string, str
     const resource = resources.get(id)
     if (!resource) { res.writeHead(404).end(); return }
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405).end(); return }
+    // A stopped relay must not fetch anything more from the CDN.
+    if (lifetime.signal.aborted) { res.writeHead(502).end('Relay stopped'); return }
     if (fatal) { res.writeHead(502).end('Source refresh failed'); return }
     if (resource === root && rootText && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' }).end(rootText)
@@ -282,6 +296,7 @@ export async function createHlsRelay(source: string, headers: Record<string, str
     waitForRefresh: async () => { await refreshInFlight; if (fatal) throw fatal },
     stats: () => ({ peakConcurrentRequests, refreshes, refreshElapsedMs }),
     close: () => new Promise<void>(resolve => {
+      options.signal?.removeEventListener('abort', stopRelay)
       lifetime.abort()
       for (const abort of active) abort.abort()
       server.close(() => resolve())

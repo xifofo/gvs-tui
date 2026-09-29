@@ -84,6 +84,10 @@ export function runTunnel(
         if (LIMIT_RE.test(lastError)) {
           onStatus(false, OCCUPIED, 'ws')
         } else if (!opened) {
+          // Legacy dials the gateway directly (no proxy), so behind a proxy it
+          // usually just hits the CDN's block page; the WebSocket error is the
+          // one that says why the gateway refused.
+          const wsError = lastError
           try {
             await tunnelLegacy(host, key, onStatus, signal)
             opened = true
@@ -93,7 +97,8 @@ export function runTunnel(
             onStatus(false, 'closed', 'legacy')
           } catch (e2) {
             if (signal.aborted) return
-            lastError = e2 instanceof Error ? e2.message : String(e2)
+            const legacyError = e2 instanceof Error ? e2.message : String(e2)
+            lastError = LIMIT_RE.test(legacyError) ? legacyError : wsError || legacyError
             onStatus(false, LIMIT_RE.test(lastError) ? OCCUPIED : lastError, 'legacy')
           }
         } else {
@@ -171,10 +176,13 @@ async function tunnelOnceWS(
       try { ws.close() } catch { /* close event ends the session */ }
     }, 2_000)
   })
-  ws.addEventListener('error', () => {
+  ws.addEventListener('error', (ev) => {
     // After OPEN the close event is the real end. Rejecting here would
     // kick the reconnect loop into the legacy protocol.
-    if (!opened) fail(new Error('tunnel websocket error'))
+    // The `ws` package (desktop) puts the handshake status in the message,
+    // e.g. "Unexpected server response: 403"; Bun's event carries none.
+    const detail = (ev as { message?: unknown }).message
+    if (!opened) fail(new Error(typeof detail === 'string' && detail ? `tunnel websocket error: ${detail}` : 'tunnel websocket error'))
   })
   ws.addEventListener('close', (ev) => {
     code = ev.code

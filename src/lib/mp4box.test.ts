@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -50,6 +50,9 @@ mediaTest('MP4Box preserves positive and negative relative offsets and multi-aud
       const after = await firstPresentationMs(ff, out, stream)
       expect(Math.abs(before - after)).toBeLessThanOrEqual(2)
     }
+    // The -edits rewrite must stage its temp file beside the output, not in
+    // the system %TEMP%, and must not leave anything behind.
+    expect(readdirSync(dir).some(n => n.startsWith('gvs-mp4box-'))).toBe(false)
     // Truncated media must fail even if MP4Box still returns its sample table.
     truncateSync(out, statSync(out).size - 500)
     await expect(inspectMp4(box, out)).rejects.toThrow()

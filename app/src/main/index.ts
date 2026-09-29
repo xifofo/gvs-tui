@@ -4,14 +4,21 @@ import type { GvsApi, JobView, Tone } from '@shared/api'
 import { captureProxyEnv, patchGlobalWebSocket } from './env'
 import { Core } from './core'
 import { handlePosterProtocol, registerPosterScheme } from './posters'
+import { runLog } from '@tui/runlog.ts'
 import { Updater } from './updater'
+
+// 开发调试：独立 profile，不和已安装的 GVS 抢单实例锁。
+// 同时把 configPath() 依赖的 APPDATA 也指过去（它在每次调用时读环境变量），
+// 这样冒烟运行不会碰到真实的 tui.json / 日志。
+// 必须在任何 configPath() 调用之前——captureProxyEnv() 就会写日志路径。
+if (process.env.GVS_PROFILE_DIR) {
+  app.setPath('userData', process.env.GVS_PROFILE_DIR)
+  process.env.APPDATA = process.env.GVS_PROFILE_DIR
+}
 
 captureProxyEnv()
 patchGlobalWebSocket()
 registerPosterScheme()
-
-// 开发调试：独立 profile，不和已安装的 GVS 抢单实例锁
-if (process.env.GVS_PROFILE_DIR) app.setPath('userData', process.env.GVS_PROFILE_DIR)
 
 if (!app.requestSingleInstanceLock()) app.quit()
 
@@ -48,7 +55,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   parseLink: (t) => core.parseLink(t),
   searchTargets: () => core.searchTargets(),
   searchProvider: (p, q) => core.searchProvider(p, q),
-  detail: (p, id) => core.detail(p, id),
+  detail: (p, id, hint) => core.detail(p, id, hint),
   detailFromLink: (l) => core.detailFromLink(l),
   probe: (p, eps) => core.probe(p, eps),
   namingPreview: (r) => core.namingPreview(r),
@@ -56,14 +63,24 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   enqueue: (r) => core.enqueue(r),
   jobs: () => core.jobList(),
   retryJob: (id) => core.retryJob(id),
+  pauseJob: (id) => core.pauseJob(id),
+  resumeJob: (id) => core.resumeJob(id),
+  removeJob: (id, deleteFiles) => core.removeJob(id, deleteFiles),
+  pauseAll: () => core.pauseAll(),
+  resumeAll: () => core.resumeAll(),
   clearFinished: () => core.clearFinished(),
+  cacheInfo: () => core.cacheInfo(),
+  clearCache: () => core.clearCache(),
   openPath: async (p) => {
     const err = await shell.openPath(p || core.outDir())
     if (err) throw new Error(err)
   },
   showItem: (p) => shell.showItemInFolder(p),
-  chooseDir: async () => {
-    const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory', 'createDirectory'], defaultPath: core.outDir() })
+  chooseDir: async (start) => {
+    const r = await dialog.showOpenDialog(win!, {
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: (start || '').trim() || core.outDir(),
+    })
     return r.canceled ? '' : (r.filePaths[0] ?? '')
   },
   youkuQrStart: () => core.youkuQrStart(),
@@ -140,9 +157,27 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('before-quit', () => {
+// Windows 上 Electron 退出不会顺手杀子进程（N_m3u8DL-RE / ffmpeg 会继续占着文件写），
+// 所以第一次 before-quit 先拦住退出，等 core 把任务停干净并落盘 jobs.json，再真正退出。
+let quitting = false
+app.on('before-quit', (e) => {
+  if (quitting) return
+  quitting = true
+  e.preventDefault()
+  // 用户如果就是不想等就强杀（任务管理器 / cmd 里按 Ctrl+C），别让系统干等。
+  for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => app.exit(0))
   updater.stop()
-  core.shutdown()
+  void (async () => {
+    try {
+      await core.shutdown()
+    } catch (e) {
+      runLog(`quit: shutdown failed ${e instanceof Error ? e.message : e}`)
+    }
+    core.dispose()
+    // 这条日志是排查「关不掉 / 关了还有子进程」的第一个抓手。
+    runLog('quit: shutdown done')
+    app.quit()
+  })()
 })
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

@@ -33,6 +33,12 @@ export type FileConfig = {
   huangguoFmt: string
   /** Parallel connections per download (分片并发 / Range 并发). */
   threads: number
+  /**
+   * Per-job working folder for .partN / RE scratch / decrypt intermediates.
+   * Empty means `join(outDir, '.gvs-tmp')` — i.e. keep the bytes on the same
+   * volume as the library instead of the system temp drive.
+   */
+  tmpDir: string
 }
 
 export const MIN_THREADS = 1
@@ -170,6 +176,7 @@ export function defaultConfig(): FileConfig {
     huangguoNfo: true,
     huangguoFmt: 'mkv',
     threads: 4,
+    tmpDir: '',
   }
 }
 
@@ -198,6 +205,9 @@ export function loadConfig(): FileConfig {
   delete (cfg as unknown as Record<string, unknown>).ffmpeg
   if (!cfg.tmdbLang) cfg.tmdbLang = 'zh-CN'
   cfg.threads = clampThreads(cfg.threads)
+  // '' keeps the default (outDir/.gvs-tmp); anything the user typed is stored
+  // absolute so a later launch does not resolve it against the process cwd.
+  cfg.tmpDir = typeof cfg.tmpDir === 'string' ? normalizeOutDir(cfg.tmpDir) : ''
   // Remember the resolved folder. An existing absolute outDir is left untouched.
   if (outChanged && existed) {
     try { saveConfig(cfg) } catch { /* keep the in-memory path */ }
