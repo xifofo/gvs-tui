@@ -1,5 +1,6 @@
 import { supportsBrowse } from './providers.ts'
 import type { Row } from '../types'
+import { mediaKindFromMetadata } from './media-kind'
 export type Section = {
   id: string
   title: string
@@ -95,6 +96,7 @@ export function discoveryRows(
         title,
         id,
         sub: provider,
+        mediaKind: mediaKindFromMetadata(i),
         desc: str(i.subtitle || i.desc || meta.subtitle || meta.subTitle),
         score: str(i.score || meta.score),
         rank:

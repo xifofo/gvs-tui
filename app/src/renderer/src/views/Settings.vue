@@ -252,7 +252,7 @@ const plat = (p: Provider) => hasProvider(p)
             </div>
             <div class="sc">
               <button type="button" class="btn sm" @click="diagnosticsOpen = true">风控处理日志</button>
-              <button type="button" class="btn sm" @click="save({ tencentObservations: !s.tencentObservations }, 'tx-observe')">观测绑定：{{ s.tencentObservations ? '开' : '关' }}</button>
+              <button type="button" class="btn sm" title="向支持的网关记录真实进程指标；不代表已向腾讯发送事件" @click="save({ tencentObservations: !s.tencentObservations }, 'tx-observe')">操作观测：{{ s.tencentObservations ? '开' : '关' }}</button>
               <button type="button" class="btn sm" @click="store.qr = 'tencent'"><Icon name="qr" :size="15" />双扫码</button>
               <button type="button" class="btn sm" @click="showTencentCookie = !showTencentCookie">{{ showTencentCookie ? '收起' : '粘贴 Cookie' }}</button>
             </div>

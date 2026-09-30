@@ -6,7 +6,7 @@ import { youkuVipProbe } from '../src/lib/quality.ts'
 import { asString } from '../src/lib/util.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 
 const vid = process.env.VID ?? 'XNjU0OTU0MDc4OA=='
 try {

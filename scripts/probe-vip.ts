@@ -5,7 +5,7 @@ import { loadConfig } from '../src/lib/config.ts'
 import { asString, isObj } from '../src/lib/util.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const extra = { 'Yk-Sign': cfg.youkuSign }
 const kw = process.env.KW ?? '冬城猎凶'
 

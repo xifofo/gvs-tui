@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JobHub, tencentCipher, tencentMirrors, bindYoukuAudioTracksToTask, cleanupOutputCaches, jobTitle, patchJob, trackVid, youkuAudioFetchPlan, youkuDRM, type DlTask } from './jobs.ts'
+import { JobHub, tencentCipher, tencentMirrors, bindYoukuAudioTracksToTask, cleanupOutputCaches, jobTitle, muxTrackTitle, patchJob, trackVid, youkuAudioFetchPlan, youkuDRM, type DlTask } from './jobs.ts'
 import { youkuAudioPlaylist, youkuUsesSeparateAudio, youkuVideoPlaylist } from './media.ts'
 import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
@@ -27,6 +27,12 @@ function task(partial: Partial<DlTask>): DlTask {
   }
 }
 
+test('mux track title uses the probed codec, not the catalog slogan', () => {
+  expect(muxTrackTitle('原声', 'AAC 2.0')).toBe('AAC 2.0')
+  expect(muxTrackTitle('', 'DDP 2.0')).toBe('DDP 2.0')
+  expect(muxTrackTitle('粤语', 'DTS 5.1')).toBe('粤语 DTS 5.1')
+})
+
 test('audio 0:0 is full-block CBC and must be decrypted', () => {
   const drm = youkuDRM({ drm: { need_decrypt: true, pattern_audio: '0:0', content_key_hex: 'a'.repeat(32) } })
   expect(drm.audioEnc).toBe(true)
@@ -43,6 +49,12 @@ test('Tencent ChaCha20 drm becomes an RE custom HLS cipher', () => {
   expect(() => tencentCipher({ drm: { need_decrypt: true, enc: 1 } })).toThrow('没有返回可用密钥')
   expect(() => tencentCipher({ drm: { enc: '1', note: 'chacha20.js not found' } })).toThrow('chacha20.js not found')
   expect(() => tencentCipher({ drm: { enc: 2 } })).toThrow('Widevine')
+  expect(() => tencentCipher({
+    drm: { enc: 1, content_key_hex: '00'.repeat(32), iv_hex: '11'.repeat(12), playback_verified: false },
+  })).toThrow(/全为零/)
+  expect(() => tencentCipher({
+    drm: { enc: 1, content_key_hex: 'ab'.repeat(32), iv_hex: '00'.repeat(12) },
+  })).toThrow(/全为零/)
 })
 
 test('Tencent mirrors keep the picked URL first and never cross streams', () => {
@@ -63,7 +75,8 @@ test('phase change clears stale progress text', () => {
   expect(jobs[0]!.status).toBe('解密')
 })
 test('show job title still uses E01', () => {
-  expect(jobTitle(task({}))).toBe('第九区 E01 4K')
+  expect(jobTitle(task({ title: '危机初现' }))).toBe('第九区 E01 危机初现 4K')
+  expect(jobTitle(task({ title: '第九区' }))).toBe('第九区 E01 4K')
 })
 
 test('youku playlists use stream playlist_url not CMAF segments', () => {
@@ -242,4 +255,16 @@ test('bindYoukuAudioTracksToTask keeps codec and remaps id', () => {
     lang: '普通话',
     vid: 'EP9',
   }])
+})
+
+test('batch audio rebinding preserves the chosen default and codec', () => {
+  const selected = [
+    { id: 'EP1|cmfa1hd3|zh', label: 'AAC', lang: '普通话', vid: 'EP1', codec: 'AAC', isDefault: false },
+    { id: 'EP1MIN|cmfa1hd3|min', label: 'AAC', lang: '闽南', vid: 'EP1MIN', codec: 'AAC', isDefault: true },
+  ]
+  const bound = bindYoukuAudioTracksToTask(selected, { vid: 'EP2', languages: [{ vid: 'EP2MIN', lang: '闽南' }] })
+  expect(bound.map(a => a.vid)).toEqual(['EP2', 'EP2MIN'])
+  expect(bound.map(a => a.isDefault)).toEqual([false, true])
+  expect(bound.map(a => a.codec)).toEqual(['AAC', 'AAC'])
+  expect(selected[1]!.vid).toBe('EP1MIN')
 })

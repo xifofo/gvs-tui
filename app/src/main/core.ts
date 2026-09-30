@@ -3,7 +3,7 @@ import { ProviderSessions, type SessionCommand, type ProviderSessionView } from 
 import { supportsSearch, supportsBrowse, isManifestProvider } from '@tui/providers.ts'
 import { manifestDetail } from '@tui/manifest-detail.ts'
 import { providerLink } from '@tui/manifest-provider.ts'
-import { readTencentDiagnostics } from '@tui/tencent-diagnostics.ts'
+import { readTencentDiagnostics, tencentDiagnosticJobID } from '@tui/tencent-diagnostics.ts'
 import { needsTunnel } from '@tui/tunnel-policy.ts'
 import { parseEpisodes as parseEps } from '@tui/episodes.ts'
 // 桌面端业务核心：把 tui/src/lib 的能力编排成界面可调用的方法。
@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { dirname, join, resolve } from 'node:path'
 import QRCode from 'qrcode'
 import { GwClient, ReloginRequired, type KeyInfo } from '@tui/client.ts'
+import { selectAudioTracks } from '@tui/audio-selection.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
 import { fallbackSections } from '@tui/discovery.ts'
 import {
@@ -798,7 +799,8 @@ export class Core {
 
   async tencentDiagnostics(jobID?: number) {
     if (!this.has('tencent')) throw new Error('当前 Key 没有腾讯权限')
-    if (jobID !== undefined && (!Number.isSafeInteger(jobID) || this.jobs.get(jobID)?.task.provider !== 'tencent')) throw new Error('无效腾讯任务')
+    jobID = tencentDiagnosticJobID(jobID)
+    if (jobID !== undefined && this.jobs.get(jobID)?.task.provider !== 'tencent') throw new Error('无效腾讯任务')
     return readTencentDiagnostics(this.cfg.host + String.fromCharCode(0) + this.cfg.key, jobID === undefined ? '' : String(jobID), 100)
   }
 
@@ -1042,8 +1044,8 @@ export class Core {
 
   async tmdbSearch(title: string, tv: boolean): Promise<TmdbHit[]> {
     if (!this.cfg.tmdbKey.trim()) return []
-    const hits = await tmdbSearch(this.cfg.tmdbKey, this.cfg.tmdbLang, title, tv)
-    return hits.slice(0, 8).map((h) => ({ id: h.id, name: h.name || h.title, title: h.title, year: h.year, overview: h.overview ?? '' }))
+    const hits = await tmdbSearch(this.cfg.tmdbKey, this.cfg.tmdbLang, title)
+    return hits.filter((h) => h.kind === (tv ? 'show' : 'movie')).slice(0, 8).map((h) => ({ id: h.id, name: h.name || h.title, title: h.title, year: h.year, overview: h.overview ?? '' }))
   }
 
   // ---------------------------------------------------------------- 入队
@@ -1057,10 +1059,8 @@ export class Core {
     const movie = req.detail.kind === 'movie'
     // 与 TUI 一致：这一档自带音轨就用它的，否则用探测到的整体音轨（优酷各档都不单独带）
     const pool = q.audios?.length ? q.audios : probe.audios
-    const pickedAudio = pool.filter((a) => req.audioIds.includes(a.id))
-    const tracks = (pickedAudio.length ? pickedAudio : pool.filter((a) => a.isDefault).slice(0, 1))
-      .filter((a) => !a.embedded)
-      .map((a) => ({ id: a.id, label: a.label, lang: a.lang, vid: a.vid, codec: a.codec }))
+    const tracks = selectAudioTracks(pool, req.audioIds, req.defaultAudioId)
+      .map((a) => ({ id: a.id, label: a.label, lang: a.lang, vid: a.vid, codec: a.codec, isDefault: a.isDefault }))
     const tasks = req.episodes.map((ep, i): DlTask => {
       const t: DlTask = {
         provider: req.detail.provider,

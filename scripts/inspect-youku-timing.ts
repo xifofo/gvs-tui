@@ -7,7 +7,7 @@ import { GwClient } from '../src/lib/client.ts'
 import { runTunnel } from '../src/lib/tunnel.ts'
 import { parseCMAF, referer, youkuAudioPlaylist, youkuVideoPlaylist } from '../src/lib/media.ts'
 const cfg = loadConfig()
-const cli = new GwClient(cfg.host, cfg.key)
+const cli = new GwClient(cfg.host, cfg.key, cfg.gatewayProxy)
 const abort = new AbortController()
 const dir = mkdtempSync(join(tmpdir(), 'gvs-source-timing-'))
 const request = () => cli.invoke('youku', 'play', { vid: 'XNjU0OTU0MDc4OA==', expand: '1', tier: 'multi', nocache: '1' }, cli.extra(cfg, 'youku'))

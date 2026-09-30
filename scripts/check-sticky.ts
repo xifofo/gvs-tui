@@ -4,7 +4,7 @@ import { GwClient } from '../src/lib/client.ts'
 import { loadConfig } from '../src/lib/config.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const H = { 'Yk-Sign': cfg.youkuSign }
 const N = Number(process.argv[2] ?? 6)
 

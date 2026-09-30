@@ -73,7 +73,7 @@ try {
     await run(['-o', partial, '--sync', `${trackId}:${Math.round(delayMs)}`, input])
   } else {
     const cfg = loadConfig()
-    const cli = new GwClient(cfg.host, cfg.key)
+    const cli = new GwClient(cfg.host, cfg.key, cfg.gatewayProxy)
     const request = () => cli.invoke('youku', 'play', { vid, expand: '0', tier: 'multi', nocache: '1' }, cli.extra(cfg, 'youku'))
     async function play() {
       try { return await request() }

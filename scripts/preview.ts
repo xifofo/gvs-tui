@@ -1,7 +1,7 @@
 // Renders every screen of the TUI off-screen and writes the resulting text
 // frames to preview/. No gateway, no API key, no terminal required.
 //
-//   bun run preview                    # every scene at 100x30
+//   bun run preview                    # every scene at 160x60
 //   bun run preview jobs detail        # selected scenes
 //   PREVIEW_SIZE=140x40 bun run preview
 //
@@ -13,17 +13,19 @@ import { PassThrough, Writable } from 'node:stream'
 import { defineComponent, h } from '@vue/runtime-core'
 import { createApp, useRenderer } from 'vue-termui'
 import { DEMO_SCENES } from '../src/lib/demo.ts'
+import { DEFAULT_TERMINAL_SIZE } from '../src/lib/terminal-size.ts'
 
 type Renderer = {
   currentRenderBuffer: { getRealCharBytes: (trim: boolean) => Uint8Array }
   destroy: () => void
 }
 
-const [cols, rows] = (process.env.PREVIEW_SIZE ?? '100x30')
+const defaultSize = DEFAULT_TERMINAL_SIZE
+const [cols, rows] = (process.env.PREVIEW_SIZE ?? `${defaultSize.columns}x${defaultSize.rows}`)
   .split('x')
   .map((part) => Number.parseInt(part, 10))
-const width = Number.isFinite(cols) && cols > 0 ? cols : 100
-const height = Number.isFinite(rows) && rows > 0 ? rows : 30
+const width = Number.isFinite(cols) && cols > 0 ? cols : defaultSize.columns
+const height = Number.isFinite(rows) && rows > 0 ? rows : defaultSize.rows
 
 /** Cursor positions that show selection, scrolled lists and long titles. */
 const CURSOR: Record<string, number> = {

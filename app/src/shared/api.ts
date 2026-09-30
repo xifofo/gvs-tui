@@ -166,6 +166,8 @@ export type EnqueueRequest = {
   episodes: EpisodeView[]
   quality: number
   audioIds: string[]
+  /** 默认播放的已选音轨；省略时自动选择已选音轨中的最高档。 */
+  defaultAudioId?: string
   tmdb: TmdbHit | null
 }
 

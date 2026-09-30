@@ -13,6 +13,12 @@ const safeStatus = (v: unknown) => typeof v === 'string' && statuses.has(v) ? v 
 const safeDecision = (v: unknown) => typeof v === 'string' && decisions.has(v) ? v : 'inspect_error'
 const scopeID = (scope: string) => createHash('sha256').update(scope).digest('hex')
 export const tencentDiagnosticPath = () => process.env.GVS_TENCENT_DIAGNOSTICS_PATH || join(dirname(configPath()), 'tencent-diagnostics.jsonl')
+/** Older renderer bridges serialized optional undefined arguments as null. */
+export function tencentDiagnosticJobID(value: unknown): number | undefined {
+  if (value == null) return undefined
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) throw new Error('无效腾讯任务')
+  return value
+}
 export function writeTencentDiagnostic(scope: string, event: Omit<TencentDiagnostic, 'at'>): void {
   if (!scope) return
   const safe: Stored = { scope: scopeID(scope), at: new Date().toISOString(), flow: token(event.flow), operation: token(event.operation), job: token(event.job), action: token(event.action), phase: token(event.phase), status: safeStatus(event.status), decision: safeDecision(event.decision) }

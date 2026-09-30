@@ -50,12 +50,15 @@ test('downloadPlaylist keeps RE scratch inside the given work dir and empties it
         res.writeHead(200, {
           'Content-Type': (req.url ?? '').endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t',
           'Content-Length': String(file.length),
-        }).end(file)
+        })
+        if ((req.url ?? '').endsWith('.ts')) setTimeout(() => res.end(file), 200)
+        else res.end(file)
       } catch { res.writeHead(404).end() }
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
     const dest = join(root, 'out.mp4')
+    const progress: Array<{ n: number; phase?: string; done?: number }> = []
     try {
       await downloadPlaylist({
         src: `${base}/${playlist}`,
@@ -66,8 +69,11 @@ test('downloadPlaylist keeps RE scratch inside the given work dir and empties it
         transport: 're',
         workDir: work,
         workTag: 'video',
+        threads: 1,
+        cb: (n, _total, info) => progress.push({ n, phase: info?.phase, done: info?.segments?.done }),
       })
       expect(statSync(dest).size).toBeGreaterThan(0)
+      expect(progress.some(p => p.phase === 'download' && p.n > 0 && p.n < 0.7)).toBe(true)
       // The stale scratch was emptied before the run and nothing was left
       // behind on success (removeScratch also drops the emptied `video` tag).
       expect(existsSync(join(work, 'video', 're-stale'))).toBe(false)

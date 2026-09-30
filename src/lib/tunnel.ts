@@ -3,6 +3,7 @@ import dns from 'node:dns/promises'
 import net from 'node:net'
 import tls from 'node:tls'
 import { sleep } from './util.ts'
+import { isLocalGateway } from './gateway-route.ts'
 
 type TunFrame = {
   t: string
@@ -16,7 +17,7 @@ type TunFrame = {
 }
 
 type HeaderWS = {
-  new (url: string, opts?: { headers?: Record<string, string> }): WebSocket
+  new (url: string, opts?: { headers?: Record<string, string>; proxy?: string }): WebSocket
 }
 
 const LIMIT_RE = /429|TUNNEL_LIMITED|CONCURRENCY_LIMITED/
@@ -50,6 +51,7 @@ export function runTunnel(
   key: string,
   onStatus: (ok: boolean, err: string, transport?: 'ws' | 'legacy') => void,
   signal: AbortSignal,
+  proxy: () => string = () => '',
 ): void {
   const registryKey = Symbol.for('gvs.tunnel.active')
   const registry = globalThis as unknown as Record<symbol, AbortController | undefined>
@@ -68,8 +70,10 @@ export function runTunnel(
       let transport: 'ws' | 'legacy' = 'ws'
       let lastError = ''
       let stop: TunnelStop = { opened: false, code: 0, reason: '' }
+      let via = ''
       try {
-        stop = await tunnelOnce(host, key, onStatus, signal)
+        via = isLocalGateway(host) ? '' : proxy().trim()
+        stop = await tunnelOnce(host, key, onStatus, signal, via)
         opened = stop.opened
         transport = 'ws'
         if (replaced(stop)) {
@@ -83,10 +87,11 @@ export function runTunnel(
         lastError = e instanceof Error ? e.message : String(e)
         if (LIMIT_RE.test(lastError)) {
           onStatus(false, OCCUPIED, 'ws')
-        } else if (!opened) {
+        } else if (!opened && !via) {
           // Legacy dials the gateway directly (no proxy), so behind a proxy it
           // usually just hits the CDN's block page; the WebSocket error is the
-          // one that says why the gateway refused.
+          // one that says why the gateway refused. A configured proxy skips
+          // this fallback entirely.
           const wsError = lastError
           try {
             await tunnelLegacy(host, key, onStatus, signal)
@@ -102,7 +107,7 @@ export function runTunnel(
             onStatus(false, LIMIT_RE.test(lastError) ? OCCUPIED : lastError, 'legacy')
           }
         } else {
-          onStatus(false, lastError, 'ws')
+          onStatus(false, via && !opened ? `隧道无法通过代理连接：${lastError}` : lastError, 'ws')
         }
       }
       failures = opened && !replaced(stop) && !LIMIT_RE.test(lastError) ? 0 : failures + 1
@@ -122,14 +127,19 @@ async function tunnelOnce(
   key: string,
   onStatus: (ok: boolean, err: string, transport?: 'ws' | 'legacy') => void,
   signal: AbortSignal,
+  proxy = '',
 ): Promise<TunnelStop> {
   const u = new URL(host)
-  const route = await tunnelRoute(u.hostname)
-  signal.throwIfAborted()
-  if (route.fakeIp) {
-    return tunnelOnceDial(host, key, onStatus, signal, route.tcp)
+  // An explicit gateway proxy replaces the direct/DoH dial. Fake-ip bypass
+  // would connect to the real address and skip the proxy Cloudflare needs.
+  if (!proxy) {
+    const route = await tunnelRoute(u.hostname)
+    signal.throwIfAborted()
+    if (route.fakeIp) {
+      return tunnelOnceDial(host, key, onStatus, signal, route.tcp)
+    }
   }
-  return tunnelOnceWS(host, key, onStatus, signal)
+  return tunnelOnceWS(host, key, onStatus, signal, proxy)
 }
 
 async function tunnelOnceWS(
@@ -137,11 +147,15 @@ async function tunnelOnceWS(
   key: string,
   onStatus: (ok: boolean, err: string, transport?: 'ws' | 'legacy') => void,
   signal: AbortSignal,
+  proxy = '',
 ): Promise<TunnelStop> {
   signal.throwIfAborted()
   const url = tunnelURL(host)
   const WS = WebSocket as unknown as HeaderWS
-  const ws = new WS(url, { headers: { Authorization: `Bearer ${key}` } })
+  const ws = new WS(url, {
+    headers: { Authorization: `Bearer ${key}` },
+    ...(proxy ? { proxy } : {}),
+  })
   let beat: NodeJS.Timeout | undefined
   let watch: NodeJS.Timeout | undefined
   let opened = false

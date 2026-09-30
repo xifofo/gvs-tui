@@ -26,8 +26,10 @@ const tmdbView = computed(() =>
   tmdbWindow(props.state.tmdbHits, props.state.cursor, props.height),
 )
 
+const loading = computed(() => props.state.tmdbState === 'loading' || (props.state.busy && !tmdbView.value.total))
+const failed = computed(() => props.state.tmdbState === 'error')
 const countLabel = computed(() =>
-  tmdbView.value.total ? `${tmdbView.value.total} 个候选` : '',
+  loading.value ? '搜索中' : tmdbView.value.total ? `${tmdbView.value.total} 个候选` : '',
 )
 </script>
 
@@ -40,10 +42,26 @@ const countLabel = computed(() =>
       :width="bodyW"
     />
     <EmptyState
-      v-if="!tmdbView.total"
+      v-if="loading"
       :width="bodyW"
       :height="Math.max(1, height - 2)"
-      message="没有匹配的候选"
+      loading
+      message="正在搜索 TMDB 电影和剧集…"
+      hint="s 跳过匹配，esc 返回画质"
+    />
+    <EmptyState
+      v-else-if="failed"
+      :width="bodyW"
+      :height="Math.max(1, height - 2)"
+      tone="err"
+      :message="state.tmdbError ? `TMDB 搜索失败：${state.tmdbError}` : 'TMDB 搜索失败'"
+      hint="s 跳过匹配，r 重试"
+    />
+    <EmptyState
+      v-else-if="!tmdbView.total"
+      :width="bodyW"
+      :height="Math.max(1, height - 2)"
+      message="未找到匹配影片"
       hint="s 跳过匹配，r 重试"
     />
     <Box v-else flexDirection="column" :width="bodyW">

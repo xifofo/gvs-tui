@@ -2,6 +2,7 @@ import type { Quality } from '../types.ts'
 import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
 import { isObj } from './util.ts'
+import { tierHeight } from './name.ts'
 
 export type ManifestSource = { url: string; headers: Record<string, string>; format: string; height: number; quality: string; clear: boolean; drm: string; live: boolean }
 const str = (v: unknown): string => typeof v === 'string' ? v : ''
@@ -29,7 +30,7 @@ export async function resolveManifest(cli: Pick<GwClient, 'invoke'>, cfg: Pick<F
 }
 export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: string, id: string): Promise<{ qualities: Quality[]; audios: [] }> {
   const sources = await resolveManifest(cli, cfg, provider, id)
-  return { qualities: sources.map((s, i) => ({ id: provider === 'hamivideo' && cfg.hamiClient !== 'web' && [480,720,1080,2160].includes(s.height) ? String(s.height) : 'auto', label: s.quality || (s.height ? `${s.height}p` : '自动'), title: s.clear ? '源站明确标记明文 · 本机直连下载' : '受保护媒体 · 当前客户端尚未接入该 DRM 授权处理', size: 0, width: 0, height: s.height, codec: '', drm: s.clear ? 'none' : s.drm, stream: provider === 'hamivideo' && cfg.hamiClient !== 'web' && [480,720,1080,2160].includes(s.height) ? String(s.height) : 'auto', tier: i })), audios: [] }
+  return { qualities: sources.map(s => ({ id: provider === 'hamivideo' && cfg.hamiClient !== 'web' && [480,720,1080,2160].includes(s.height) ? String(s.height) : 'auto', label: s.quality || (s.height ? `${s.height}p` : '自动'), title: s.clear ? '源站明确标记明文 · 本机直连下载' : '受保护媒体 · 当前客户端尚未接入该 DRM 授权处理', size: 0, width: 0, height: s.height, codec: '', drm: s.clear ? 'none' : s.drm, stream: provider === 'hamivideo' && cfg.hamiClient !== 'web' && [480,720,1080,2160].includes(s.height) ? String(s.height) : 'auto', tier: tierHeight(0, s.height) })), audios: [] }
 }
 export function requireClearDownload(source: ManifestSource): void {
   if (source.live) throw new Error('直播录制尚未接入；不会启动无限下载')

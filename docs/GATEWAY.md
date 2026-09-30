@@ -221,6 +221,14 @@ DRM：`drm.content_key_hex`。本机 ffmpeg `-decryption_key`。IV 由网关解�
 
 `drm.enc`：0 无加密 / 1 ChaCha20 / 2 Widevine（网关不给 WV 密钥）。当前下载管线只当直链文件 remux。
 
+#### 桌面操作观测（2026-09-30）
+
+`tencentObservations=true` 时，TV 会话的搜索、详情、取流和下载共享 flow/job 上下文。网关 `report_type=bind` 返回 `observation_sources`；包含 `electron_process` 时桌面端才提交 `report_type=observe`，保持真实来源与进程指标。旧网关未声明支持时继续仅在本地记录。部署网关变更后，已有绑定须由下一次用户搜索建立的新 flow 更新能力声明。
+
+`observe` 只写网关日志，返回 `sent=false`、`report_requests=0`；它不等于腾讯 bosskv/GetFeature 上报。HLS 的 0–1 进度不记作字节数。明确风险拒绝后停止当前流程，不自动重复发送。桌面运行日志新增 `tencent_decision`，即使未启用观测也能看到来源、开关状态、脱敏错误码与处理决定。
+
+腾讯事件自动发送仍未接入：需要与当前设备/会话匹配的真实 TV 事件源和生命周期数据。此版本没有新增腾讯上游请求，也不以桌面 CPU、下载比例或随机标识填补 TV 字段。
+
 ### 7.3 红果 `hongguo`
 
 匿名，只要平台 Key。
@@ -432,6 +440,8 @@ bun run scripts/check-detect.ts     # TUI 会怎么说（账号行 + 画质页�
   "releaseGroup": "ADWeb",
   "tmdbKey": "",
   "tmdbLang": "zh-CN",
+  "tmdbProxy": "",
+  "gatewayProxy": "",
   "youkuSign": "",
   "tencentCookie": "",
   "hongguoMerge": true,
@@ -443,13 +453,17 @@ bun run scripts/check-detect.ts     # TUI 会怎么说（账号行 + 画质页�
 
 `outDir` 是本机视频目录。留空或仍是旧的 `./downloads` 时，Windows 会改成空间最大的非系统盘下的 `盘符:\GVS`（只有系统盘时用用户「视频」目录）。已经写成绝对路径的不会改。终端在设置里编辑「下载目录」，桌面端在设置里点「更改」，或在第一次连接网关时选文件夹。
 
-TMDB 是客户端直连 `api.themoviedb.org`，不经过网关。优酷/腾讯在填了 `tmdbKey` 时，下载前会刮削。
+`gatewayProxy` 是终端版的网关 API 代理，支持 HTTP/HTTPS 地址。设置里保存后，网关请求和隧道都会走它；启动环境中的 `GVS_PROXY` 优先。显式代理连接失败不会回退直连，本机网关仍直连。桌面端网关走系统代理，不读这个字段。它不影响媒体 CDN 请求。
+
+TMDB 由客户端请求（优先 `api.tmdb.org`，网络失败后尝试 `api.themoviedb.org`），不经过网关。设置 `tmdbProxy` 时仅 TMDB 使用该 HTTP/HTTPS 代理；留空沿用默认网络及 `GVS_PROXY`，不自动读取系统 PAC。显式代理失败不会回退直连。优酷/腾讯在填了 `tmdbKey` 时，下载前通过 `/3/search/multi` 同时匹配电影和剧集，过滤人物结果。候选类型随 `media_type` 返回，用户采用时同步修正任务类型、季集编号和文件名。支持 v3 API Key 或 API Read Access Token。
+
+平台详情的 `kind` / `media_type` / `type` / `category` 等明确类型字段用于初始分类；无类型字段时保留搜索行上的类型。单条正片不代表一定是电影，详情页 `M` 可手动切换，TMDB 选择也可纠正类型。
 
 `youkuSign` 过期时网关会在 0ms 内回 `invalid Yk-Sign`（`needs_relogin`）：取画质/下载会直接失败，
 而不是降级。TUI 遇到这个会**自动清掉本地死签名并重试一次**，仍失败就提示去「设置 → 优酷扫码」。
 手工修也可以：把 `youkuSign` 置空，或重新扫码。
 
-命名例：`NameDots.S01E02.1080p.YK.WEB-DL.H265-ADWeb.mkv`。红果/抖音短剧放在剧名目录下。
+命名例：`NameDots.S01E02.单集标题.1080p.YK.WEB-DL.H265-ADWeb.mkv`。单集标题取自平台详情，在季集编号之后、年份之前；空标题或重复节目名时省略，电影不追加。确认页和下载共用 `jobNaming` / `filename`。红果/抖音短剧放在剧名目录下。
 
 ---
 

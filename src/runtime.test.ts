@@ -1,8 +1,13 @@
-import { test, expect, afterEach } from 'bun:test'
+import { test, expect, afterEach, spyOn } from 'bun:test'
 import { Runtime } from './runtime'
+import * as tunnel from './lib/tunnel'
+import { viewMetrics } from './lib/ui-layout'
 import { gridWindow } from './lib/grid'
 import { GwClient } from './lib/client'
 import { wrapLines, displayWidth } from './lib/text'
+import { filename, folder } from './lib/name'
+import { jobNaming } from './lib/jobs'
+import { join } from 'node:path'
 const runtimes: Runtime[] = []
 const start = async () => {
   const r = new Runtime({ simulate: true })
@@ -13,6 +18,88 @@ const start = async () => {
 afterEach(() => {
   runtimes.splice(0).forEach((r) => r.close())
 })
+
+test('tunnel recovery replaces its warning for both fast and slow reconnects', async () => {
+  const r = await start()
+  const internal = r as any
+  let report!: Parameters<typeof tunnel.runTunnel>[2]
+  const run = spyOn(tunnel, 'runTunnel').mockImplementation((_host, _key, onStatus) => { report = onStatus })
+  let now = 100_000
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  try {
+    internal.queueEnsureYouku = () => {}
+    internal.say('搜索完成', 'ok')
+    internal.openTunnel()
+    report(true, '', 'ws')
+    expect(r.snapshot.status).toBe('搜索完成')
+    for (const delay of [1000, 9000]) {
+      report(false, 'closed', 'ws')
+      expect(r.snapshot.tunnelOk).toBe(false)
+      expect(r.snapshot.status).toContain('隧道断开')
+      expect(r.snapshot.statusKind).toBe('warn')
+      now += delay
+      report(true, '', 'ws')
+      expect(r.snapshot.tunnelOk).toBe(true)
+      expect(r.snapshot.tunnelError).toBeUndefined()
+      expect(r.snapshot.status).toContain('隧道已恢复')
+      expect(r.snapshot.statusKind).toBe('ok')
+    }
+  } finally {
+    clock.mockRestore()
+    run.mockRestore()
+  }
+})
+
+test('tunnel retries and recovery preserve newer operation messages', async () => {
+  const r = await start()
+  const internal = r as any
+  let report!: Parameters<typeof tunnel.runTunnel>[2]
+  const run = spyOn(tunnel, 'runTunnel').mockImplementation((_host, _key, onStatus) => { report = onStatus })
+  let now = 100_000
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  try {
+    internal.queueEnsureYouku = () => {}
+    internal.openTunnel()
+    for (const delay of [1000, 9000]) {
+      report(false, 'connection refused', 'ws')
+      expect(r.snapshot.status).toBe('隧道断开 connection refused')
+      internal.say('搜索失败，请重试', 'err')
+      report(false, 'closed', 'ws')
+      expect(r.snapshot.status).toBe('搜索失败，请重试')
+      now += delay
+      report(true, '', 'ws')
+      expect(r.snapshot.tunnelOk).toBe(true)
+      expect(r.snapshot.status).toBe('搜索失败，请重试')
+      expect(r.snapshot.statusKind).toBe('err')
+    }
+  } finally {
+    clock.mockRestore()
+    run.mockRestore()
+  }
+})
+
+test('restarting a tunnel clears its old warning and ignores obsolete callbacks', async () => {
+  const r = await start()
+  const internal = r as any
+  const reports: Parameters<typeof tunnel.runTunnel>[2][] = []
+  const run = spyOn(tunnel, 'runTunnel').mockImplementation((_host, _key, onStatus) => { reports.push(onStatus) })
+  try {
+    internal.queueEnsureYouku = () => {}
+    internal.openTunnel()
+    reports[0]!(false, 'closed', 'ws')
+    internal.restartTunnel()
+    reports[1]!(true, '', 'ws')
+    expect(r.snapshot.tunnelOk).toBe(true)
+    expect(r.snapshot.status).toContain('隧道已恢复')
+    reports[0]!(false, 'closed', 'ws')
+    expect(r.snapshot.tunnelOk).toBe(true)
+    expect(r.snapshot.status).toContain('隧道已恢复')
+    r.close()
+    reports[1]!(false, 'closed', 'ws')
+    expect(r.snapshot.tunnelOk).toBe(true)
+  } finally { run.mockRestore() }
+})
+
 test('workspace navigation, detail grid, return position, settings and tasks context', async () => {
   const r = await start()
   r.resize(80, 24)
@@ -327,6 +414,23 @@ test('workspace arrows change columns; bare digits switch platform', async () =>
   expect(r.snapshot.workspace?.provider).toBe('youku')
 })
 
+test('reopening filters focuses the active option without applying another filter', async () => {
+  const r = await start()
+  const discovery = (r as any).discovery
+  discovery.section.filters = [{ key: 'genre', title: '体裁', options: [
+    { value: 'all', label: '全部' }, { value: 'human', label: '真人' }, { value: 'comic', label: '漫剧' },
+  ] }]
+  discovery.view.filters = { genre: 'comic' }
+  r.handleKey('f')
+  expect(r.snapshot.scene).toBe('filters')
+  expect(r.snapshot.cursor).toBe(2)
+  r.handleKey('up')
+  r.handleKey('esc')
+  expect(r.snapshot.workspace?.filters).toEqual({ genre: 'comic' })
+  r.handleKey('f')
+  expect(r.snapshot.cursor).toBe(2)
+})
+
 test('shift-right selects a contiguous episode range', async () => {
   const r = await start()
   r.handleKey('enter')
@@ -377,4 +481,257 @@ test('new provider settings and single Hami scope are visible without inventing 
  x.keyInfo={all:true,scope:[]};x.emit()
  expect(x.settingFields()).toContain('mewatch 激活')
  expect(x.settingFields()).toContain('腾讯诊断日志')
+})
+
+test('TMDB movie selection fixes a Tencent detail without category and removes episode naming', async () => {
+  const r = await start()
+  const internal = r as any
+  internal.detailProv = 'tencent'
+  internal.cli.invoke = async () => ({ title: '追凶者也', episode_count: 1, episodes: [{ vid: 'q0033rtpdxb', title: '追凶者也', number: '1', kind: '正片' }] })
+  await internal.detail('tencent', 'dynsksaef6gmg83')
+  r.handleKey('enter')
+  expect(r.snapshot.scene).toBe('quality')
+  internal.scene = 'tmdb'
+  internal.tmdbHits = [{ id: 415634, name: '追凶者也', title: '追凶者也', year: 2016, kind: 'movie' }]
+  r.handleKey('enter')
+  expect(r.snapshot.scene).toBe('confirm')
+  expect(r.snapshot.detail?.kind).toBe('movie')
+  expect(r.snapshot.confirmation?.name).toStartWith('追凶者也.2016.')
+  expect(r.snapshot.confirmation?.name).not.toContain('S01E01')
+  expect(r.snapshot.confirmation?.episodes).toBe('正片')
+  const task = internal.pending[0]
+  expect(task.kind).toBe('movie')
+  expect(task.season).toBe(0)
+  expect(task.episode).toBe(0)
+  expect(folder(task, '/downloads')).not.toContain('Season ')
+  r.handleKey('enter')
+  expect(r.snapshot.jobs?.[0]?.title).not.toContain('E01')
+})
+
+test('manual type switch works without TMDB and returning to TV restores the real episode', async () => {
+  const r = await start()
+  const internal = r as any
+  internal.detailProv = 'tencent'
+  internal.cli.invoke = async () => ({ title: '灵境行者', episodes: [{ vid: 'ep5', title: '第05话', number: '5' }] })
+  await internal.detail('tencent', 'show')
+  r.handleKey('m')
+  expect(r.snapshot.detail?.kind).toBe('movie')
+  r.handleKey('enter')
+  r.handleKey('enter')
+  expect(r.snapshot.confirmation?.name).not.toContain('S01E05')
+  internal.scene = 'tmdb'
+  internal.tmdbHits = [{ id: 123, name: '灵境行者', title: '', year: 2026, kind: 'show' }]
+  r.handleKey('enter')
+  expect(r.snapshot.detail?.kind).toBe('show')
+  expect(r.snapshot.confirmation?.name).toContain('S01E05')
+  expect(internal.pending[0].episode).toBe(5)
+  expect(internal.pending[0].edition).toBe('')
+})
+
+test('content type from a search result survives a detail response without category', async () => {
+  const r = await start()
+  const internal = r as any
+  internal.cli.invoke = async () => ({ title: '追凶者也', episodes: [{ vid: 'movie', title: '追凶者也' }] })
+  await internal.openRow({ id: 'cid', title: '追凶者也', sub: 'tencent', mediaKind: 'movie' })
+  expect(r.snapshot.detail?.kind).toBe('movie')
+  r.handleKey('enter')
+  r.handleKey('enter')
+  expect(r.snapshot.confirmation?.name).not.toContain('S01E01')
+  expect(internal.pending[0].edition).toBe('')
+})
+
+test('TMDB retry only searches TMDB and a late response cannot reopen a skipped screen', async () => {
+  const r = await start()
+  r.handleKey('enter')
+  await Bun.sleep(70)
+  r.handleKey('enter')
+  const internal = r as any
+  let calls = 0
+  let finish!: (value: unknown) => void
+  // Isolate the async work result without mocking modules shared with other tests.
+  internal.work = () => { calls++; return new Promise(resolve => { finish = resolve }) }
+  internal.cli.invoke = () => { throw new Error('retry must not call Tencent play') }
+  internal.scene = 'tmdb'
+  r.handleKey('r')
+  r.handleKey('r')
+  expect(calls).toBe(1)
+  r.handleKey('s')
+  const status = r.snapshot.status
+  finish([{ id: 1, name: 'Late movie', title: '', year: 2026, kind: 'movie' }])
+  await Bun.sleep(1)
+  expect(r.snapshot.scene).toBe('confirm')
+  expect(r.snapshot.status).toBe(status)
+  expect(r.snapshot.tmdbHits).toHaveLength(0)
+})
+
+test('TMDB proxy settings validate input, hide credentials in summary and can be cleared', async () => {
+  const r = await start()
+  const internal = r as any
+  r.handleKey('f4')
+  expect(r.snapshot.settings?.some(s => s.label === 'TMDB 代理')).toBe(true)
+  await internal.openSetting('TMDB 代理')
+  expect(r.snapshot.scene).toBe('edit')
+  await internal.commitEdit('http://user:private-password@localhost:7897/')
+  expect(internal.cfg.tmdbProxy).toBe('http://user:private-password@localhost:7897')
+  expect(r.snapshot.scene).toBe('settings')
+  const summary = r.snapshot.settings?.find(s => s.label === 'TMDB 代理')?.value
+  expect(summary).toContain('http://localhost:7897')
+  expect(summary).not.toContain('private-password')
+  await internal.openSetting('TMDB 代理')
+  await internal.commitEdit('socks5://localhost:7897')
+  expect(r.snapshot.scene).toBe('edit')
+  expect(internal.cfg.tmdbProxy).toBe('http://user:private-password@localhost:7897')
+  expect(r.snapshot.status).toContain('HTTP/HTTPS')
+  await internal.commitEdit('')
+  expect(internal.cfg.tmdbProxy).toBe('')
+  expect(r.snapshot.settings?.find(s => s.label === 'TMDB 代理')?.value).toContain('默认网络')
+})
+
+test('gateway proxy settings apply to the existing client, validate and mask credentials', async () => {
+  const r = await start()
+  const internal = r as any
+  const client = internal.cli
+  let persisted = 0
+  internal.persistConfig = () => { persisted++ }
+  r.handleKey('f4')
+  expect(r.snapshot.settings?.some(s => s.label === '网关代理')).toBe(true)
+  await internal.openSetting('网关代理')
+  await internal.commitEdit('http://user:private-password@localhost:7897/')
+  expect(internal.cfg.gatewayProxy).toBe('http://user:private-password@localhost:7897')
+  expect(internal.cli).toBe(client)
+  expect(internal.cfg.gatewayProxy).toContain('private-password')
+  const summary = r.snapshot.settings?.find(s => s.label === '网关代理')?.value
+  expect(summary).not.toContain('private-password')
+  expect(internal.cfg.tmdbProxy).toBeUndefined()
+  expect(persisted).toBe(1)
+  await internal.openSetting('网关代理')
+  await internal.commitEdit('http://localhost:7897/proxy.pac')
+  expect(r.snapshot.scene).toBe('edit')
+  expect(r.snapshot.status).toContain('HTTP/HTTPS')
+  expect(internal.cfg.gatewayProxy).toContain('private-password')
+  expect(persisted).toBe(1)
+  await internal.commitEdit('')
+  expect(internal.cfg.gatewayProxy).toBe('')
+  expect(persisted).toBe(2)
+})
+
+test('settings navigate within groups, reveal full values and return without changing them', async () => {
+  const r = await start()
+  r.resize(60, 18)
+  r.handleKey('f4')
+  const current = () => r.snapshot.settings![r.snapshot.cursor]!.label
+  expect(current()).toBe('隧道')
+  r.handleKey('end')
+  expect(current()).toBe('Key')
+  r.handleKey('down')
+  expect(current()).toBe('Key')
+  r.handleKey('right')
+  expect(current()).toBe('下载目录')
+  const original = r.snapshot.settings![r.snapshot.cursor]!.value
+  r.handleKey('i')
+  expect(r.snapshot.settingsExpanded).toBe(true)
+  r.handleKey('enter')
+  expect(r.snapshot.scene).toBe('settings')
+  expect(r.snapshot.settings![r.snapshot.cursor]!.value).toBe(original)
+  r.handleKey('esc')
+  expect(r.snapshot.scene).toBe('settings')
+  expect(r.snapshot.settingsExpanded).toBe(false)
+  r.handleKey('tab')
+  expect(current()).toBe('TMDB Key')
+  r.handleKey('left')
+  expect(current()).toBe('下载目录')
+  r.handleKey('esc')
+  expect(r.snapshot.scene).toBe('workspace')
+})
+
+test('expanded descriptions scroll independently of selection and collapse on Escape', async () => {
+  const r = await start()
+  r.resize(60, 18)
+  r.handleKey('enter')
+  await Bun.sleep(70)
+  ;(r as any).detailInfo.desc = '长简介内容，需要保留全部文字。'.repeat(100)
+  const cursor = r.snapshot.cursor
+  r.handleKey('i')
+  r.handleKey('pagedown')
+  expect(r.snapshot.contentOffset).toBe(12)
+  expect(r.snapshot.cursor).toBe(cursor)
+  r.handleKey('end')
+  expect(r.snapshot.contentOffset).toBeGreaterThan(12)
+  r.handleKey('esc')
+  expect(r.snapshot.scene).toBe('detail')
+  expect(r.snapshot.detailExpanded).toBe(false)
+  expect(r.snapshot.cursor).toBe(cursor)
+})
+
+test('confirmation shows the final subdirectory and scrolls long filenames before queueing', async () => {
+  const r = await start()
+  r.resize(60, 18)
+  r.handleKey('enter')
+  await Bun.sleep(70)
+  r.handleKey('enter')
+  ;(r as any).cfg.outDir = join('/Volumes/影音库', ...Array<string>(60).fill('长路径'))
+  r.handleKey('enter')
+  expect(r.snapshot.scene).toBe('confirm')
+  const info = r.snapshot.confirmation!
+  expect(info.directory).toStartWith((r as any).cfg.outDir)
+  expect(info.directory).toContain('Season 01')
+  expect(info.directory).not.toBe((r as any).cfg.outDir)
+  expect(info.name).toEndWith('.mkv')
+  r.handleKey('pagedown')
+  expect(r.snapshot.contentOffset).toBeGreaterThan(0)
+  r.handleKey('end')
+  const lastOffset = r.snapshot.contentOffset!
+  r.handleKey('down')
+  expect(r.snapshot.contentOffset).toBe(lastOffset)
+  expect(r.snapshot.jobs).toHaveLength(0)
+  r.handleKey('esc')
+  expect(r.snapshot.scene).toBe('quality')
+  r.handleKey('enter')
+  expect(r.snapshot.contentOffset).toBe(0)
+})
+
+test('PageDown advances one visible grid page and resizing rewraps job details', async () => {
+  const r = await start()
+  r.resize(60, 18)
+  r.handleKey('enter')
+  await Bun.sleep(70)
+  r.handleKey('pagedown')
+  const layout = viewMetrics(60, 18)
+  const perRow = gridWindow(r.snapshot.episodes!.length, 0, layout.pane.main, 1).perRow
+  expect(r.snapshot.cursor).toBe(Math.min(r.snapshot.episodes!.length - 1, layout.gridRows * perRow))
+  const text = '很长的失败任务说明与保存位置'.repeat(30)
+  ;(r as any).jobs = [{ id: 1, title: text, status: '失败', phase: '封装', pct: 0.99, err: text, log: '' }]
+  r.handleKey('f3')
+  r.handleKey('enter')
+  r.resize(140, 40)
+  const wideLines = r.snapshot.jobDetailLines!.length
+  r.resize(60, 18)
+  expect(r.snapshot.jobDetailLines!.length).toBeGreaterThan(wideLines)
+  expect(r.snapshot.jobDetailLines!.every(line => displayWidth(line) <= 58)).toBe(true)
+  expect(r.snapshot.jobDetailLines!.join('')).toContain(text)
+})
+
+
+test('batch episode titles survive TMDB matching and share preview and download naming', async () => {
+  const r = await start()
+  const internal = r as any
+  const subtitles = ['名场面特辑：狼人有救了！', '加更篇：一起出发']
+  internal.cli.invoke = async () => ({ title: '现在就出发 第3季', category: '综艺', episodes: subtitles.map((title, i) => ({ vid: `ep${i + 1}`, title, number: String(i + 1) })) })
+  await internal.detail('tencent', 'variety-show')
+  r.handleKey('a')
+  r.handleKey('enter')
+  r.handleKey('enter')
+  expect(r.snapshot.confirmation?.name).toContain('.S01E01.名场面特辑.狼人有救了.')
+  internal.scene = 'tmdb'
+  internal.tmdbHits = [{ id: 123, name: '现在就出发', title: '现在就出发', year: 2026, kind: 'show' }]
+  r.handleKey('enter')
+  const tasks = internal.pending
+  const names = tasks.map((task: any) => filename(jobNaming(task, internal.cfg)))
+  expect(names[0]).toContain('现在就出发.S01E01.名场面特辑.狼人有救了.2026.')
+  expect(names[1]).toContain('现在就出发.S01E02.加更篇.一起出发.2026.')
+  expect(r.snapshot.confirmation?.name).toBe(names[0])
+  expect(r.snapshot.confirmation?.directory).toBe(folder(jobNaming(tasks[0], internal.cfg), internal.cfg.outDir))
+  r.handleKey('enter')
+  expect(r.snapshot.jobs![0]!.title).toContain(subtitles[0]!)
+  expect(r.snapshot.jobs![1]!.title).toContain(subtitles[1]!)
 })

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { AudioView, EnqueueRequest, NamingPreview, TmdbHit } from '@shared/api'
+import { resolveDefaultAudioId } from '@shared/audio-selection'
 import Icon from '../components/Icon.vue'
 import Skeleton from '../components/Skeleton.vue'
 import { back, errText, go, gvs, human, openQuality, store, toast } from '../store'
@@ -9,6 +10,7 @@ const d = computed(() => store.detail)
 const probe = computed(() => store.probe)
 const qIndex = ref(0)
 const audioIds = ref<string[]>([])
+const preferredAudioId = ref('')
 const tmdb = ref<TmdbHit | null>(null)
 const tmdbHits = ref<TmdbHit[]>([])
 const tmdbLoading = ref(false)
@@ -23,17 +25,29 @@ const audios = computed<AudioView[]>(() => {
   if (q && q.audios.length) return q.audios
   return probe.value?.audios ?? []
 })
+const defaultAudioId = computed(() => resolveDefaultAudioId(audios.value, audioIds.value, preferredAudioId.value))
 
 function defaultAudios() {
   const list = audios.value
   const pre = list.filter((a) => a.selected || a.embedded).map((a) => a.id)
-  audioIds.value = pre.length ? pre : list.filter((a) => a.isDefault).slice(0, 1).map((a) => a.id)
+  const fallback = resolveDefaultAudioId(list, list.map((a) => a.id))
+  audioIds.value = pre.length ? pre : fallback ? [fallback] : []
+  // 切换画质时，保留仍然可用的默认音轨，并确保它在下载选择里。
+  if (list.some((a) => a.id === preferredAudioId.value && !a.embedded) && !audioIds.value.includes(preferredAudioId.value)) {
+    audioIds.value.push(preferredAudioId.value)
+  }
+  reconcileDefaultAudio()
+}
+
+function reconcileDefaultAudio() {
+  if (!audioIds.value.includes(preferredAudioId.value)) preferredAudioId.value = ''
 }
 
 watch(
   probe,
   (p) => {
     qIndex.value = 0
+    preferredAudioId.value = ''
     tmdb.value = null
     tmdbHits.value = []
     tmdbError.value = ''
@@ -67,16 +81,29 @@ const embeddedNote = computed(() =>
 const pickedCount = computed(() => audios.value.filter((a) => a.embedded || audioIds.value.includes(a.id)).length)
 function pickAll() {
   audioIds.value = audios.value.filter((a) => !a.embedded).map((a) => a.id)
+  reconcileDefaultAudio()
 }
 function pickDefault() {
-  audioIds.value = audios.value.filter((a) => a.isDefault && !a.embedded).slice(0, 1).map((a) => a.id)
+  reconcileDefaultAudio()
+  audioIds.value = defaultAudioId.value ? [defaultAudioId.value] : []
+}
+
+function setDefaultAudio(a: AudioView) {
+  if (a.embedded) return
+  if (!audioIds.value.includes(a.id)) audioIds.value.push(a.id)
+  preferredAudioId.value = a.id
 }
 
 function toggleAudio(a: AudioView) {
   if (a.embedded) return
   const set = new Set(audioIds.value)
+  if (set.has(a.id) && set.size === 1) {
+    toast('至少选择一条音轨')
+    return
+  }
   set.has(a.id) ? set.delete(a.id) : set.add(a.id)
   audioIds.value = [...set]
+  reconcileDefaultAudio()
 }
 
 async function loadTmdb() {
@@ -104,6 +131,7 @@ const request = computed<EnqueueRequest | null>(() => {
     episodes: store.probeEpisodes.map((e) => ({ ...e, languages: e.languages.map((l) => ({ ...l })) })),
     quality: qIndex.value,
     audioIds: [...audioIds.value],
+    defaultAudioId: defaultAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
   }
 })
@@ -241,13 +269,22 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
           <div v-for="g in audioGroups" :key="g.lang" class="agroup">
             <span class="glang">{{ g.lang }}</span>
             <div class="achips">
-              <label v-for="a in g.items" :key="a.id" class="achip" :class="{ on: audioIds.includes(a.id) || a.embedded, dis: a.embedded }" :title="a.embedded ? '已内嵌在视频里' : a.codec">
-                <input type="checkbox" class="sr-only" :checked="audioIds.includes(a.id) || a.embedded" :disabled="a.embedded" @change="toggleAudio(a)" />
-                <Icon v-if="audioIds.includes(a.id) || a.embedded" name="check" :size="13" :stroke="3" />
-                {{ a.label }}<span v-if="a.isDefault" class="def">默认</span>
-              </label>
+              <div v-for="a in g.items" :key="a.id" class="atrack">
+                <label class="achip" :class="{ on: audioIds.includes(a.id) || a.embedded, dis: a.embedded }" :title="a.embedded ? '已内嵌在视频里' : a.codec">
+                  <input type="checkbox" class="sr-only" :checked="audioIds.includes(a.id) || a.embedded"
+                    :disabled="a.embedded || (audioIds.length === 1 && audioIds.includes(a.id))" @change="toggleAudio(a)" />
+                  <Icon v-if="audioIds.includes(a.id) || a.embedded" name="check" :size="13" :stroke="3" />
+                  {{ a.label }}
+                </label>
+                <button v-if="!a.embedded" type="button" class="audio-default" :class="{ active: defaultAudioId === a.id }"
+                  :aria-pressed="defaultAudioId === a.id" :aria-label="`${a.lang} ${a.label} ${defaultAudioId === a.id ? '默认播放' : '设为默认'}`"
+                  title="下载后默认播放这条音轨" @click="setDefaultAudio(a)">
+                  {{ defaultAudioId === a.id ? '默认播放' : '设为默认' }}
+                </button>
+              </div>
             </div>
           </div>
+          <div class="muted small">自动以已选音轨的最高档为默认，也可手动指定；整批下载沿用此选择。</div>
           <div v-if="hasDts" class="muted small">选了 DTS 音轨，会用 MP4Box 封装成 MP4</div>
         </fieldset>
         <fieldset class="fs">
@@ -316,6 +353,8 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
 .fs { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .small { font-size: 13px; font-weight: 400; }
+/* Keep hidden inputs inside their visible labels so focusing them only scrolls the page. */
+.opt, .achip { position: relative; }
 .opt {
   padding: 9px 16px; background: var(--card); border: 1.5px solid var(--line); border-radius: 10px; display: flex; align-items: center; gap: 14px; cursor: pointer;
 }
@@ -336,6 +375,7 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .agroup { display: flex; align-items: center; gap: 14px; }
 .glang { width: 56px; flex-shrink: 0; font-size: 13px; font-weight: 700; color: var(--ink-2); }
 .achips { display: flex; flex-wrap: wrap; gap: 8px; }
+.atrack { display: inline-flex; align-items: center; gap: 8px; }
 .achip {
   height: 34px; padding: 0 12px; border-radius: 8px; border: 1.5px solid var(--line); background: var(--card);
   display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; user-select: none;
@@ -344,8 +384,10 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .achip.on { border-color: var(--ink); background: var(--orange); font-weight: 700; }
 .achip.dis { cursor: default; opacity: .8; }
 .achip:focus-within { outline: 2px solid var(--orange); outline-offset: 2px; }
-.def { font-size: 11px; font-weight: 500; padding: 1px 5px; border-radius: 4px; background: var(--paper-2); color: var(--ink-2); }
-.achip.on .def { background: rgba(255, 255, 255, .55); color: var(--ink); }
+.audio-default { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; background: var(--card); color: var(--ink-2); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.audio-default:hover { border-color: var(--ink); color: var(--ink); }
+.audio-default.active { border-color: var(--ink); background: var(--paper-2); color: var(--ink); font-weight: 700; }
+.audio-default:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
 .out { width: 340px; flex-shrink: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px; position: sticky; top: 0; }
 .h2s { font-size: 17px; font-weight: 700; }
 .blk { display: flex; flex-direction: column; gap: 6px; }

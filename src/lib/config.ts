@@ -7,10 +7,14 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 export type FileConfig = {
   host: string
   key: string
+  /** Optional HTTP(S) proxy for gateway API requests. */
+  gatewayProxy?: string
   outDir: string
   releaseGroup: string
   tmdbKey: string
   tmdbLang: string
+  /** Optional HTTP(S) proxy used only for TMDB requests. */
+  tmdbProxy?: string
   youkuSign: string
   tencentMode?: "cookie" | "web" | "app" | "tv"
   /** Bind TV operations and record real client metrics locally on the gateway. */
@@ -168,10 +172,12 @@ export function defaultConfig(): FileConfig {
   return {
     host: 'http://127.0.0.1:8080',
     key: '',
+    gatewayProxy: '',
     outDir: '',
     releaseGroup: 'ADWeb',
     tmdbKey: '',
     tmdbLang: 'zh-CN',
+    tmdbProxy: '',
     youkuSign: '',
     tencentCookie: '',
     hongguoMerge: true,

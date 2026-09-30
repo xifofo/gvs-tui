@@ -7,7 +7,7 @@ import { youkuStreamURLs } from '../src/lib/media.ts'
 import { asString, isObj } from '../src/lib/util.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const vid = process.argv[2] ?? 'XNjM4NTY0ODMwOA=='
 // 本地网关不认线上签发的 Yk-Sign；默认用空签名副本，绝不改用户配置。
 const cfgLocal = { ...cfg, youkuSign: process.env.PROBE_SIGN === '1' ? cfg.youkuSign : '' }

@@ -16,7 +16,7 @@ const labels: Record<string,string> = {
 let generation = 0
 async function refresh() {
   const g = ++generation; loading.value = true; error.value = ''; rows.value = []
-  try { const result = await gvs('tencentDiagnostics', props.jobId); if (g === generation) rows.value = result }
+  try { const result = await (props.jobId == null ? gvs('tencentDiagnostics') : gvs('tencentDiagnostics', props.jobId)); if (g === generation) rows.value = result }
   catch (e) { if (g === generation) error.value = errText(e) }
   finally { if (g === generation) loading.value = false }
 }
@@ -27,6 +27,7 @@ watch(() => String(props.jobId ?? '') + ':' + (store.state?.accountScope || ((st
   <section class="diagnostics card" aria-label="腾讯风控处理日志">
     <div class="heading"><h3>腾讯诊断{{ jobId === undefined ? ' · 当前账号' : ' · 任务 ' + jobId }}</h3><button class="btn sm" :disabled="loading" @click="refresh">刷新</button><button class="btn sm" @click="$emit('close')">关闭</button></div>
     <p>本地观测 ≠ 已向腾讯发送；HTTP 200 ≠ 风控接受。不包含 Cookie、绑定令牌、设备凭据、媒体地址或内容密钥。</p>
+    <p>操作观测：{{ store.state?.settings.tencentObservations ? '已开启，支持此来源的网关会接收真实桌面进程指标' : '未开启，可在账号设置中开启' }}。腾讯事件自动发送尚未接入。</p>
     <p v-if="error" class="error-box">{{ error }}</p>
     <p v-else-if="loading" aria-live="polite">正在读取当前账号诊断…</p>
     <p v-else-if="!rows.length">暂无诊断记录。不会为了生成日志自动发送取流或上报请求。</p>

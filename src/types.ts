@@ -1,4 +1,4 @@
-export type Job = { id: number; title: string; status: string; pct: number; log: string; err: string; note?: string }
+export type Job = { id: number; title: string; status: string; pct: number; log: string; err: string; note?: string; phase?: string }
 export type Row = {
   title: string
   id: string
@@ -9,6 +9,7 @@ export type Row = {
   desc?: string
   score?: string
   tags?: string[]
+  mediaKind?: 'movie' | 'show'
 }
 export type Episode = {
   season?: number
@@ -25,7 +26,7 @@ export type Episode = {
   /** Other dvd.audiolang vids (国语/英语) to probe with this title. */
   languages?: Array<{ vid: string; lang: string; langcode?: string }>
 }
-export type TMDBHit = { id: number; name: string; title: string; year: number; overview?: string }
+export type TMDBHit = { id: number; name: string; title: string; year: number; overview?: string; kind: 'movie' | 'show' }
 export type Quality = {
   id: string
   label: string
@@ -92,7 +93,10 @@ export type OptionTab = 'quality' | 'audio'
 export type Snapshot = {
   scene: string
   workspace?: import('./lib/discovery').DiscoveryView
-  confirmation?: { title: string; episodes: string; quality: string; audio: string; directory: string; name: string }
+  confirmation?: { title: string; episodes: string; quality: string; audio: string; directory: string; name: string; kind?: 'movie' | 'show' | 'short'; year?: number }
+  contentOffset?: number
+  detailExpanded?: boolean
+  settingsExpanded?: boolean
   jobDetailLines?: string[]
   logOffset?: number
   simulated?: boolean
@@ -142,6 +146,8 @@ export type Snapshot = {
   qualities?: Quality[]
   audios?: Audio[]
   tmdbHits?: TMDBHit[]
+  tmdbState?: 'idle' | 'loading' | 'ready' | 'error'
+  tmdbError?: string
   jobs?: Job[]
   settings?: { label: string; value: string }[]
   detail?: Detail
@@ -150,6 +156,8 @@ export type Snapshot = {
   /** Provider of the open title (detail/quality), not discovery workspace. */
   detailProvider?: string
   pendingCount?: number
+  /** Episode numbers queued for this quality page, in selection order. */
+  pendingEpisodes?: number[]
   /** Probing the stream list failed and the next Enter downloads with defaults. */
   probeFailed: boolean
   query?: string

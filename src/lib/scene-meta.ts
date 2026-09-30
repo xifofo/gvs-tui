@@ -105,6 +105,7 @@ export const HINTS: Record<string, Array<[string, string]>> = {
   ],
   jobs: [
     ['↑↓', '移动'],
+    ['←→', '翻页'],
     ['⏎', '日志'],
     ['esc', '返回'],
   ],

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { defaultAudioIndex } from './audio-selection.ts'
 import { statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { truncate } from './util.ts'
@@ -78,16 +79,17 @@ export function mkvmergeRemux(
  * The actual mux below measures PTS before and after mkvmerge; these arguments
  * alone do not preserve cross-file offsets normalized by the MP4 reader.
  */
-export type MuxAudio = { path: string; title?: string; lang?: string; delayMs?: number }
+export type MuxAudio = { path: string; title?: string; lang?: string; delayMs?: number; isDefault?: boolean }
 
 export function mkvmergeMuxArgs(outPath: string, videoPath: string, audios: MuxAudio[]): string[] {
   const args = ['-o', outPath, '--no-audio', '--compression', '0:none', videoPath]
+  const defaultIndex = defaultAudioIndex(audios)
   audios.forEach((a, i) => {
     const delay = a.delayMs ?? 0
     if (!Number.isFinite(delay)) throw new Error('音轨偏移必须是有限毫秒数')
     args.push('--language', `0:${mkvLang(a.lang ?? '')}`)
     if (a.title) args.push('--track-name', `0:${a.title}`)
-    args.push('--default-track', `0:${i === 0 ? '1' : '0'}`)
+    args.push('--default-track', `0:${i === defaultIndex ? '1' : '0'}`)
     args.push('--compression', '0:none')
     if (delay) args.push('--sync', `0:${Math.round(delay)}`)
     args.push(a.path)

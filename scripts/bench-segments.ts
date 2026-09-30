@@ -12,7 +12,7 @@ import { appendURLs, parseCMAF, referer } from '../src/lib/media.ts'
 import { asString, isObj } from '../src/lib/util.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const vid = process.env.BENCH_VID ?? 'XMjQ4NDcxODQwOA=='
 const threadsList = [Number(process.argv[2] ?? 8)]
 const maxSegs = Number(process.argv[3] ?? 40)

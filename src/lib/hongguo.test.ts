@@ -50,7 +50,6 @@ test('clear media stays clear and failed legacy key resolution is rejected', asy
   await expect(resolveHongguoDownload({invoke:async(_,action)=>action==='key'?{}:{videos:{v1:{url:'https://cdn.test/a',template:'legacy'}}}},'v1')).rejects.toThrow('有效解密密钥')
 })
 
-
 const variants = () => ({videos:{v1:{url:'https://cdn.test/default',key,streams:[
  {id:'1080p|hevc|aac',quality:'1080p',url:'https://cdn.test/high',key,width:1080,height:1920,codec:'hevc',size:12000000,audio:{codec:'aac',profile:'LC',channels:2,sample_rate:48000}},
  {id:'720p|h264|',quality:'720p',url:'https://cdn.test/low',key:'f'.repeat(32),width:720,height:1280,codec:'h264',size:5000000},

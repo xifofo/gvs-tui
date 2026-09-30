@@ -73,9 +73,9 @@ const QUALITIES: Quality[] = [
 ]
 
 const TMDB: TMDBHit[] = [
-  { id: 34567, name: '斗破苍穹 年番', title: '斗破苍穹 年番', year: 2024, overview: '萧炎重返加玛帝国，为药老炼制躯体，与云岚宗正面碰撞。' },
-  { id: 98765, name: '斗破苍穹', title: '斗破苍穹', year: 2017, overview: '少年萧炎从天之骄子跌落凡尘，三年后再启炼药之路。' },
-  { id: 55667, name: '斗破苍穹 缘起', title: '斗破苍穹 缘起', year: 2022, overview: '特别篇：萧炎与药老的初遇。' },
+  { id: 34567, kind: 'show', name: '斗破苍穹 年番', title: '斗破苍穹 年番', year: 2024, overview: '萧炎重返加玛帝国，为药老炼制躯体，与云岚宗正面碰撞。' },
+  { id: 98765, kind: 'show', name: '斗破苍穹', title: '斗破苍穹', year: 2017, overview: '少年萧炎从天之骄子跌落凡尘，三年后再启炼药之路。' },
+  { id: 55667, kind: 'show', name: '斗破苍穹 缘起', title: '斗破苍穹 缘起', year: 2022, overview: '特别篇：萧炎与药老的初遇。' },
 ]
 
 const JOBS: Job[] = [
@@ -89,14 +89,21 @@ const JOBS: Job[] = [
 const SETTINGS = [
   { label: '隧道', value: '已连接 · 优酷/腾讯/黄果走本机 IP · WebSocket' },
   { label: '网关', value: HOST },
+  { label: '网关代理', value: 'http://127.0.0.1:7897 · 已保存' },
   { label: 'Key', value: '演示模式，无需 Key' },
   { label: '下载目录', value: 'D:\\downloads' },
   { label: '下载线程', value: '4 路并发' },
   { label: '发布组', value: 'ADWeb' },
   { label: 'TMDB Key', value: '已配置' },
+  { label: 'TMDB 代理', value: '默认网络 · 回车配置独立代理' },
   { label: '优酷扫码', value: '扫码把登录态写进本机' },
   { label: '优酷登录', value: '可续期 · 上次续期 3 分钟前 · 酷友福克纳君的杏花 · uid 2223055214990 · 非 VIP' },
+  { label: '腾讯双扫码', value: 'App + 极光 TV' },
   { label: '腾讯 Cookie', value: '空 · 回车粘贴' },
+  { label: '腾讯登录', value: '演示账号 · uid 12345678 · SVIP' },
+  { label: '腾讯 caption=all', value: '关' },
+  { label: '腾讯探测原画', value: '关' },
+  { label: '腾讯 encode=all', value: '关' },
   { label: '红果合并', value: '开' },
   { label: '红果 NFO', value: '开' },
   { label: '红果封装', value: 'mkv' },
@@ -182,16 +189,44 @@ export function demoSnapshot(scene: string, cursor = 0): Snapshot {
       return { ...s, scene, rows: ROWS, cursor, status: `${ROWS.length} 条结果`, statusKind: 'info' }
     case 'detail':
       return { ...s, scene, detailTitle: '黑棺镇麒麟，老翁御千魂', detail: DETAIL, episodes: episodes(151, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]), cursor, status: '已选 12 集', statusKind: 'info' }
+    case 'detail-movie':
+      return { ...s, scene: 'detail', detailProvider: 'tencent', detailTitle: '电影长标题（多语言版本）', detail: { ...DETAIL, title: '电影长标题（多语言版本）', kind: 'movie', year: 2026 }, episodes: episodes(30, [30]).map((ep, i) => ({ ...ep, title: `版本 ${i + 1} · 国语 / 原声特别版` })), cursor: 29 }
+    case 'detail-expanded':
+      return { ...demoSnapshot('detail'), detailExpanded: true, contentOffset: cursor }
+    case 'quality-audio':
+      return { ...demoSnapshot('quality', 1), optionTab: 'audio', audioIndex: 2 }
+    case 'quality-tencent':
+      return { ...demoSnapshot('quality', 0), detailProvider: 'tencent', detailTitle: '灵境行者', qualities: QUALITY_YOUKU.map((q, i) => ({ ...q, label: i === 0 ? '4K 臻彩视听 · 杜比视界高帧率' : q.label, hdr: 'hdr10', fps: 60, caption: 'soft', encodeTag: 'H265' })), audios: AUDIOS }
+    case 'jobs-error':
+      return { ...s, scene: 'jobs', cursor: 4, statusKind: 'err', status: '任务失败 · 回车查看完整错误与日志', jobs: [...JOBS.slice(0, 4), { ...JOBS[4]!, title: '灵境行者 E05 · 4K 超清国语杜比全景声', status: '失败', phase: '封装', pct: 0.99, err: '读取原始时间戳失败 (183): [in#0] Error opening input: Invalid data found when processing input. 无法读取视频流时间戳，请查看保留的源文件及 timing.json。' }] }
+    case 'settings-advanced':
+      return { ...s, scene: 'settings', cursor: SETTINGS.findIndex(item => item.label === '腾讯 caption=all'), status: '' }
+    case 'settings-gateway':
+      return { ...s, scene: 'settings', cursor: SETTINGS.findIndex(item => item.label === '网关代理'), status: '' }
+    case 'settings-account':
+      return { ...s, scene: 'settings', cursor: SETTINGS.findIndex(item => item.label === '优酷登录'), status: '' }
+    case 'confirm-long':
+      return { ...s, scene: 'confirm', contentOffset: cursor, confirmation: {
+        title: '电影长标题：穿越银河的旅人（特别导演剪辑版）', kind: 'movie', year: 2026, episodes: '国语版、原声版', quality: '4K · HDR Vivid · 60fps · 软字幕 · H265', audio: '国语 AAC / 原声 杜比全景声',
+        directory: '/Volumes/家庭影音资料库/收藏影片/华语电影/科幻与冒险/电影长标题.穿越银河的旅人.特别导演剪辑版.2026 {tmdb-12345}',
+        name: '电影长标题.穿越银河的旅人.特别导演剪辑版.2026.国语版.2160p.TX.WEB-DL.H265-Example.mkv',
+      } }
     case 'quality':
       return {
-        ...s, scene, detailTitle: '斗破苍穹年番', detail: { ...DETAIL, title: '斗破苍穹年番', category: '电影', score: '9.1', episodes: 4, duration: 4910, vip: true },
+        ...s, scene, detailTitle: '斗破苍穹年番', detail: { ...DETAIL, title: '斗破苍穹年番', category: '剧集', score: '9.1', episodes: 4, duration: 4910, vip: true },
         qualities: QUALITY_YOUKU, audios: AUDIOS, qualityIndex: cursor, audioIndex: 0,
         optionTab: (process.env.GVS_PREVIEW_TAB === 'audio' ? 'audio' : 'quality') as OptionTab,
         pendingCount: 4, cursor: 0, status: '11 档画质 · 3 条音轨 · 4 集 · 可播', statusKind: 'ok',
         vipProbe: { canPlay: true, isVip: true, hasTrial: false, download: '["allowed"]', note: '' },
       }
+    case 'tmdb-loading':
+      return { ...s, scene: 'tmdb', detailTitle: '现在就出发 第3季', tmdbState: 'loading', busy: true, status: '' }
+    case 'tmdb-empty':
+      return { ...s, scene: 'tmdb', detailTitle: '现在就出发 第3季', tmdbState: 'ready', status: '' }
+    case 'tmdb-error':
+      return { ...s, scene: 'tmdb', detailTitle: '现在就出发 第3季', tmdbState: 'error', tmdbError: '连接超时，请检查 TMDB 代理设置', status: '' }
     case 'tmdb':
-      return { ...s, scene, detailTitle: '斗破苍穹年番', tmdbHits: TMDB, cursor, pendingCount: 12, status: '找到 3 个候选', statusKind: 'info' }
+      return { ...s, scene, detailTitle: '斗破苍穹年番', tmdbState: 'ready', tmdbHits: TMDB, cursor, pendingCount: 12, status: '找到 3 个候选', statusKind: 'info' }
     case 'jobs':
       return { ...s, scene, jobs: JOBS, status: '已加入 2 个任务', statusKind: 'ok' }
     case 'settings':
@@ -219,5 +254,5 @@ export function demoSnapshot(scene: string, cursor = 0): Snapshot {
 }
 
 export const DEMO_SCENES = [
-  'workspace','workspace-long-title','workspace-loading','workspace-empty','workspace-error','workspace-no-access','filters','confirm','help','job-detail', 'setup', 'home', 'search', 'results', 'detail', 'quality', 'tmdb', 'jobs', 'settings', 'edit', 'qr',
+  'workspace','workspace-long-title','workspace-loading','workspace-empty','workspace-error','workspace-no-access','filters','confirm','help','job-detail', 'setup', 'home', 'search', 'results', 'detail', 'detail-movie', 'detail-expanded', 'quality', 'quality-tencent', 'quality-audio', 'jobs-error', 'confirm-long', 'settings-advanced', 'settings-gateway', 'settings-account', 'tmdb-loading', 'tmdb-empty', 'tmdb-error', 'tmdb', 'jobs', 'settings', 'edit', 'qr',
 ]

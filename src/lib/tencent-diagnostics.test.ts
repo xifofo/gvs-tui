@@ -3,11 +3,19 @@ import { mkdtempSync, readFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
-import { readTencentDiagnostics, writeTencentDiagnostic } from './tencent-diagnostics.ts'
+import { readTencentDiagnostics, writeTencentDiagnostic, tencentDiagnosticJobID } from './tencent-diagnostics.ts'
 import { TencentOperations } from './tencent-operations.ts'
 import { retryCdnRefresh } from './cdn-retry.ts'
 
 describe('Tencent diagnostic boundaries', () => {
+  test('account diagnostics accept omitted or legacy null job IDs while rejecting malformed tasks', () => {
+    expect(tencentDiagnosticJobID(undefined)).toBeUndefined()
+    expect(tencentDiagnosticJobID(null)).toBeUndefined()
+    expect(tencentDiagnosticJobID(7)).toBe(7)
+    for (const value of ['', '7', 0, -1, 0.5, NaN, Infinity, {}, []]) {
+      expect(() => tencentDiagnosticJobID(value)).toThrow('无效腾讯任务')
+    }
+  })
   test('nested codes, HTTP rejection and stale binding stop current flow', () => {
     expect(tencentRisk({raw:{em:93}}).stop).toBe(true)
     expect(tencentRisk({em:'94.1'}).stop).toBe(true)
@@ -46,6 +54,46 @@ describe('Tencent diagnostic boundaries', () => {
     expect(calls.filter(c=>c.report_type==='observe')).toHaveLength(0)
     expect(logs.join(' ')).toContain('local_only_gateway_source_unsupported')
     expect(logs.join(' ')).not.toContain('opaque')
+  })
+  test('Electron sends measured events only after the gateway advertises source support', async () => {
+    const calls: Record<string, unknown>[] = []
+    const tracker = new TencentOperations(async input => {
+      calls.push(input)
+      return input.report_type === 'bind'
+        ? { binding: 'opaque', observation_sources: ['tui_process', 'electron_process'] }
+        : { status: 'observed_locally', sent: false }
+    }, () => {}, 'job-1', undefined, '', 'electron_process')
+    const op = await tracker.begin('play', { vid: 'episode1' })
+    await tracker.finish(op, { em: 0 })
+    tracker.observeTransfer(0.5, 1)
+    await tracker.closeTransfer()
+    const events = calls.filter(c => c.report_type === 'observe').map(c => JSON.parse(String(c.payload)))
+    expect(events.map(e => e.phase)).toEqual(['start', 'finish', 'finish'])
+    expect(events.every(e => e.source === 'electron_process')).toBe(true)
+    expect(events.every(e => e.metrics.rss_bytes > 0)).toBe(true)
+    expect(events.some(e => 'downloaded_bytes' in e.metrics)).toBe(false)
+    expect(calls.some(c => ['bosskv', 'getfeature'].includes(String(c.report_type)))).toBe(false)
+  })
+  test('forked Electron downloads retain advertised capabilities and stop after rejection', async () => {
+    const calls: Record<string, unknown>[] = []
+    const parent = new TencentOperations(async input => {
+      calls.push(input)
+      return input.report_type === 'bind' ? { binding: 'opaque', observation_sources: ['electron_process'] } : { status: 'observed_locally' }
+    }, () => {}, '', undefined, '', 'electron_process')
+    const detail = await parent.begin('detail', { cid: 'series' })
+    await parent.finish(detail, { episodes: [{ vid: 'episode1' }] })
+    const child = parent.fork('job-2', 'episode1')
+    const play = await child.begin('play', { vid: 'episode1' })
+    const before = calls.length
+    await child.finish(play, { em: 93 })
+    child.observeTransfer(100, 200)
+    await child.closeTransfer()
+    await expect(child.begin('play', { vid: 'episode1' })).rejects.toThrow('stopped')
+    expect(calls).toHaveLength(before)
+    expect(calls.filter(c => c.report_type === 'bind')).toHaveLength(1)
+    const events = calls.filter(c => c.report_type === 'observe').map(c => JSON.parse(String(c.payload)))
+    expect(events.at(-1).job_id).toBe('job-2')
+    expect(events.at(-1).source).toBe('electron_process')
   })
   test('risk results stop pending operations without further observer requests', async () => {
     const calls:unknown[]=[];const tracker=new TencentOperations(async input=>{calls.push(input);return input.report_type==='bind'?{binding:'opaque'}:{status:'observed_locally'}},()=>{})
