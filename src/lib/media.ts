@@ -424,7 +424,8 @@ function clearResumeState(dest: string): void {
 
 /** Stable, filesystem-safe folder name for one track inside the job work dir. */
 export function workTagOf(explicit: string | undefined, dest: string): string {
-  const raw = explicit || basename(dest)
+  // Track paths can come from persisted jobs created on another OS.
+  const raw = explicit || basename(dest.replace(/\\/g, '/'))
   return raw.replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'track'
 }
 
@@ -709,16 +710,20 @@ export function reHttpFailureMonitor(): { feed: (chunk: string) => number } {
 }
 
 /**
- * RE spawns shaka-packager / ffmpeg as children. On Windows `child.kill()` would
- * leave them running and holding the output files, so the whole tree is killed.
+ * RE spawns shaka-packager / ffmpeg as children. Use a dedicated process group
+ * on POSIX and taskkill /T on Windows so cancellation stops those children too.
  */
-function killTree(pid: number | undefined): void {
-  if (pid === undefined) return
+function killTree(pid: number | undefined): Promise<void> {
+  if (pid === undefined) return Promise.resolve()
   if (process.platform === 'win32') {
-    try { spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) } catch { /* already exited */ }
-    return
+    return new Promise((resolve) => {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      killer.once('error', () => resolve())
+      killer.once('close', () => resolve())
+    })
   }
-  try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+  try { process.kill(-pid, 'SIGKILL') } catch { /* already exited */ }
+  return Promise.resolve()
 }
 
 export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: ProgressCB, fatalError?: () => Error | undefined, cwd?: string, signal?: AbortSignal): Promise<string> {
@@ -730,6 +735,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   }
   const child = spawn(bin, args, {
     windowsHide: true,
+    detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd,
     env: {
@@ -742,13 +748,14 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   let deniedStatus = 0
   let exhausted = false
   let stopped = false
+  let stopping: Promise<void> | undefined
   let phase: PlaylistPhase = 'download'
   let decryptAt = 0
   const failures = reHttpFailureMonitor()
   const stop = () => {
     if (stopped) return
     stopped = true
-    killTree(child.pid)
+    stopping = killTree(child.pid)
   }
   const onAbort = () => stop()
   if (signal) {
@@ -814,9 +821,10 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     if (signal?.aborted) { reject(signal.reason ?? new Error('aborted')); return }
     reject(new Error(`无法启动 N_m3u8DL-RE: ${e.message}`))
   })
-  child.once('close', (code, killSignal) => {
+  child.once('close', async (code, killSignal) => {
     stopLogWatch()
     signal?.removeEventListener('abort', onAbort)
+    await stopping
     // A caller stop is not a download error: report it as the abort. An
     // internal stop (exhausted retries / fatal relay) still reports below.
     if (stopped && signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }

@@ -39,13 +39,15 @@ describe('download directory', () => {
   })
 
   test('keeps a saved absolute directory and replaces only the legacy default', () => {
-    const kept = { outDir: 'G:\\hongguo_handoff\\tui\\downloads' }
-    expect(ensureOutDir(kept, 'D:\\GVS')).toBe(false)
-    expect(kept.outDir).toBe('G:\\hongguo_handoff\\tui\\downloads')
+    const saved = join(tmpdir(), 'gvs-config-test', 'downloads')
+    const fallback = join(tmpdir(), 'gvs-config-test', 'GVS')
+    const kept = { outDir: saved }
+    expect(ensureOutDir(kept, fallback)).toBe(false)
+    expect(kept.outDir).toBe(saved)
 
     const legacy = { outDir: './downloads' }
-    expect(ensureOutDir(legacy, 'G:\\GVS')).toBe(true)
-    expect(legacy.outDir).toBe('G:\\GVS')
+    expect(ensureOutDir(legacy, fallback)).toBe(true)
+    expect(legacy.outDir).toBe(fallback)
   })
 
   test('typed paths are stored absolute', () => {
