@@ -9,11 +9,10 @@ import { parseEpisodes as parseEps, episodeCollections } from './lib/episodes.ts
 import { startTencentDualQR, pollTencentQR, pollTencentDualQR, applyTencentLogin, tencentLabels, tencentPlayInput, type TencentMode } from './lib/tencent-qr.ts'
 import { fetchTencentAccount, txAccountSummary, type TxAccount } from './lib/tencent-account.ts'
 import { Discovery, discoveryRows } from './lib/discovery'
-import { Navigation, moveCursor } from './lib/navigation'
+import { Navigation, moveCursor, moveJobCursor } from './lib/navigation'
 import { DownloadDraft } from './lib/download-draft'
 import { gridWindow } from './lib/grid'
-import { isDtsAudio } from './lib/mp4box'
-import { wrapLines } from './lib/text'
+import { clip, wrapLines } from './lib/text'
 import { demoSnapshot } from './lib/demo'
 import { demoInvoke } from './lib/discovery-demo'
 import { appendFileSync, readFileSync } from 'node:fs'
@@ -26,10 +25,13 @@ import {
   type FileConfig,
 } from './lib/config.ts'
 import { GwClient, ReloginRequired, type KeyInfo } from './lib/client.ts'
+import { selectAudioTracks } from './lib/audio-selection.ts'
+import { normalizeHttpProxy } from './lib/proxy.ts'
 import {
   JobHub,
   bindYoukuAudioTracksToTask,
   jobTitle,
+  jobNaming,
   nextJobID,
   patchJob,
   type DlTask,
@@ -52,7 +54,8 @@ import {
   type YkAccount,
   type YkLogin,
 } from './lib/youku-session.ts'
-import { tmdbSearch } from './lib/tmdb.ts'
+import { normalizeTmdbProxy, tmdbSearch } from './lib/tmdb.ts'
+import { mediaKindFromMetadata, movieEdition, type TitleKind } from './lib/media-kind.ts'
 import { clipTitle, extractDouyinURL, extractTencentLinks, extractYoukuVideoId } from './lib/link.ts'
 import { pickDouyinURL, pickURL, tencentPlayProbeOk } from './lib/media.ts'
 import {
@@ -63,7 +66,9 @@ import {
   runLogStartup,
   setRunLogDisabled,
 } from './lib/runlog.ts'
-import { filename, sourceTag, dots, tierHeight } from './lib/name.ts'
+import { filename, folder, dots, tierHeight } from './lib/name.ts'
+import { confirmationLines, episodeRanges, settingGroup, settingInfoLines, viewMetrics, HELP_LINES } from './lib/ui-layout.ts'
+import { JOB_PAGE_SIZE } from './lib/view.ts'
 import { anyInt, asBool, asString, firstStr, isObj } from './lib/util.ts'
 import { ensureTools } from './lib/tools.ts'
 import type {
@@ -115,6 +120,8 @@ export class Runtime {
   private status = ''
   /** Lets the shell color a message instead of guessing from its text. */
   private statusKind: StatusKind = 'info'
+  /** Only a tunnel warning may be replaced by a recovery notification. */
+  private statusSource?: 'tunnel'
   /** Set while a gateway call is in flight, so the UI can show progress. */
   private busy = false
   private workCount = 0
@@ -157,6 +164,9 @@ export class Runtime {
   /** 本机 Yk-Sign 已不在网关凭证库里（cred info 报 not found/revoked/invalid）。 */
   private signMissing = false
   private tmdbHits: TMDBHit[] = []
+  private tmdbState: NonNullable<Snapshot['tmdbState']> = 'idle'
+  private tmdbError = ''
+  private tmdbGeneration = 0
   private jobs: Job[] = []
   private readonly logs = new Map<number, string[]>()
   private readonly draft = new DownloadDraft()
@@ -171,6 +181,9 @@ export class Runtime {
   private viewport = { width: 100, height: 30 }
   private filterIndex = 0
   private logOffset = 0
+  private contentOffset = 0
+  private detailExpanded = false
+  private settingsExpanded = false
   private requestGeneration = 0
   private searching = false
   private pageLoading = false
@@ -357,7 +370,7 @@ export class Runtime {
     }
     if (
       k === 'esc' &&
-      ['help', 'jobs', 'settings', 'results'].includes(this.scene)
+      ['help', 'jobs', 'settings', 'results'].includes(this.scene) && !this.settingsExpanded
     ) {
       this.back()
       this.emit()
@@ -387,26 +400,32 @@ export class Runtime {
           this.editField = '确认下载目录'
           this.editValue = this.cfg.outDir
           this.scene = 'edit'
+        } else {
+          const total = confirmationLines(this.confirmation(), this.viewport.width - 2).length
+          const room = viewMetrics(this.viewport.width, this.viewport.height).scrollRoom
+          this.contentOffset = moveCursor(this.contentOffset, k, Math.max(1, total - room + 1), room)
         }
         break
       case 'help':
         this.cursor = moveCursor(
           this.cursor,
           k,
-          18,
-          Math.max(1, this.viewport.height - 4),
+          Math.max(1, HELP_LINES.length - viewMetrics(this.viewport.width, this.viewport.height).bodyHeight + 1),
+          viewMetrics(this.viewport.width, this.viewport.height).bodyHeight,
         )
         break
       case 'job-detail':
         if (k === 'esc') {
           this.scene = 'jobs'
-        } else
+        } else {
+          const room = viewMetrics(this.viewport.width, this.viewport.height).jobLogRows
           this.logOffset = moveCursor(
             this.logOffset,
             k,
-            this.jobLines().length,
-            Math.max(1, this.viewport.height - 6),
+            Math.max(1, this.jobLines().length - 2 - room + 1),
+            room,
           )
+        }
         break
       case 'search':
         this.updateSearch(k, mods.shift)
@@ -428,12 +447,7 @@ export class Runtime {
           this.scene = 'job-detail'
           this.logOffset = 0
         } else
-          this.cursor = moveCursor(
-            this.cursor,
-            k,
-            this.jobs.length,
-            this.viewport.height - 6,
-          )
+          this.cursor = moveJobCursor(this.cursor, k, this.jobs.length, JOB_PAGE_SIZE)
         break
       case 'settings':
         this.updateSettings(k)
@@ -463,6 +477,11 @@ export class Runtime {
 
   private lastLoggedScene: Scene | '' = ''
   private emit(): void {
+    if (this.scene !== this.lastLoggedScene) {
+      this.contentOffset = 0
+      this.settingsExpanded = false
+      if (this.scene === 'detail') this.detailExpanded = false
+    }
     if (this.lastLoggedScene && this.lastLoggedScene !== this.scene) {
       runLogScene(this.lastLoggedScene, this.scene)
     }
@@ -475,9 +494,10 @@ export class Runtime {
   }
 
   /** Update the status line and how the shell should read it. */
-  private say(message: string, kind: StatusKind = 'info'): void {
+  private say(message: string, kind: StatusKind = 'info', source?: 'tunnel'): void {
     this.status = message
     this.statusKind = kind
+    this.statusSource = source
   }
 
   /**
@@ -521,10 +541,10 @@ export class Runtime {
   }
 
   private settingFields(): string[] {
-    const f = ['隧道', '网关', 'Key', '下载目录', '下载线程']
+    const f = ['隧道', '网关', '网关代理', 'Key', '下载目录', '下载线程']
     if (this.has('youku') || this.has('tencent') || this.has('hongguo') || this.has('huangguo'))
       f.push('发布组')
-    if (this.has('youku') || this.has('tencent')) f.push('TMDB Key')
+    if (this.has('youku') || this.has('tencent')) f.push('TMDB Key', 'TMDB 代理')
     if (this.has('youku')) f.push('优酷扫码', '优酷登录')
     if (this.has('tencent')) f.push('腾讯双扫码', '腾讯 Cookie', '腾讯登录')
     if (this.has('tencent')) {
@@ -565,6 +585,13 @@ export class Runtime {
         return '未连接'
       case '网关':
         return this.cfg.host
+      case '网关代理': {
+        const override = process.env.GVS_PROXY?.trim()
+        const proxy = override || this.cfg.gatewayProxy
+        if (!proxy) return '默认网络 · 回车配置代理'
+        try { return `${new URL(proxy).origin} · ${override ? '启动环境覆盖' : '已保存'}` }
+        catch { return '地址格式无效 · 回车修改' }
+      }
       case 'Key':
         if (this.simulated) return '演示模式，无需 Key'
         return this.cfg.key.length > 12
@@ -578,6 +605,10 @@ export class Runtime {
         return this.cfg.releaseGroup || '未设'
       case 'TMDB Key':
         return this.cfg.tmdbKey ? '已配置' : '未配置'
+      case 'TMDB 代理':
+        if (!this.cfg.tmdbProxy) return '默认网络 · 回车配置独立代理'
+        try { return `${new URL(this.cfg.tmdbProxy).origin} · 仅 TMDB` }
+        catch { return '地址格式无效 · 回车修改' }
       case '优酷扫码':
         return '仅支持扫码登录（不再提供 Cookie 导入）'
       case '优酷登录':
@@ -621,6 +652,8 @@ export class Runtime {
     if (f === '腾讯 TV 版本') return this.cfg.tencentTVVersion || ''
 
     switch (f) {
+      case '网关代理':
+        return this.cfg.gatewayProxy || ''
       case '网关':
         return this.cfg.host
       case 'Key':
@@ -633,6 +666,8 @@ export class Runtime {
         return this.cfg.releaseGroup
       case 'TMDB Key':
         return this.cfg.tmdbKey
+      case 'TMDB 代理':
+        return this.cfg.tmdbProxy || ''
       case '腾讯 Cookie':
         return this.cfg.tencentCookie
       case '抖音 Cookie':
@@ -657,6 +692,9 @@ export class Runtime {
       },
       simulated: this.simulated,
       confirmation: this.scene === 'confirm' ? this.confirmation() : undefined,
+      contentOffset: this.contentOffset,
+      detailExpanded: this.detailExpanded,
+      settingsExpanded: this.settingsExpanded,
       jobDetailLines: this.jobLines(),
       logOffset: this.logOffset,
       host: this.cfg.host,
@@ -708,7 +746,10 @@ export class Runtime {
       qualities: this.qualities,
       audios: this.audios.map((a) => ({ ...a })),
       tmdbHits: this.tmdbHits,
-      jobs: this.jobs,
+      tmdbState: this.tmdbState === 'loading' && this.tmdbGeneration !== this.requestGeneration ? 'idle' : this.tmdbState,
+      tmdbError: this.tmdbError,
+      // Publish immutable rows so Vue recomputes both the list and the selected detail pane on every event.
+      jobs: this.jobs.map((job) => ({ ...job })),
       settings: this.settingFields().map((label) => ({
         label,
         value: this.settingValue(label),
@@ -717,6 +758,7 @@ export class Runtime {
       detailTitle: this.detailTitle,
       detailProvider: this.detailProv || undefined,
       pendingCount: this.pending.length,
+      pendingEpisodes: this.pending.map((t) => t.episode),
       probeFailed: this.probeFailed,
       query: this.query,
       hostInput: this.hostInput,
@@ -877,45 +919,7 @@ export class Runtime {
           'ok',
         )
         if (!this.tunnelOn && needsTunnel(p => this.has(p))) {
-          this.tunnelOn = true
-          this.tunnelAbort = new AbortController()
-          // A tunnel that is torn down and redialled every few seconds must not
-          // own the status line: the header dot already shows the live state, so
-          // only the first drop is announced, and recovery only after a real gap.
-          let announcedDrop = false
-          let downSince = 0
-          runTunnel(
-            this.cfg.host,
-            this.cfg.key,
-            (ok, err, transport) => {
-              if (this.abort.signal.aborted) return
-              const wasUp = this.tunnelOk
-              this.tunnelOk = ok
-              this.tunnelErr = err
-              if (transport) this.tunnelTransport = transport
-              if (ok) {
-                if (downSince && Date.now() - downSince > 8000)
-                  this.say('隧道已恢复：优酷/腾讯/黄果走本机 IP', 'ok')
-                downSince = 0
-                announcedDrop = false
-                // account/profile 必须走当前 Key 自己的隧道；等 OPEN 后再查。
-                if (!wasUp) this.queueEnsureYouku()
-              } else {
-                downSince ||= Date.now()
-                if (!announcedDrop) {
-                  announcedDrop = true
-                  this.say(
-                    err === 'closed'
-                      ? '隧道断开，自动重连中（优酷/腾讯/黄果暂时无法取链）'
-                      : `隧道断开 ${err}`,
-                    'warn',
-                  )
-                }
-              }
-              this.emit()
-            },
-            this.tunnelAbort.signal,
-          )
+          this.openTunnel()
         } else if (this.tunnelOk) {
           this.queueEnsureYouku()
         }
@@ -926,6 +930,59 @@ export class Runtime {
         this.keyFocused = true
       }
     })
+  }
+
+  private tunnelProxy(): string {
+    return (process.env.GVS_PROXY?.trim() || this.cfg.gatewayProxy || '').replace(/\/$/, '')
+  }
+
+  private restartTunnel(): void {
+    if (!this.cli || !needsTunnel(p => this.has(p))) return
+    this.tunnelAbort?.abort()
+    this.tunnelOn = false
+    this.tunnelOk = false
+    this.openTunnel()
+  }
+
+  private openTunnel(): void {
+    this.tunnelOn = true
+    const tunnelAbort = new AbortController()
+    this.tunnelAbort = tunnelAbort
+    // Announce each outage once. Recovery replaces its warning immediately,
+    // but leaves any newer operation message alone.
+    let announcedDrop = false
+    runTunnel(
+      this.cfg.host,
+      this.cfg.key,
+      (ok, err, transport) => {
+        if (this.abort.signal.aborted || tunnelAbort.signal.aborted) return
+        const wasUp = this.tunnelOk
+        this.tunnelOk = ok
+        this.tunnelErr = err
+        if (transport) this.tunnelTransport = transport
+        if (ok) {
+          if (this.statusSource === 'tunnel')
+            this.say('隧道已恢复：优酷/腾讯/黄果走本机 IP', 'ok')
+          announcedDrop = false
+          // account/profile 必须走当前 Key 自己的隧道；等 OPEN 后再查。
+          if (!wasUp) this.queueEnsureYouku()
+        } else {
+          if (!announcedDrop) {
+            announcedDrop = true
+            this.say(
+              err === 'closed'
+                ? '隧道断开，自动重连中（优酷/腾讯/黄果暂时无法取链）'
+                : `隧道断开 ${err}`,
+              'warn',
+              'tunnel',
+            )
+          }
+        }
+        this.emit()
+      },
+      tunnelAbort.signal,
+      () => this.tunnelProxy(),
+    )
   }
 
   private updateSetup(k: string): void {
@@ -959,6 +1016,7 @@ export class Runtime {
 
   resize(width: number, height: number) {
     this.viewport = { width, height }
+    this.emit()
   }
   private pushNavigation(scene: Scene, cursor: number) {
     this.navigation.push(
@@ -1070,11 +1128,15 @@ export class Runtime {
   }
   private jobLines() {
     const job = this.jobs[this.cursor]
+    const title = wrapLines(job?.title || '', this.viewport.width - 2)
     return job
       ? [
-          job.title,
+          clip(job.title, this.viewport.width - 2),
           `状态 ${job.status} · ${Math.round(job.pct * 100)}%`,
           ...readTencentDiagnostics(this.cfg.host + String.fromCharCode(0) + this.cfg.key, String(job.id), 20).map(e => `[腾讯诊断] ${e.at} ${e.action}/${e.phase} ${e.status} → ${e.decision}${e.code ? ' code=' + e.code : ''}`),
+          // The fixed heading is two rows; long titles remain readable in the log.
+          ...(title.length > 1 ? [...title, ''] : []),
+          ...(job.err ? wrapLines(`失败阶段：${job.phase || '未知'} · ${job.err}`, this.viewport.width - 2) : []),
           ...wrapLines(
             this.logs.get(job.id)?.join('\n') ||
               [job.err, job.log].filter(Boolean).join('\n') ||
@@ -1086,57 +1148,19 @@ export class Runtime {
   }
   private confirmation() {
     const first = this.pending[0]
+    const naming = first ? jobNaming(first, this.cfg) : undefined
     return {
       title: first?.series || first?.title || this.detailTitle,
-      episodes: this.pending.map((t) => String(t.episode || 1)).join(', '),
-      quality:
-        (this.qualities[this.qIdx]
-          ? qualityChoiceLabel(this.qualities[this.qIdx]!)
-          : '') ||
-        first?.quality ||
-        '平台提供的单一视频流',
-      audio:
-        this.audios
-          .filter((a) => a.selected)
-          .map((a) => [a.lang !== '—' ? a.lang : '', a.label].filter(Boolean).join(' '))
-          .join(' / ') || '平台默认',
-      directory: this.cfg.outDir,
-      name: first
-        ? filename({
-            kind:
-              first.kind ||
-              (first.provider === 'hongguo' ||
-              first.provider === 'huangguo' ||
-              first.provider === 'douyin'
-                ? 'short'
-                : 'show'),
-            title: first.series || first.title,
-            nameDots: first.nameDots,
-            year: first.year,
-            season: first.season,
-            episode: first.episode,
-            height: first.height,
-            codec: first.codec || 'H264',
-            edition: first.edition,
-            collection: first.collection,
-            source: sourceTag(first.provider),
-            group:
-              first.provider === 'douyin'
-                ? ''
-                : first.group || this.cfg.releaseGroup,
-            tmdbId: first.tmdbId,
-            container:
-              first.provider === 'douyin' ||
-              (first.provider === 'youku' &&
-                first.audioTracks?.some(isDtsAudio))
-                ? 'mp4'
-                : first.provider === 'hongguo'
-                  ? this.cfg.hongguoFmt
-                  : first.provider === 'huangguo'
-                    ? this.cfg.huangguoFmt
-                    : 'mkv',
-          })
-        : '',
+      kind: naming?.kind,
+      year: first?.year,
+      episodes: first?.kind === 'movie'
+        ? this.pending.map(t => t.edition || '正片').join('、')
+        : episodeRanges(this.pending.map(t => t.episode || 1)),
+      quality: (this.qualities[this.qIdx] ? qualityChoiceLabel(this.qualities[this.qIdx]!) : '') || first?.quality || '平台提供的单一视频流',
+      audio: this.audios.filter(a => a.selected)
+        .map(a => [a.lang !== '—' ? a.lang : '', a.label].filter(Boolean).join(' ')).join(' / ') || '平台默认',
+      directory: naming && first?.provider !== 'douyin' ? folder(naming, this.cfg.outDir) : this.cfg.outDir,
+      name: naming ? filename(naming) : '',
     }
   }
   private switchPlatform(slot: number): void {
@@ -1257,7 +1281,7 @@ export class Runtime {
     const origin = this.scene
     const generation = this.requestGeneration
     const target = row.target
-    if(target?.type==='video'&&row.sub==='youku'){await this.downloadYoukuLink(target.id||row.id);return}
+    if(target?.type==='video'&&row.sub==='youku'){await this.downloadYoukuLink(target.id||row.id, row);return}
     if (target?.type === 'unavailable') {
       this.say(target.reason || '此条目不可下载', 'warn')
       return
@@ -1291,7 +1315,7 @@ export class Runtime {
     )
     this.detailProv = row.sub
     this.detailId = target?.id || row.id
-    await this.detail(row.sub, this.detailId)
+    await this.detail(row.sub, this.detailId, '', row.mediaKind)
     if (this.scene === origin && this.requestGeneration === generation + 1)
       this.navigation.pop()
   }
@@ -1373,6 +1397,18 @@ export class Runtime {
       this.eps = this.episodeCatalog.filter(e => e.collection === this.episodeGroup)
       this.cursor = this.selectAnchor = 0
       this.say(`${this.episodeGroup} · ${this.eps.length} 条 · 仅选择当前栏目`)
+      this.emit()
+      return
+    }
+    if (k.toLowerCase() === 'i' || (k === 'esc' && this.detailExpanded)) {
+      this.detailExpanded = !this.detailExpanded
+      this.contentOffset = 0
+      return
+    }
+    if (this.detailExpanded) {
+      const lines = wrapLines(this.detailInfo?.desc || '暂无简介', this.viewport.width - 2)
+      const room = viewMetrics(this.viewport.width, this.viewport.height).scrollRoom
+      this.contentOffset = moveCursor(this.contentOffset, k, Math.max(1, lines.length - room + 1), room)
       return
     }
     const n = this.eps.length
@@ -1383,6 +1419,11 @@ export class Runtime {
     if (this.selectAnchor < 0 || this.selectAnchor >= n) this.selectAnchor = this.cursor
     if (k === 'esc') {
       this.back()
+      return
+    }
+    if (k.toLowerCase() === 'm' && (this.detailProv === 'youku' || this.detailProv === 'tencent')) {
+      this.setTitleKind(this.isMovie() ? 'show' : 'movie')
+      this.say(`类型已设为${this.isMovie() ? '电影' : '剧集'} · M 切换，确认页可检查命名`, 'ok')
       return
     }
     if (this.detailProv === 'douyin' && (k === 'enter' || k === 'd')) {
@@ -1403,18 +1444,21 @@ export class Runtime {
     else if (k === 'right' || k === 'l') move(this.cursor + 1)
     else if (
       ['down', 'up', 'pageup', 'pagedown', 'home', 'end', 'j', 'k'].includes(k)
-    )
+    ) {
+      const gridWidth = Math.max(1, this.viewport.width - 2)
+      const perRow = this.isMovie()
+        ? 1
+        : gridWindow(n, this.cursor, gridWidth, 1).perRow
       move(
         moveCursor(
           this.cursor,
           k === 'j' ? 'down' : k === 'k' ? 'up' : k,
           n,
-          this.viewport.height - 8,
-          this.isMovie()
-            ? 1
-            : gridWindow(n, this.cursor, this.viewport.width - 2, 1).perRow,
+          viewMetrics(this.viewport.width, this.viewport.height).gridRows * perRow,
+          perRow,
         ),
       )
+    }
     else if (k === ' ' || k === 'space') {
       this.eps[this.cursor]!.selected = !this.eps[this.cursor]!.selected
       this.selectAnchor = this.cursor
@@ -1479,9 +1523,9 @@ export class Runtime {
           this.audioIdx,
           k,
           n,
-          this.viewport.height - 9,
+          viewMetrics(this.viewport.width, this.viewport.height).qualityRows,
         )
-      else this.qIdx = moveCursor(this.qIdx, k, n, this.viewport.height - 9)
+      else this.qIdx = moveCursor(this.qIdx, k, n, viewMetrics(this.viewport.width, this.viewport.height).qualityRows)
       this.syncEmbeddedAudio()
       return
     }
@@ -1507,16 +1551,13 @@ export class Runtime {
   private applyOptions(): void {
     const q = this.qualities[this.qIdx]
     const picked = this.audios.filter((a) => a.selected)
-    const tracks = (
-      picked.length
-        ? picked
-        : this.audios.filter((a) => a.isDefault).slice(0, 1)
-    ).filter(a => !a.embedded).map((a) => ({
+    const tracks = selectAudioTracks(this.audios, picked.map(a => a.id)).map((a) => ({
       id: a.id,
       label: a.label,
       lang: a.lang,
       vid: a.vid,
       codec: a.codec,
+      isDefault: a.isDefault,
     }))
     const a = this.audios[this.audioIdx]
     for (const t of this.pending) {
@@ -1542,18 +1583,25 @@ export class Runtime {
   }
 
   private updateTMDB(k: string): void {
+    k = k.toLowerCase()
     if (k === 'r') {
-      void this.afterQuality()
+      void this.matchTMDB()
       return
     }
     if (k === 'esc') {
+      this.requestGeneration++
+      this.searching = false
       this.scene = 'quality'
       return
     }
     if (k === 's') {
+      this.requestGeneration++
+      this.searching = false
       this.scene = 'confirm'
+      this.say('已跳过 TMDB 匹配，请检查命名示例')
       return
     }
+    if (this.searching) return
     if (this.tmdbHits.length && (k === 'j' || k === 'down'))
       this.cursor = (this.cursor + 1) % this.tmdbHits.length
     else if (this.tmdbHits.length && (k === 'k' || k === 'up'))
@@ -1561,6 +1609,7 @@ export class Runtime {
         (this.cursor - 1 + this.tmdbHits.length) % this.tmdbHits.length
     else if (k === 'enter' && this.tmdbHits[this.cursor]) {
       const h = this.tmdbHits[this.cursor]
+      this.setTitleKind(h.kind)
       for (const t of this.pending) {
         t.tmdbId = h.id
         t.year = h.year
@@ -1569,6 +1618,7 @@ export class Runtime {
         if (h.name) t.series = h.name
       }
       this.scene = 'confirm'
+      this.say(`已匹配${h.kind === 'movie' ? '电影' : '剧集'}：${h.name || h.title}`, 'ok')
     }
   }
 
@@ -1578,15 +1628,34 @@ export class Runtime {
 
   private updateSettings(k: string): void {
     const fields = this.settingFields()
+    if (k.toLowerCase() === 'i' || (k === 'esc' && this.settingsExpanded)) {
+      this.settingsExpanded = !this.settingsExpanded
+      this.contentOffset = 0
+      return
+    }
+    if (this.settingsExpanded) {
+      const label = fields[this.setIdx] || ''
+      const lines = settingInfoLines(label, this.settingValue(label)).flatMap(line => wrapLines(line, this.viewport.width - 2))
+      const room = viewMetrics(this.viewport.width, this.viewport.height).scrollRoom
+      this.contentOffset = moveCursor(this.contentOffset, k, Math.max(1, lines.length - room + 1), room)
+      return
+    }
     if (k === 'esc') {
       this.back()
       if (!this.simulated) this.persistConfig()
       return
     }
-    if (fields.length && (k === 'j' || k === 'down'))
-      this.setIdx = (this.setIdx + 1) % fields.length
-    else if (fields.length && (k === 'k' || k === 'up'))
-      this.setIdx = (this.setIdx - 1 + fields.length) % fields.length
+    const group = settingGroup(fields[this.setIdx] || '')
+    const groups = [...new Set(fields.map(settingGroup))]
+    const indices = fields.flatMap((field, index) => settingGroup(field) === group ? [index] : [])
+    if (['left', 'right', 'tab'].includes(k) && groups.length) {
+      const next = groups[(groups.indexOf(group) + (k === 'left' ? groups.length - 1 : 1)) % groups.length]
+      this.setIdx = fields.findIndex(field => settingGroup(field) === next)
+    } else if (indices.length && ['j', 'down', 'k', 'up', 'home', 'end', 'pageup', 'pagedown'].includes(k)) {
+      const key = k === 'j' ? 'down' : k === 'k' ? 'up' : k
+      const index = moveCursor(indices.indexOf(this.setIdx), key, indices.length, viewMetrics(this.viewport.width, this.viewport.height).settingRows)
+      this.setIdx = indices[index]!
+    }
     else if (k === 'enter' || k === ' ' || k === 'space') {
       if (fields[this.setIdx]) void this.openSetting(fields[this.setIdx])
     }
@@ -1810,6 +1879,8 @@ export class Runtime {
     this.editField = f
     this.editValue = this.editSeed(f)
     this.scene = 'edit'
+    if (f === 'TMDB 代理') this.say('填写 HTTP/HTTPS 代理地址；仅用于 TMDB，留空使用默认网络')
+    if (f === '网关代理') this.say('填写 HTTP/HTTPS 代理地址，保存后用于网关请求和隧道；留空直连')
     this.emit()
   }
 
@@ -1855,6 +1926,15 @@ export class Runtime {
       return
     }
     switch (this.editField) {
+      case '网关代理':
+        try { this.cfg.gatewayProxy = normalizeHttpProxy(v) }
+        catch (e) {
+          this.say(e instanceof Error ? e.message : '代理地址格式无效', 'warn')
+          this.emit()
+          return
+        }
+        this.restartTunnel()
+        break
       case '网关':
         this.discovery.clear()
         this.keyInfo = null
@@ -1893,6 +1973,14 @@ export class Runtime {
       case 'TMDB Key':
         this.cfg.tmdbKey = v
         break
+      case 'TMDB 代理':
+        try { this.cfg.tmdbProxy = normalizeTmdbProxy(v) }
+        catch (e) {
+          this.say(e instanceof Error ? e.message : '代理地址格式无效', 'warn')
+          this.emit()
+          return
+        }
+        break
       case '腾讯 TV 设备 ID': this.cfg.tencentTVDevice = v; break
       case '腾讯 TV QUA': this.cfg.tencentTVQUA = v; break
       case '腾讯 TV 版本': this.cfg.tencentTVVersion = v; break
@@ -1913,6 +2001,22 @@ export class Runtime {
 
   private isMovie(): boolean {
     return this.detailInfo?.kind === 'movie'
+  }
+
+  private setTitleKind(kind: TitleKind): void {
+    if (this.detailInfo) this.detailInfo.kind = kind
+    for (const task of this.pending) {
+      task.kind = kind
+      if (kind === 'movie') {
+        task.season = 0
+        task.episode = 0
+        task.edition = movieEdition(task.title, this.detailTitle)
+      } else {
+        task.season = task.season || 1
+        task.episode = this.eps.find(ep => ep.vid === task.vid)?.number || task.episode || 1
+        task.edition = ''
+      }
+    }
   }
 
   private pickNoun(): string {
@@ -1939,7 +2043,7 @@ export class Runtime {
       year: this.detailInfo?.year ?? 0,
       plot: '',
       kind: movie ? 'movie' : 'show',
-      edition: movie && ep.title && ep.title !== '正片' ? ep.title : '',
+      edition: movie ? movieEdition(ep.title, this.detailTitle) : '',
       languages: ep.languages
         ?.filter((l) => l.vid)
         .map((l) => ({ vid: l.vid, lang: l.lang })),
@@ -2176,41 +2280,9 @@ export class Runtime {
       (this.detailProv === 'youku' || this.detailProv === 'tencent') &&
       this.cfg.tmdbKey.trim()
     ) {
-      try {
-        const hits = await tmdbSearch(
-          this.cfg.tmdbKey,
-          this.cfg.tmdbLang,
-          this.detailTitle,
-          !this.isMovie(),
-        )
-        if (generation !== this.requestGeneration) return
-        {
-          this.tmdbHits = hits.map((h) => ({
-            id: h.id,
-            name: h.name || h.title,
-            title: h.title,
-            year: h.year,
-            overview: h.overview,
-          }))
-          this.cursor = 0
-          this.scene = 'tmdb'
-          this.searching = false
-          this.emit()
-          return
-        }
-      } catch (e) {
-        if (generation !== this.requestGeneration) return
-        this.tmdbHits = []
-        this.cursor = 0
-        this.scene = 'tmdb'
-        this.searching = false
-        this.say(
-          `TMDB: ${e instanceof Error ? e.message : e} · S 跳过 / R 重试`,
-          'warn',
-        )
-        this.emit()
-        return
-      }
+      this.searching = false
+      await this.matchTMDB()
+      return
     }
     if (generation !== this.requestGeneration) return
     this.searching = false
@@ -2218,11 +2290,45 @@ export class Runtime {
     this.emit()
   }
 
+  private async matchTMDB(): Promise<void> {
+    if (this.searching || !this.pending.length) return
+    const generation = this.requestGeneration
+    this.searching = true
+    this.tmdbHits = []
+    this.tmdbState = 'loading'
+    this.tmdbError = ''
+    this.tmdbGeneration = generation
+    this.cursor = 0
+    this.scene = 'tmdb'
+    this.say('正在搜索 TMDB 电影和剧集… · S 跳过 / Esc 返回')
+    this.emit()
+    try {
+      const hits = await this.work(() => tmdbSearch(this.cfg.tmdbKey, this.cfg.tmdbLang, this.detailTitle, { proxy: this.cfg.tmdbProxy }))
+      if (generation !== this.requestGeneration) return
+      this.tmdbHits = hits
+      this.tmdbState = 'ready'
+      this.say(hits.length
+        ? `${hits.length} 个候选 · 回车采用类型和片名，S 跳过`
+        : 'TMDB 未找到匹配影片 · S 跳过 / R 重试 / Esc 返回', hits.length ? 'ok' : 'warn')
+    } catch (e) {
+      if (generation !== this.requestGeneration) return
+      this.tmdbState = 'error'
+      this.tmdbError = e instanceof Error ? e.message : 'TMDB 搜索失败'
+      this.say(`${this.tmdbError} · S 跳过 / R 重试`, 'warn')
+    } finally {
+      if (generation === this.requestGeneration) {
+        this.searching = false
+        this.emit()
+      }
+    }
+  }
+
   private enqueueAll(tasks: DlTask[]): void {
     if (!this.cli || !tasks.length) return
+    const added = []
     for (const t of tasks) {
       const id = nextJobID()
-      this.jobs.push({
+      added.push({
         id,
         title: jobTitle(t),
         status: '排队',
@@ -2232,6 +2338,7 @@ export class Runtime {
       })
       if (!this.simulated) this.hub.enqueue({ ...this.cfg }, this.cli, id, t)
     }
+    this.jobs.unshift(...added)
     this.pending = []
     this.pushNavigation('detail', this.detailCursor)
     this.cursor = 0
@@ -2429,7 +2536,7 @@ export class Runtime {
     this.emit()
   }
 
-  private async downloadYoukuLink(vid: string): Promise<void> {
+  private async downloadYoukuLink(vid: string, row?: Row): Promise<void> {
     if (!this.cli || this.busy) return
     if (!this.has('youku')) {
       this.say('当前 Key 没有优酷权限', 'warn')
@@ -2453,8 +2560,8 @@ export class Runtime {
     if (this.scene !== origin || generation !== this.requestGeneration) return
     this.detailProv = 'youku'
     this.detailId = vid
-    this.detailTitle = asString(data.title) || `优酷视频 ${vid}`
-    this.detailInfo = parseDetail(data, 'youku', this.detailTitle)
+    this.detailTitle = asString(data.title) || row?.title || `优酷视频 ${vid}`
+    this.detailInfo = parseDetail(data, 'youku', this.detailTitle, row?.mediaKind)
     const episode = parseEps(data).find((ep) => ep.vid === vid)
     this.episodeCatalog = []
     this.episodeGroup = ''
@@ -2530,7 +2637,7 @@ export class Runtime {
         duration: 0,
         vip: false,
         drm: '',
-        kind: links.length >= 2 ? 'movie' : 'show',
+        kind: mediaKindFromMetadata(data) ?? 'show',
         year: 0,
       }
       this.cursor = 0
@@ -2550,7 +2657,7 @@ export class Runtime {
     this.emit()
   }
 
-  private async detail(provider: string, id: string, focusVid = ''): Promise<void> {
+  private async detail(provider: string, id: string, focusVid = '', kindHint?: TitleKind): Promise<void> {
     if (!this.cli) return
     const generation = ++this.requestGeneration
     const trimmed = id.trim()
@@ -2577,7 +2684,7 @@ export class Runtime {
       this.episodeCatalog = parseEps(data)
       this.episodeGroup = this.episodeCatalog.find(e => e.vid === focusVid)?.collection ?? episodeCollections(this.episodeCatalog)[0] ?? ''
       this.eps = this.episodeGroup ? this.episodeCatalog.filter(e => e.collection === this.episodeGroup) : this.episodeCatalog
-      this.detailInfo = parseDetail(data, provider, this.detailTitle)
+      this.detailInfo = parseDetail(data, provider, this.detailTitle, kindHint)
       await this.applyMovieEditions(provider, data)
       if (generation !== this.requestGeneration) return
       this.cursor = Math.max(0, this.eps.findIndex(e => e.vid === focusVid))
@@ -2843,6 +2950,7 @@ function parseSearch(provider: string, data: Record<string, unknown>): Row[] {
       title,
       id,
       sub: provider,
+      mediaKind: mediaKindFromMetadata(it),
       desc:
         firstStr(it, 'subtitle', 'desc') ||
         firstStr(meta, 'subTitle', 'subtitle', 'desc'),
@@ -2874,6 +2982,7 @@ function parseDetail(
   data: Record<string, unknown>,
   provider: string,
   fallbackTitle: string,
+  kindHint?: TitleKind,
 ): Detail {
   const raw = isObj(data.raw) ? data.raw : {}
   const title = asString(data.title) || asString(raw.title) || fallbackTitle
@@ -2903,7 +3012,7 @@ function parseDetail(
     duration: anyInt(data.duration) || anyInt(raw.duration),
     vip: data.is_vip === true || raw.is_vip === true,
     drm,
-    kind: /电影/.test(category) ? 'movie' : 'show',
+    kind: mediaKindFromMetadata(data) ?? kindHint ?? 'show',
     year: anyInt(data.year) || anyInt(raw.year),
   }
 }

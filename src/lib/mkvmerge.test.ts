@@ -68,3 +68,13 @@ test('codec names are not ISO languages', () => {
   expect(mkvLang('普通话')).toBe('chi')
 })
 
+test('the chosen audio gets the only MKV default flag even when it is not first', () => {
+  const args = mkvmergeMuxArgs('out.mkv', 'v.mp4', [
+    { path: 'mandarin.mp4', isDefault: false },
+    { path: 'minnan.mp4', isDefault: true },
+    { path: 'other.mp4', isDefault: false },
+  ])
+  expect(args.flatMap((a, i) => a === '--default-track' ? [args[i + 1]] : [])).toEqual(['0:0', '0:1', '0:0'])
+  const fallback = mkvmergeMuxArgs('out.mkv', 'v.mp4', [{ path: 'a.mp4', isDefault: false }])
+  expect(fallback[fallback.indexOf('--default-track') + 1]).toBe('0:1')
+})

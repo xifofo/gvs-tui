@@ -51,7 +51,8 @@ import {
   isMovieDetail,
   logWindow,
   resultWindow,
-  sliceList,
+  jobLayout,
+  jobWindow,
   tmdbWindow,
   workspaceSections,
 } from './lib/view'
@@ -129,10 +130,10 @@ onKeyDown((event) => {
   }
 
   // Platform switch:
-  // - Alt/⌥+1..5: Mac Option sets event.option; many terminals send ESC+digit as event.meta
-  // - Ctrl+1..5: Windows Terminal often steals Alt+digit for tab switching
+  // - Alt/⌥+1..7: Mac Option sets event.option; many terminals send ESC+digit as event.meta
+  // - Ctrl+1..7: Windows Terminal often steals Alt+digit for tab switching
   // - Never ⌘/super+digit (iTerm/VS Code/Finder window switching)
-  const digit = ['1', '2', '3', '4', '5'].includes(name)
+  const digit = ['1', '2', '3', '4', '5', '6', '7'].includes(name)
   const altLike = !!(event.option || event.meta) && !event.super
   const platformShortcut = digit && (altLike || event.ctrl)
   if (platformShortcut || /^f[1-4]$/.test(name)) {
@@ -221,7 +222,7 @@ const logView = computed(() =>
 )
 /** The jobs list's own window, exposed so the status line can report its range. */
 const jobView = computed(() =>
-  sliceList(jobs.value, state.value.cursor, Math.max(1, bodyH.value - 3)),
+  jobWindow(jobs.value, state.value.cursor, jobLayout(bodyW.value, bodyH.value).rows),
 )
 
 const busyLabel = computed(() => {
@@ -306,16 +307,25 @@ const statusLeftW = computed(() =>
 )
 
 const hints = computed((): Array<[string, string]> => {
+  if (state.value.scene === 'tmdb') {
+    if (state.value.tmdbState === 'loading' || (state.value.busy && !state.value.tmdbHits?.length))
+      return [['s', '跳过'], ['esc', '返回画质']]
+    if (state.value.tmdbState === 'error' || !state.value.tmdbHits?.length)
+      return [['r', '重试'], ['s', '跳过'], ['esc', '返回画质']]
+  }
   if (state.value.scene === 'quality' && !audios.value.length)
     return [
       ['⏎', '继续'],
       ['↑↓', '选档'],
       ['esc', '返回'],
     ]
+  if (state.value.scene === 'quality' && audioTab(state.value))
+    return [['空格', '勾选'], ['↑↓', '音轨'], ['←→', '画质'], ['⏎', '继续'], ['esc', '返回']]
   if (state.value.scene === 'detail' && isMovie.value)
     return [
       ['⏎', '下一步'],
       ['空格', '勾选'],
+      ...(['youku', 'tencent'].includes(state.value.detailProvider || '') ? [['m', '类型'] as [string, string]] : []),
       ['a/c', '全选/清'],
       ['esc', '返回'],
     ]
@@ -380,6 +390,8 @@ function crumbChunks(cells: number): TextChunk[] {
   const parts =
     step < 0
       ? [[SCENE_TITLES[scene] ?? 'GVS', c.text, true] as const]
+      : displayWidth(FLOW.map(id => SCENE_TITLES[id]).join(' › ')) > cells - used
+        ? [[SCENE_TITLES[scene]!, c.accent, true] as const]
       : FLOW.map((id, i) => [SCENE_TITLES[id]!, i === step ? c.accent : i < step ? c.dim : c.faint, i === step] as const)
   parts.forEach(([title, color, strong], i) => {
     push(`${i ? ' › ' : ''}${title}`, color, strong)

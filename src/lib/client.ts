@@ -1,6 +1,6 @@
 import { truncate } from './util.ts'
 import type { FileConfig } from './config.ts'
-import { fetchRemote } from './proxy.ts'
+import { fetchGateway } from './proxy.ts'
 import { runLog, summarizeInput, summarizeResult } from './runlog.ts'
 import { TencentOperations, type TencentOperation } from './tencent-operations.ts'
 import { randomUUID } from 'node:crypto'
@@ -40,15 +40,31 @@ export class GwClient {
   host: string
   key: string
   /** 读当前配置；给抖音请求自动带上 Dy-Cookie（调用方不用逐处传 extra）。 */
-  private cfgOf?: () => FileConfig
+  private cfgOf?: () => FileConfig | undefined
+  private proxyOf: () => string | undefined = () => undefined
   private operations?: TencentOperations
   private operationScope = ''
   private diagnosticJobID = ''
+  private readonly source: 'tui_process' | 'electron_process'
 
-  constructor(host: string, key: string, cfgOf?: () => FileConfig, private readonly source: 'tui_process' | 'electron_process' = 'tui_process') {
+  constructor(host: string, key: string, cfgOf?: (() => FileConfig | string | undefined) | string, source: 'tui_process' | 'electron_process' = 'tui_process') {
     this.host = host.replace(/\/+$/, '')
     this.key = key
-    this.cfgOf = cfgOf
+    this.source = source
+    if (typeof cfgOf !== 'function') {
+      const fixed = cfgOf ?? ''
+      this.proxyOf = () => fixed
+      return
+    }
+    this.cfgOf = () => {
+      const value = cfgOf()
+      return value && typeof value === 'object' ? value : undefined
+    }
+    this.proxyOf = () => {
+      const value = cfgOf()
+      if (typeof value === 'string') return value
+      return value?.gatewayProxy
+    }
   }
 
   private operationTracker(): TencentOperations {
@@ -66,7 +82,7 @@ export class GwClient {
   forkTencentJob(jobID: number, vid: string): GwClient {
     const child = new GwClient(this.host, this.key, this.cfgOf, this.source)
     child.diagnosticJobID = String(jobID)
-    if (!this.cfgOf?.().tencentObservations && process.env.GVS_TENCENT_OBSERVE !== '1') return child
+    if (!this.cfgOf?.()?.tencentObservations && process.env.GVS_TENCENT_OBSERVE !== '1') return child
     child.operations = this.operationTracker().fork(String(jobID), vid, async input => {
       const envelope = await child.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, undefined, 5000)
       return (envelope.data ?? {}) as Record<string, unknown>
@@ -116,7 +132,7 @@ export class GwClient {
       opts?.timeoutMs ??
       (provider === 'tencent' && action === 'play' ? TENCENT_PLAY_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
     if (provider === 'douyin' && !extra?.['Dy-Cookie']) {
-      const ck = this.cfgOf?.().douyinCookie
+      const ck = this.cfgOf?.()?.douyinCookie
       if (ck) extra = { ...extra, 'Dy-Cookie': ck }
     }
     const diagnosticOperation = operation?.id || randomUUID()
@@ -181,7 +197,7 @@ export class GwClient {
     const timer = setTimeout(() => ac.abort(), timeoutMs)
     let res: Response
     try {
-      res = await fetchRemote(`${this.host}${path}`, { method, headers, body: payload, signal: ac.signal })
+      res = await fetchGateway(`${this.host}${path}`, { method, headers, body: payload, signal: ac.signal }, this.proxyOf() ?? '')
     } finally {
       clearTimeout(timer)
     }

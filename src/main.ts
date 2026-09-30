@@ -1,6 +1,8 @@
 import { reexecWithoutProxy } from './lib/proxy.ts'
+import { requestStartupTerminalSize } from './lib/terminal-size.ts'
 
 await reexecWithoutProxy()
+await requestStartupTerminalSize()
 
 // Root/runtime fetch on import. Static import would run before HTTP_PROXY is stripped.
 const { createApp } = await import('vue-termui')

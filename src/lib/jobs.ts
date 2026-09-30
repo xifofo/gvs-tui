@@ -14,7 +14,7 @@ import { audioTrackLabel, ffmpegDecryptCopy, ffmpegRemux, validateAudio } from '
 import { mkvmergeMux, mkvmergeRemux, type MuxAudio } from './mkvmerge.ts'
 import { ensureFFmpeg, ensureMkvmerge, ensureMP4Box } from './tools.ts'
 import { isDtsAudio, mp4boxMux, readMp4Tracks } from './mp4box.ts'
-import { filename, folder, sourceTag } from './name.ts'
+import { episodeTitle, filename, folder, sourceTag } from './name.ts'
 import type { MediaKind, Naming } from './name.ts'
 import { writeEpisodeNFO, writeTvShowNFO } from './nfo.ts'
 import {
@@ -41,7 +41,7 @@ export type DlTask = {
   /** Tencent TV caption soft|hard */
   caption?: string
   /** Audio tracks to mux in (空格勾选的那些）；空 = 只封平台默认音轨。 */
-  audioTracks?: Array<{ id: string; label: string; lang: string; vid?: string; codec?: string }>
+  audioTracks?: Array<{ id: string; label: string; lang: string; vid?: string; codec?: string; isDefault?: boolean }>
   group: string
   codec: string
   tmdbId: number
@@ -108,7 +108,20 @@ export function tencentCipher(payload: Record<string, unknown>): HlsCipher | und
     const why = asString(drm.note)
     throw new Error(`腾讯该集已加密（enc=${enc}），但网关没有返回可用密钥${why ? `：${why}` : ''}`)
   }
+  if (cipherBytesAllZero(key) || cipherBytesAllZero(iv)) {
+    const unverified = drm.playback_verified === false ? '，且网关未验证该地址可播放' : ''
+    throw new Error(`腾讯该集的解密参数无效（密钥或 IV 全为零）${unverified}`)
+  }
   return { method: 'CHACHA20', key, iv }
+}
+
+/** Hex or base64 material that decodes to only 0x00. A blank key still "decrypts" into garbage ffmpeg cannot open. */
+function cipherBytesAllZero(value: string): boolean {
+  const raw = value.trim()
+  const bytes = /^[a-f\d]+$/i.test(raw) && raw.length % 2 === 0
+    ? Buffer.from(raw, 'hex')
+    : Buffer.from(raw, 'base64')
+  return bytes.length > 0 && bytes.every((b) => b === 0)
 }
 
 let jobSeq = 0
@@ -238,8 +251,33 @@ export function jobTitle(t: DlTask): string {
     return title
   }
   let title = `${t.series} E${String(t.episode).padStart(2, '0')}`
+  const subtitle = episodeTitle(t.title, t.series, t.nameDots)
+  if (subtitle) title += ` ${subtitle}`
   if (t.quality) title += ` ${t.quality}`
   return title
+}
+
+/** The confirmation preview and the downloader use the same naming fields. */
+export function jobNaming(t: DlTask, cfg: FileConfig): Naming {
+  return {
+    kind: t.kind ?? (t.provider === 'hongguo' || t.provider === 'huangguo' || t.provider === 'douyin' ? 'short' : 'show'),
+    title: t.series || t.title,
+    nameDots: t.nameDots,
+    year: t.year,
+    season: t.season,
+    episode: t.episode,
+    episodeTitle: t.title,
+    height: t.height,
+    codec: t.codec || 'H264',
+    edition: t.edition,
+    collection: t.collection,
+    source: sourceTag(t.provider),
+    group: t.provider === 'douyin' ? '' : (t.group.trim() || cfg.releaseGroup),
+    tmdbId: t.tmdbId,
+    container: t.provider === 'douyin' || (t.provider === 'youku' && t.audioTracks?.some(isDtsAudio))
+      ? 'mp4' : t.provider === 'hongguo' && cfg.hongguoFmt ? cfg.hongguoFmt
+        : t.provider === 'huangguo' && cfg.huangguoFmt ? cfg.huangguoFmt : 'mkv',
+  }
 }
 
 async function runTask(
@@ -266,25 +304,7 @@ async function runTask(
   let succeeded = false
   try {
     signal?.throwIfAborted()
-    const kind: MediaKind = t.kind ?? (t.provider === 'hongguo' || t.provider === 'huangguo' || t.provider === 'douyin' ? 'short' : 'show')
-    const n: Naming = {
-      kind,
-      title: t.series || t.title,
-      nameDots: t.nameDots,
-      year: t.year,
-      season: t.season,
-      episode: t.episode,
-      height: t.height,
-      codec: t.codec || 'H264',
-      edition: t.edition,
-      collection: t.collection,
-      source: sourceTag(t.provider),
-      group: t.provider === 'douyin' ? '' : (t.group.trim() || cfg.releaseGroup),
-      tmdbId: t.tmdbId,
-      container: t.provider === 'douyin' || (t.provider === 'youku' && t.audioTracks?.some(isDtsAudio))
-        ? 'mp4' : t.provider === 'hongguo' && cfg.hongguoFmt ? cfg.hongguoFmt
-          : t.provider === 'huangguo' && cfg.huangguoFmt ? cfg.huangguoFmt : 'mkv',
-    }
+    const n = jobNaming(t, cfg)
     dir = t.provider === 'douyin' ? cfg.outDir : folder(n, cfg.outDir)
     mkdirSync(dir, { recursive: true })
     out = join(dir, filename(n))
@@ -301,7 +321,7 @@ async function runTask(
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
       case 'mewatch': case 'hamivideo':
-        await dlManifestProvider(cli, cfg, t, out, emit, retryNote, work, signal)
+        await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
         break
       case 'hongguo':
         await dlHongguo(cli, t, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads, work, signal)
@@ -646,8 +666,13 @@ async function dlTencent(
       // Audio playlists share the play response's key but may be clear; decide per track.
       const audioURL = await firstLivePlaylist(audio.urls, referer('tencent'), signal)
       const audioCipher = cipher && await hlsSegmentsEncrypted(audioURL, referer('tencent'), signal) ? cipher : undefined
-      await downloadProgress(audioURL, dest, referer('tencent'), speedCB(emit, '音轨', base, base + span), retryNote, cfg.threads, audioCipher, undefined, signal)
-      mux.push({ path: dest, title: audio.label, lang: audio.lang })
+      await downloadProgress(audioURL, dest, referer('tencent'), speedCB(emit, '音轨', base, span), retryNote, cfg.threads, audioCipher, undefined, signal)
+      mux.push({ path: dest, title: audio.label, lang: audio.lang, isDefault: audio.isDefault })
+    }
+    const ffmpeg = await ensureFFmpeg()
+    for (const input of mux) {
+      const probed = await audioTrackLabel(ffmpeg, input.path)
+      input.title = muxTrackTitle(input.lang ?? '', probed)
     }
     emit('封装', 0.86, out)
     const repairs: string[] = []
@@ -664,6 +689,10 @@ async function dlTencent(
       for (const path of temps) {
         try { unlinkSync(path) } catch { /* keep */ }
       }
+    }
+    // Mux writes a timestamp report beside the finished file. Tencent has no use for the sidecar.
+    if (done) {
+      try { unlinkSync(`${out}.timing.json`) } catch { /* already gone */ }
     }
   }
 }
@@ -825,7 +854,7 @@ async function dlYouku(
         'audio',
         track.id,
       )
-      muxInputs.push({ path: audioPath, title: track.label, lang: track.lang })
+      muxInputs.push({ path: audioPath, title: track.label, lang: track.lang, isDefault: track.isDefault })
       muxDts.push(isDtsAudio(track))
     }
   }
@@ -1000,11 +1029,20 @@ async function playYouku(cli: GwClient, cfg: FileConfig, t: DlTask, vid = t.vid)
 export function patchJob(jobs: Job[], e: JobEvt): void {
   const row = jobs.find((j) => j.id === e.id)
   if (!row) return
+  if (e.status !== '失败' && e.status !== '重试') row.phase = e.status
+  else row.phase ||= row.status
   row.status = e.status
   row.pct = e.pct
   row.log = e.log
   row.err = e.err
   if (e.done) row.note = e.note ?? ''
+}
+
+/** mkv track name from the probed codec. Platform slogans stay off the file. */
+export function muxTrackTitle(lang: string, probed: string): string {
+  const language = lang.trim()
+  if (!language || language === '原声' || language === '—' || language === '-') return probed
+  return `${language} ${probed}`
 }
 
 /**
@@ -1014,9 +1052,9 @@ export function patchJob(jobs: Job[], e: JobEvt): void {
  * episodes do not mux episode-1 audio over episode-N video.
  */
 export function bindYoukuAudioTracksToTask(
-  tracks: Array<{ id: string; label: string; lang: string; vid?: string }>,
+  tracks: NonNullable<DlTask['audioTracks']>,
   task: Pick<DlTask, 'vid' | 'languages'>,
-): Array<{ id: string; label: string; lang: string; vid?: string }> {
+): NonNullable<DlTask['audioTracks']> {
   return tracks.map((track) => {
     const streamType = youkuAudioStreamType(track.id)
     const byLang = (task.languages ?? []).find((l) => {
@@ -1029,9 +1067,8 @@ export function bindYoukuAudioTracksToTask(
       ? (langKey ? `${targetVid}|${streamType}|${langKey}` : `${targetVid}|${streamType}`)
       : targetVid
     return {
+      ...track,
       id,
-      label: track.label,
-      lang: track.lang,
       vid: targetVid,
     }
   })
@@ -1074,7 +1111,7 @@ export function youkuAudioFetchPlan(
 }
 
 /** Media is fetched on this client; gateway traffic is limited to resolve calls. */
-async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, note: RetryNote, work: string, signal?: AbortSignal): Promise<void> {
+async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, work: string, signal?: AbortSignal): Promise<void> {
   const sources = await resolveManifest(cli, cfg, t.provider, t.vid, t.quality || 'auto')
   signal?.throwIfAborted()
   const source = sources[0]!
@@ -1084,5 +1121,5 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
     throw new Error('该源不是已接入的 DASH/HLS 清单；拒绝伪装封装格式')
   }
   emit('下载', 0.05, '源站 CDN → 本机；网关不转发视频')
-  await downloadPlaylist({ src: source.url, dest: out, ref, headers: source.headers, clear: true, threads: cfg.threads, select: 'muxed', transport: 're', workDir: work, workTag: 'manifest', signal, cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.9 * p, info?.log || '本机直连 CDN') } })
+  await writeFinal(out, dest => downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, threads: cfg.threads, select: 'muxed', muxTracks: true, transport: 're', workDir: work, workTag: 'manifest', signal, cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.9 * p, info?.log || '本机直连 CDN') } }))
 }

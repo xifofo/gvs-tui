@@ -282,23 +282,35 @@ export function pickDouyinURL(data: Record<string, unknown>): string {
   return fallback
 }
 
+export type SpeedInfo = { log?: string; segments?: { done: number; total: number } }
+
+/** Byte totals are file sizes. A total of 1 is the HLS 0–1 ratio, not 1 byte. */
+export function formatSpeed(n: number, total: number, elapsedSec: number, info?: SpeedInfo): string {
+  if (info?.log) return info.log
+  if (total > 1) {
+    const spd = elapsedSec > 0.2 ? n / elapsedSec : 0
+    return `${human(n)}/${human(total)}  ${human(spd)}/s`
+  }
+  const segments = info?.segments
+  if (segments && segments.total > 0) return `${segments.done}/${segments.total} 段 · 速度未知`
+  return '速度未知'
+}
+
 export function speedCB(
   emit: (status: string, pct: number, log: string) => void,
   status: string,
   base: number,
   span: number,
-): (n: number, total: number) => void {
+): (n: number, total: number, info?: SpeedInfo) => void {
   const start = Date.now()
   let last = 0
-  return (n, total) => {
+  return (n, total, info) => {
     const now = Date.now()
     if (last && now - last < 250 && (total <= 0 || n < total)) return
     last = now
     let p = base
     if (total > 0) p = base + span * n / total
-    const sec = (now - start) / 1000
-    const spd = sec > 0.2 ? n / sec : 0
-    emit(status, p, `${human(n)}/${total > 0 ? human(total) : '?'}  ${human(spd)}/s`)
+    emit(status, p, formatSpeed(n, total, (now - start) / 1000, info))
   }
 }
 
@@ -557,12 +569,13 @@ async function downloadParallel(
   cb?.(total, total)
 }
 
-function pickREOutput(dir: string): string {
+function pickREOutput(dir: string, muxed = false): string {
   const skip: Record<string, true> = { '.json': true, '.txt': true, '.log': true, '.m3u8': true, '.mpd': true }
   let best = ''
   let bestN = 0
   for (const name of readdirSync(dir)) {
     const ext = name.slice(name.lastIndexOf('.')).toLowerCase()
+    if (muxed && ext !== '.mkv') continue
     if (skip[ext]) continue
     const p = join(dir, name)
     try {
@@ -588,7 +601,7 @@ export function cleanRELog(s: string): string {
 }
 
 /** Percentages may be split across pipe chunks or repeated by terminal redraws. */
-export function reProgress(cb?: (n: number, total: number) => void): (chunk: string) => void {
+export function reProgress(cb?: (n: number, total: number, segments?: { done: number; total: number }) => void): (chunk: string) => void {
   let tail = ''
   let last = 0
   return (chunk) => {
@@ -601,15 +614,40 @@ export function reProgress(cb?: (n: number, total: number) => void): (chunk: str
       const value = Number(match[3])
       if (!total || done > total || value > 100) continue
       const pct = Math.min(0.99, done / total)
-      if (pct > last) { last = pct; cb?.(pct, 1) }
+      if (pct > last) { last = pct; cb?.(pct, 1, { done, total }) }
     }
     tail = text.split(/[\r\n]/).at(-1)?.slice(-2048) ?? ''
   }
 }
 
 export type PlaylistPhase = 'download' | 'merge' | 'decrypt'
-export type PlaylistProgress = { phase: PlaylistPhase; log?: string }
+export type PlaylistProgress = { phase: PlaylistPhase; log?: string; segments?: { done: number; total: number } }
 export type ProgressCB = (n: number, total: number, info?: PlaylistProgress) => void
+
+/** RE's noninteractive console emits no intermediate progress. Count finished
+ * fragment files against its selected-stream metadata; in-flight .tmp files
+ * never count, and merge/decrypt phases continue using their byte monitors. */
+export function reDownloadedSegments(dir: string): { done: number; total: number } | undefined {
+  try {
+    const root = join(dir, 'download')
+    const streams: unknown = JSON.parse(readFileSync(join(root, 'meta_selected.json'), 'utf8').replace(/^\uFEFF/, ''))
+    if (!Array.isArray(streams)) return
+    let total = 0
+    for (const stream of streams.filter(isObj)) {
+      const playlist = isObj(stream.Playlist) ? stream.Playlist : {}
+      for (const part of Array.isArray(playlist.MediaParts) ? playlist.MediaParts.filter(isObj) : [])
+        total += Array.isArray(part.MediaSegments) ? part.MediaSegments.length : 0
+      if (isObj(playlist.MediaInit)) total++
+    }
+    if (!total) return
+    let done = 0
+    for (const name of readdirSync(root, { recursive: true }) as string[]) {
+      const leaf = basename(name)
+      if (/^(?:\d+|_init)\.(?:ts|m4s|mp4|m4a|clip|webm)$/.test(leaf) && fileSize(join(root, name)) > 0) done++
+    }
+    return { done: Math.min(done, total), total }
+  } catch { /* metadata appears only after parsing; a retry can replace it */ }
+}
 
 function fileSize(path: string): number {
   try {
@@ -740,6 +778,9 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     cwd,
     env: {
       ...process.env,
+      // Spectre recognizes this as a noninteractive environment. A redirected
+      // macOS console can report height -1 and crash its live progress renderer.
+      TF_BUILD: 'true',
       DOTNET_SYSTEM_NET_HTTP_SOCKETSHTTPHANDLER_HTTP2SUPPORT: 'false',
       ...(cwd ? { TMP: cwd, TEMP: cwd, TMPDIR: cwd } : {}),
     },
@@ -768,7 +809,12 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     if (phase === 'decrypt' && !decryptAt) decryptAt = Date.now()
   }
   const emitSidecar = () => {
-    if (!cb || !cwd || phase === 'download') return
+    if (!cb || !cwd) return
+    if (phase === 'download') {
+      const segments = reDownloadedSegments(cwd)
+      if (segments) cb(Math.min(0.99, segments.done / segments.total), 1, { phase, segments })
+      return
+    }
     const side = reSidecarProgress(cwd, phase)
     let log = side.log
     if (phase === 'decrypt' && side.ratio === 0 && decryptAt) {
@@ -776,7 +822,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     }
     cb(side.ratio, 1, { phase, log })
   }
-  const progress = reProgress((n, total) => cb?.(n, total, { phase: 'download' }))
+  const progress = reProgress((n, total, segments) => cb?.(n, total, { phase: 'download', segments }))
   const collect = (chunk: string) => {
     output = (output + chunk).slice(-16384)
     bumpPhase(reWorkPhase(chunk))
@@ -895,6 +941,8 @@ export async function downloadPlaylist(opts: {
   threads?: number
   cb?: ProgressCB
   select?: 'video' | 'audio' | 'muxed'
+  /** Combine separate audio/video from a clear master HLS or DASH into MKV. */
+  muxTracks?: boolean
   /** Use the original JS CDN transport while RE handles HLS/merge/decryption. */
   transport?: 'node' | 're'
   refreshSource?: () => Promise<{ src: string; key?: string }>
@@ -978,14 +1026,18 @@ export async function downloadPlaylist(opts: {
       ...(opts.select === 'muxed' ? ['--drop-subtitle', 'all'] : []),
       '--binary-merge',
       '--del-after-done', 'true',
-      '--no-ansi-color',
-      '--force-ansi-console',
+      // Keep RE's redirected-output detection. Its forced ANSI/NonAnsiWriter
+      // console assumes a screen height and can crash when stdout is a pipe.
       '--disable-update-check',
       '--log-file-path', logFile,
       '--thread-count', String(threads),
       '--download-retry-count', String(opts.refreshSource ? 0 : MAX_ATTEMPTS - 1),
       ...(opts.refreshSource ? ['--http-request-timeout', '360'] : []),
     ]
+    if (opts.muxTracks) {
+      const mkvmerge = await ensureMkvmerge()
+      args.push('--mux-after-done', `format=mkv:muxer=mkvmerge:bin_path="${mkvmerge.replaceAll(':', '\\:')}"`)
+    }
     if (ffmpeg) args.push('--ffmpeg-binary-path', ffmpeg)
     if (relay) args.push('--use-system-proxy', 'false')
     if (opts.cipher) args.push('--custom-hls-method', opts.cipher.method, '--custom-hls-key', opts.cipher.key, '--custom-hls-iv', opts.cipher.iv)
@@ -1016,7 +1068,7 @@ export async function downloadPlaylist(opts: {
         if (order.indexOf(info.phase) >= order.indexOf(phase)) phase = info.phase
       }
       progress = Math.max(progress, Math.min(0.99, playlistOverall(phase, frac, decrypts)))
-      opts.cb?.(progress, 1, { phase, log: info?.log })
+      opts.cb?.(progress, 1, { phase, log: info?.log, segments: info?.segments })
     }
     for (let slowRestart = 0; ; slowRestart++) {
       try {
@@ -1033,7 +1085,7 @@ export async function downloadPlaylist(opts: {
       }
     }
     opts.signal?.throwIfAborted()
-    let found = pickREOutput(workDir)
+    let found = pickREOutput(workDir, opts.muxTracks)
     if (!found) {
       const status = reHttpFailureMonitor().feed(diagnostics + '\n')
       if (status) throw new CdnDenied(status, '')

@@ -40,8 +40,14 @@ describe('manifest provider client contracts', () => {
     const calls: unknown[] = []; const cli = {invoke:async (...args:unknown[]) => {calls.push(args);return {media:[media]}}} as unknown as GwClient
     const tv = await probeManifest(cli,{hamiClient:'tv'} as FileConfig,'hamivideo','OTT_VOD_1')
     expect(tv.qualities[0]!.stream).toBe('2160')
+    expect(tv.qualities[0]!.tier).toBe(2160)
     const web = await probeManifest(cli,{hamiClient:'web'} as FileConfig,'hamivideo','OTT_VOD_1')
     expect(web.qualities[0]!.stream).toBe('auto'); expect(calls).toHaveLength(2)
+  })
+  test('resolution tiers stay pixel heights across every manifest row', async () => {
+    const cli = {invoke:async () => ({media:[{...media,height:2160},{...media,height:1080},{...media,height:720}]})} as unknown as GwClient
+    const result = await probeManifest(cli,{hamiClient:'tv'} as FileConfig,'hamivideo','OTT_VOD_1')
+    expect(result.qualities.map(q => q.tier)).toEqual([2160,1080,720])
   })
   test('recognizes exact source domains only', () => {
     expect(providerLink('https://hamivideo.hinet.net/product/1')).toEqual({provider:'hamivideo',url:'https://hamivideo.hinet.net/product/1'})

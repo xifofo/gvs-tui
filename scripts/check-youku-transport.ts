@@ -14,7 +14,7 @@ import { createServer } from 'node:http'
 
 const [vid = 'XNjU0MjE4NTc2MA==', quality = 'cmfv5hd4_dolbyvision_hfr_hbr_hq'] = process.argv.slice(2)
 const dir = mkdtempSync(join(tmpdir(), 'youku-transport-ab-'))
-const cfg = loadConfig(), cli = new GwClient(cfg.host, cfg.key), abort = new AbortController()
+const cfg = loadConfig(), cli = new GwClient(cfg.host, cfg.key, cfg.gatewayProxy), abort = new AbortController()
 const ref = referer('youku')
 const headers = {
   'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36',

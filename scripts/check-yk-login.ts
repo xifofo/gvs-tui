@@ -6,7 +6,7 @@ import { loadConfig } from '../src/lib/config.ts'
 import { loginSummary, ykLoginInfo, ykRefresh } from '../src/lib/youku-session.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const sign = cfg.youkuSign
 
 console.log(`网关: ${process.env.PROBE_HOST ?? cfg.host}`)

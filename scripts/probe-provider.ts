@@ -43,7 +43,7 @@ function brief(v: unknown, depth = 0): string {
 }
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const input = inputJson ? (JSON.parse(inputJson) as Record<string, unknown>) : {}
 
 console.log(`→ ${process.env.PROBE_HOST ?? cfg.host}  ${provider}/${action}  ${JSON.stringify(input)}`)

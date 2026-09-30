@@ -19,6 +19,36 @@ export type ListView<T> = {
   rows: Array<{ item: T; index: number }>
 }
 
+/** Jobs list page. Left/right move a whole page; the window stays page-aligned. */
+export const JOB_PAGE_SIZE = 50
+
+/** The page that contains `cursor`, at most {@link JOB_PAGE_SIZE} rows. */
+export function jobWindow<T>(items: T[] | undefined, cursor: number, room = JOB_PAGE_SIZE): ListView<T> {
+  const all = items ?? []
+  const total = all.length
+  const safe = total
+    ? Math.min(Math.max(0, Number.isFinite(cursor) ? Math.floor(cursor) : 0), total - 1)
+    : 0
+  const pageStart = total ? Math.floor(safe / JOB_PAGE_SIZE) * JOB_PAGE_SIZE : 0
+  const pageEnd = Math.min(total, pageStart + JOB_PAGE_SIZE)
+  const size = Math.max(1, Math.min(JOB_PAGE_SIZE, Math.floor(room)))
+  const start = Math.max(pageStart, Math.min(safe - Math.floor(size / 2), pageEnd - size))
+  const view = all.slice(start, Math.min(pageEnd, start + size))
+  return {
+    total,
+    first: total ? start + 1 : 0,
+    last: Math.min(total, start + view.length),
+    rows: view.map((item, offset) => ({ item, index: start + offset })),
+  }
+}
+
+/** Jobs keep 50-item pages, with a visible window that leaves room for status. */
+export function jobLayout(bodyWidth: number, bodyHeight: number) {
+  const side = bodyWidth >= 100 ? Math.max(36, Math.min(48, Math.floor(bodyWidth * 0.32))) : 0
+  const panel = side ? 0 : Math.min(10, Math.max(6, Math.floor(bodyHeight * 0.45)))
+  return { side, panel, rows: Math.max(1, bodyHeight - 3 - (panel ? panel + 1 : 0)) }
+}
+
 /** Window a long list around the cursor, reporting the visible range. */
 export function sliceList<T>(items: T[] | undefined, cursor: number, room: number): ListView<T> {
   const all = items ?? []

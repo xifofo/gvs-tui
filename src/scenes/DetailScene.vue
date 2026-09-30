@@ -10,7 +10,7 @@ import { chipChunks, colsLine, ink, markCol, tabChunks, tabsWidth } from '../lib
 import type { Col } from '../lib/rows.ts'
 import { clip, displayWidth, wrapLines } from '../lib/text.ts'
 import { c } from '../lib/theme.ts'
-import { isMovieDetail } from '../lib/view.ts'
+import { isMovieDetail, sliceList } from '../lib/view.ts'
 import { gridWindow } from '../lib/grid.ts'
 import type { Episode, Snapshot } from '../types.ts'
 
@@ -156,6 +156,7 @@ const rowsAbove = computed(() => {
 })
 
 const gridRows = computed(() => Math.max(1, bodyH.value - rowsAbove.value))
+const editions = computed(() => sliceList(episodes.value, props.state.cursor, Math.max(1, gridRows.value - 1)))
 const view = computed(() =>
   gridWindow(episodes.value.length, props.state.cursor, bodyW.value, gridRows.value),
 )
@@ -247,14 +248,14 @@ function editionLine(ep: Episode, here: boolean): StyledText {
       :marginTop="1"
     >
       <Text
-        v-for="(ep, i) in episodes"
-        :key="ep.vid || i"
+        v-for="entry in editions.rows"
+        :key="entry.item.vid || entry.index"
         :width="bodyW"
         :height="1"
         wrapMode="none"
         :truncate="true"
-        :bg="i === state.cursor ? c.sel : undefined"
-        :content="editionLine(ep, i === state.cursor)"
+        :bg="entry.index === state.cursor ? c.sel : undefined"
+        :content="editionLine(entry.item, entry.index === state.cursor)"
       />
     </Box>
     <EpisodeGrid

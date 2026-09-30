@@ -432,6 +432,8 @@ bun run scripts/check-detect.ts     # TUI 会怎么说（账号行 + 画质页�
   "releaseGroup": "ADWeb",
   "tmdbKey": "",
   "tmdbLang": "zh-CN",
+  "tmdbProxy": "",
+  "gatewayProxy": "",
   "youkuSign": "",
   "tencentCookie": "",
   "hongguoMerge": true,
@@ -443,13 +445,17 @@ bun run scripts/check-detect.ts     # TUI 会怎么说（账号行 + 画质页�
 
 `outDir` 是本机视频目录。留空或仍是旧的 `./downloads` 时，Windows 会改成空间最大的非系统盘下的 `盘符:\GVS`（只有系统盘时用用户「视频」目录）。已经写成绝对路径的不会改。终端在设置里编辑「下载目录」，桌面端在设置里点「更改」，或在第一次连接网关时选文件夹。
 
-TMDB 是客户端直连 `api.themoviedb.org`，不经过网关。优酷/腾讯在填了 `tmdbKey` 时，下载前会刮削。
+`gatewayProxy` 是终端版的网关 API 代理，支持 HTTP/HTTPS 地址。设置里保存后，网关请求和隧道都会走它；启动环境中的 `GVS_PROXY` 优先。显式代理连接失败不会回退直连，本机网关仍直连。桌面端网关走系统代理，不读这个字段。它不影响媒体 CDN 请求。
+
+TMDB 由客户端请求（优先 `api.tmdb.org`，网络失败后尝试 `api.themoviedb.org`），不经过网关。设置 `tmdbProxy` 时仅 TMDB 使用该 HTTP/HTTPS 代理；留空沿用默认网络及 `GVS_PROXY`，不自动读取系统 PAC。显式代理失败不会回退直连。优酷/腾讯在填了 `tmdbKey` 时，下载前通过 `/3/search/multi` 同时匹配电影和剧集，过滤人物结果。候选类型随 `media_type` 返回，用户采用时同步修正任务类型、季集编号和文件名。支持 v3 API Key 或 API Read Access Token。
+
+平台详情的 `kind` / `media_type` / `type` / `category` 等明确类型字段用于初始分类；无类型字段时保留搜索行上的类型。单条正片不代表一定是电影，详情页 `M` 可手动切换，TMDB 选择也可纠正类型。
 
 `youkuSign` 过期时网关会在 0ms 内回 `invalid Yk-Sign`（`needs_relogin`）：取画质/下载会直接失败，
 而不是降级。TUI 遇到这个会**自动清掉本地死签名并重试一次**，仍失败就提示去「设置 → 优酷扫码」。
 手工修也可以：把 `youkuSign` 置空，或重新扫码。
 
-命名例：`NameDots.S01E02.1080p.YK.WEB-DL.H265-ADWeb.mkv`。红果/抖音短剧放在剧名目录下。
+命名例：`NameDots.S01E02.单集标题.1080p.YK.WEB-DL.H265-ADWeb.mkv`。单集标题取自平台详情，在季集编号之后、年份之前；空标题或重复节目名时省略，电影不追加。确认页和下载共用 `jobNaming` / `filename`。红果/抖音短剧放在剧名目录下。
 
 ---
 

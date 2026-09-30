@@ -9,6 +9,8 @@ export type Naming = {
   year: number
   season: number
   episode: number
+  /** 单集标题，放在季集编号后；电影不使用。 */
+  episodeTitle?: string
   height: number
   codec: string
   audio?: string
@@ -62,6 +64,26 @@ export function sanitizePath(s: string): string {
   return out.trim()
 }
 
+/** Keep a meaningful episode title without repeating the programme name. */
+export function episodeTitle(title: string, ...seriesNames: string[]): string {
+  const clean = title.trim().replace(/\s+/g, ' ')
+  if (!/[\p{L}\p{N}]/u.test(clean)) return ''
+  const normalized = dots(clean).toLowerCase()
+  return seriesNames.some(name => name.trim() && dots(name).toLowerCase() === normalized) ? '' : clean
+}
+
+function fitUtf8(text: string, bytes: number): string {
+  let result = ''
+  let used = 0
+  for (const ch of text) {
+    const size = Buffer.byteLength(ch, 'utf8')
+    if (used + size > bytes) break
+    result += ch
+    used += size
+  }
+  return result.replace(/\.+$/, '')
+}
+
 export function folder(n: Naming, outDir: string): string {
   if (n.source === 'HG' || n.source === 'HGO') {
     return join(outDir, sanitizePath(n.title), `season ${Math.max(n.season, 1)}`)
@@ -102,15 +124,24 @@ export function tierHeight(width: number, height: number): number {
 
 export function filename(n: Naming): string {
   const parts: string[] = []
+  const subtitle = episodeTitle(n.episodeTitle || '', n.title, n.nameDots)
+  let subtitleIndex = -1
+  const addSubtitle = () => {
+    if (!subtitle) return
+    subtitleIndex = parts.length
+    parts.push(dots(subtitle))
+  }
   if (n.kind === 'short') {
     parts.push(n.title.trim() || 'episode')
     if (n.season > 0 || n.episode > 0) {
       parts.push(`S${String(Math.max(n.season, 1)).padStart(2, '0')}E${String(Math.max(n.episode, 1)).padStart(2, '0')}`)
+      addSubtitle()
     }
   } else {
     parts.push(n.nameDots || dots(n.title))
     if (n.kind === 'show') {
       parts.push(`S${String(Math.max(n.season, 1)).padStart(2, '0')}E${String(Math.max(n.episode, 1)).padStart(2, '0')}`)
+      addSubtitle()
     }
     if (n.year > 0) parts.push(String(n.year))
     if (n.kind === 'movie' && n.edition) parts.push(dots(n.edition))
@@ -123,7 +154,16 @@ export function filename(n: Naming): string {
   if (n.dv) parts.push('DV')
   if (n.audio) parts.push(n.audio)
   const ext = n.container || 'mkv'
-  const stem = sanitizePath(parts.join('.'))
   const g = n.group.trim()
-  return g ? `${stem}-${sanitizePath(g)}.${ext}` : `${stem}.${ext}`
+  const suffix = `${g ? `-${sanitizePath(g)}` : ''}.${ext}`
+  if (subtitleIndex >= 0) {
+    // Limit only the added subtitle; reserve room for .timing.json sidecars
+    // within the usual 255-byte filename limit, without losing SxxExx or codec.
+    const base = sanitizePath(parts.filter((_, i) => i !== subtitleIndex).join('.')) + suffix
+    const room = Math.max(0, 240 - Buffer.byteLength(base, 'utf8') - 1)
+    const fitted = fitUtf8(parts[subtitleIndex]!, room)
+    if (fitted) parts[subtitleIndex] = fitted
+    else parts.splice(subtitleIndex, 1)
+  }
+  return sanitizePath(parts.join('.')) + suffix
 }

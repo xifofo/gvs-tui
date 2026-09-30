@@ -481,6 +481,21 @@ describe('audiosFromTencent', () => {
 })
 
 describe('tencentAudioDownloadPlan', () => {
+  test('the chosen default survives same-codec substitution on another episode', () => {
+    const plan = tencentAudioDownloadPlan(
+      { audio_tracks: [
+        { id: 'ddp', cname: '杜比音效', codec: 'E-AC-3', playlist_url: 'https://cdn.example/ddp.m3u8' },
+        { id: 'new-aac', cname: '高清音质', codec: 'AAC', playlist_url: 'https://cdn.example/aac.m3u8' },
+      ] },
+      [
+        { id: 'ddp', label: '杜比音效', lang: '原声', codec: 'E-AC-3', isDefault: false },
+        { id: 'old-aac', label: 'AAC', lang: '原声', codec: 'AAC', isDefault: true },
+      ],
+    )
+    expect(plan.files.map(a => a.id)).toEqual(['ddp', 'new-aac'])
+    expect(plan.files.map(a => a.isDefault)).toEqual([false, true])
+  })
+
   test('matches selected ids to playlist urls and names the ones without', () => {
     const plan = tencentAudioDownloadPlan(
       {

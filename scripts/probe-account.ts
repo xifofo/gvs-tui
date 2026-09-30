@@ -6,7 +6,7 @@ import { loadConfig } from '../src/lib/config.ts'
 
 const cfg = loadConfig()
 const host = process.env.PROBE_HOST ?? cfg.host
-const cli = new GwClient(host, cfg.key)
+const cli = new GwClient(host, cfg.key, cfg.gatewayProxy)
 const sign = cfg.youkuSign
 const H = sign ? { 'Yk-Sign': sign } : undefined
 

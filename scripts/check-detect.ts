@@ -7,7 +7,7 @@ import { accountSummary, ykAccount } from '../src/lib/youku-session.ts'
 import { asString, isObj } from '../src/lib/util.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const sign = cfg.youkuSign
 
 console.log('--- 账号行（首页第一行）---')

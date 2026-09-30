@@ -5,7 +5,7 @@ import { loadConfig } from '../src/lib/config.ts'
 import { asString, isObj } from '../src/lib/util.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const vid = process.argv[2] ?? 'XNjM4NTY0ODMwOA=='
 
 for (const expand of ['0', '1']) {

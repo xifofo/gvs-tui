@@ -13,6 +13,33 @@ export function isProxyEnvKey(key: string): boolean {
   return PROXY_KEYS[key.toLowerCase()] === true
 }
 
+export function normalizeHttpProxy(value: string): string {
+  const proxy = value.trim()
+  if (!proxy) return ''
+  try {
+    const url = new URL(proxy)
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.pathname !== '/' || url.search || url.hash) throw new Error('invalid proxy')
+    return url.href.replace(/\/$/, '')
+  } catch {
+    throw new Error('请填写 HTTP/HTTPS 代理地址，如 http://127.0.0.1:7897；留空使用默认网络')
+  }
+}
+
+/** Saved gateway routing is separate from TMDB and media downloads. The tunnel reads the same proxy itself. */
+export async function fetchGateway(url: string, init: RequestInit, savedProxy = ''): Promise<Response> {
+  const host = new URL(url).hostname
+  if (['localhost', '127.0.0.1', '[::1]', '::1'].includes(host)) return fetch(url, init)
+  const proxy = normalizeHttpProxy(process.env.GVS_PROXY?.trim() || savedProxy)
+  if (!proxy) return fetch(url, init)
+  try {
+    return await fetch(url, { ...init, proxy } as RequestInit & { proxy: string })
+  } catch (e) {
+    if (init.signal?.aborted || (e instanceof Error && ['AbortError', 'TimeoutError'].includes(e.name))) throw e
+    // Do not silently change the gateway's exit IP or expose proxy credentials.
+    throw new Error('无法通过代理连接网关，请检查代理是否运行及分流规则（F4 → 连接 → 网关代理）')
+  }
+}
+
 /** Empty when already re-exec'd (`GVS_PROXY`) or no proxy env is set. */
 export function inheritedProxyUrl(env: NodeJS.Dict<string> = process.env): string {
   if (env.GVS_PROXY?.trim()) return ''

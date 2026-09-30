@@ -11,6 +11,8 @@ import type { Col } from '../lib/rows.ts'
 import { column, displayWidth } from '../lib/text.ts'
 import { c } from '../lib/theme.ts'
 import { qualityCaptionText, qualityFpsText, qualityHdrText, qualityResolution } from '../lib/quality.ts'
+import { episodeRanges, qualityColumns, selectedAudioText } from '../lib/ui-layout.ts'
+import { resolveDefaultAudioId } from '../lib/audio-selection.ts'
 import { human } from '../lib/util.ts'
 import { audioTab, optionWindow } from '../lib/view.ts'
 import type { Audio, Quality, Snapshot } from '../types.ts'
@@ -47,7 +49,12 @@ const qualityAction = computed(() => {
     : picked.length
       ? picked.slice(0, 2).join('+')
       : '默认音轨'
-  return [`下载 ${n} ${isMovie.value ? '部' : '集'}`, q?.label, audio]
+  const title = props.state.detail?.title || props.state.detailTitle || ''
+  const numbers = (props.state.pendingEpisodes ?? []).filter((n) => n > 0)
+  const episode = isMovie.value || !numbers.length
+    ? ''
+    : episodeRanges(numbers).split('、').map((part) => (part.includes('–') ? `E${part.replace('–', '–E')}` : `E${part}`)).join('、')
+  return [title, episode, `下载 ${n} ${isMovie.value ? '部' : '集'}`, q?.label, audio]
     .filter(Boolean)
     .join(' · ')
 })
@@ -114,10 +121,10 @@ const badge = computed(() =>
 const badgeChips = computed<TextChunk[]>(() => chipChunks(badge.value.text, badge.value.color))
 
 const qualityView = computed(() =>
-  optionWindow(qualities.value, props.state.qualityIndex, bodyH.value),
+  optionWindow(qualities.value, props.state.qualityIndex, bodyH.value - 3),
 )
 const audioView = computed(() =>
-  optionWindow(audios.value, props.state.audioIndex, bodyH.value),
+  optionWindow(audios.value, props.state.audioIndex, bodyH.value - 3),
 )
 
 /** Rows of `画质 / 音轨` tabs, with the `←→ 切换` hint pinned right. */
@@ -158,11 +165,6 @@ function isPremiumName(row?: Quality): boolean {
  */
 function qualityTable(header: boolean, row?: Quality, selected = false): StyledText {
   const width = bodyW.value
-  const showRes = width >= 64
-  const showDrm = width >= 72
-  const showCaption = qualities.value.some((q) => qualityCaptionText(q.caption))
-  const showHdr = qualities.value.some((q) => qualityHdrText(q.hdr))
-  const showFps = qualities.value.some((q) => qualityFpsText(q.fps))
   const tone = selected ? c.text : c.dim
   const name =
     !row
@@ -172,12 +174,7 @@ function qualityTable(header: boolean, row?: Quality, selected = false): StyledT
         : row.group === 'encode'
           ? `⚡${row.label || (row.stream || row.title || '').split('|')[0] || '转码'}`
           : row.label || row.title || '视频流'
-  // Size the name column to the longest label, and let a trailing spacer take
-  // the slack, so short tables do not stretch across a wide terminal.
-  const nameCells = Math.min(
-    Math.max(10, Math.floor(width * 0.4)),
-    qualities.value.reduce((n, q) => Math.max(n, displayWidth(q.label || q.title || '') + 3), 8),
-  )
+  const encodeOf = (q?: Quality) => (q ? q.encodeTag || q.codec || '—' : '')
   // 杜比视界 / HDR 是这张表里真正要挑的东西，所以它们比普通档位亮一档。
   const nameColor = header
     ? c.faint
@@ -190,37 +187,21 @@ function qualityTable(header: boolean, row?: Quality, selected = false): StyledT
     // The gutter doubles as the cursor bar's home, so both tables keep it
     // whether or not a row is selected and the columns never jump.
     header ? markCol(false) : markCol(selected),
-    { chunks: nameChunks(name, nameColor), cells: nameCells },
   ]
-  const field = (title: string, value: string, cells: number, align?: 'left' | 'right') => {
-    cols.push({ text: '', cells: 2 })
-    cols.push({
-      text: header ? title : value,
-      cells,
-      align,
-      color: header ? c.faint : tone,
-    })
-  }
-  // Keep these labels inside the cell. Row truncate used to plant an ellipsis
-  // immediately after the short HDR word.
-  const captionText = (q?: Quality) => (q ? qualityCaptionText(q.caption) || '-' : '')
-  const hdrText = (q?: Quality) => (q ? qualityHdrText(q.hdr) || '-' : '')
-  if (showCaption) field('字幕', header ? '字幕' : captionText(row), 10)
-  if (showHdr) field('HDR', header ? 'HDR' : hdrText(row), 8)
-  if (showRes) field('分辨率', row ? qualityResolution(row.width, row.height) : '', 12)
-  if (showFps) field('fps', row ? qualityFpsText(row.fps) || '—' : '', 6)
-  field('编码', row ? row.encodeTag || row.codec || '—' : '', width >= 100 ? 10 : 8)
-  field('体积', row ? (row.size > 0 ? human(row.size) : '—') : '', 10, 'right')
-  if (showDrm) {
-    cols.push({ text: '', cells: 2 })
-    cols.push(
-      header
-        ? { text: 'DRM', cells: 5, color: c.faint }
-        : {
-            chunks: () => (row?.drm ? chipChunks('DRM', c.violet) : [fg(c.faint)('—')]),
-            cells: 5,
-          },
-    )
+  for (const [i, col] of qualityColumns(width, qualities.value).entries()) {
+    if (i) cols.push({ text: '', cells: 2 })
+    if (col.key === 'label') {
+      cols.push({ chunks: nameChunks(name, nameColor), cells: col.width })
+      continue
+    }
+    const value = !row ? '' : col.key === 'codec' ? encodeOf(row)
+      : col.key === 'size' ? row.size > 0 ? human(row.size) : '—'
+      : col.key === 'resolution' ? qualityResolution(row.width, row.height)
+      : col.key === 'caption' ? qualityCaptionText(row.caption) || '—'
+      : col.key === 'hdr' ? qualityHdrText(row.hdr) || '—'
+      : col.key === 'fps' ? qualityFpsText(row.fps) || '—'
+      : row.drm && row.drm !== 'none' ? 'DRM' : '—'
+    cols.push({ text: header ? col.title : value, cells: col.width, align: col.key === 'size' ? 'right' : 'left', color: header ? c.faint : tone })
   }
   cols.push({ text: '', grow: true })
   return colsLine(cols, width, selected && !header)
@@ -249,9 +230,7 @@ function audioHeader(): StyledText {
 }
 
 function audioLine(row: Audio, selected: boolean): StyledText {
-  const muxDefault =
-    (audios.value.find((a) => a.selected) ??
-      audios.value.find((a) => a.isDefault)) === row
+  const muxDefault = resolveDefaultAudioId(audios.value, audios.value.filter(a => a.selected).map(a => a.id)) === row.id
   const tags: TextChunk[] = []
   if (muxDefault) tags.push(...chipChunks('封装默认', c.ok))
   if (row.isDefault) {
@@ -303,6 +282,7 @@ function audioLine(row: Audio, selected: boolean): StyledText {
       :content="onAudioTab ? audioHeader() : qualityTable(true)"
       :width="bodyW"
       wrapMode="none"
+      :truncate="false"
     />
     <Text :content="hr(bodyW)" :height="1" :width="bodyW" wrapMode="none" />
     <EmptyState
@@ -319,7 +299,7 @@ function audioLine(row: Audio, selected: boolean): StyledText {
       :width="bodyW"
       :height="1"
       wrapMode="none"
-      :truncate="true"
+      :truncate="false"
       :bg="
         entry.index === (onAudioTab ? state.audioIndex : state.qualityIndex)
           ? c.sel
@@ -331,5 +311,9 @@ function audioLine(row: Audio, selected: boolean): StyledText {
           : qualityTable(false, entry.item as Quality, entry.index === state.qualityIndex)
       "
     />
+    <Box flexDirection="column" :width="bodyW" :marginTop="1">
+      <Text :content="`已选画质：${qualities[state.qualityIndex]?.label || '—'}`" :width="bodyW" :height="1" :truncate="true" wrapMode="none" />
+      <Text :content="`已选音轨：${selectedAudioText(audios)}`" :width="bodyW" :height="1" :truncate="true" wrapMode="none" />
+    </Box>
   </Box>
 </template>

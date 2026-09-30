@@ -2,9 +2,8 @@
 // Footer key hints: `⏎ 确认 · esc 返回` with the whole key on a subtle chip.
 // When the terminal is narrow the low-priority hints are dropped rather than
 // letting the line wrap; the trailing hint is always kept. `extra` (the global
-// F-keys) is right-aligned and only shown when it fits after the scene hints;
-// if even that will not fit, it collapses to just `F1 帮助` before being
-// dropped entirely.
+// F-keys) is right-aligned. Reserve room for F1 before fitting scene hints so
+// help remains available in a narrow terminal.
 import { computed } from 'vue-termui'
 import { StyledText, Text, fg } from 'vue-termui'
 import { chipChunks } from '../lib/rows.ts'
@@ -30,16 +29,25 @@ function measure(hints: Array<[string, string]>, gap = SEPARATOR_CELLS): number 
   return body + (hints.length - 1) * gap
 }
 
+function measureExtra(hints: Array<[string, string]>): number {
+  return hints.reduce((n, [key, label]) => n + displayWidth(`${key} ${label}`), 0)
+    + Math.max(0, hints.length - 1) * EXTRA_GAP.length
+}
+
 const fitted = computed(() => {
   const all = props.hints
-  if (measure(all) <= props.width || all.length <= 2) return all
+  const help = props.extra?.slice(0, 1) ?? []
+  const width = Math.max(0, props.width - (help.length ? measureExtra(help) + EXTRA_GAP.length : 0))
+  if (measure(all) <= width) return all
+  if (!all.length) return []
   const head = all[0]!
   const tail = all[all.length - 1]!
-  if (measure([head, tail]) > props.width)
-    return measure([head]) <= props.width ? [head] : [tail]
+  if (all.length === 1) return measure([head]) <= width ? [head] : []
+  if (measure([head, tail]) > width)
+    return measure([head]) <= width ? [head] : measure([tail]) <= width ? [tail] : []
   const kept: Array<[string, string]> = [head]
   for (const hint of all.slice(1, -1)) {
-    if (measure([...kept, hint, tail]) > props.width) break
+    if (measure([...kept, hint, tail]) > width) continue
     kept.push(hint)
   }
   return [...kept, tail]
@@ -49,9 +57,9 @@ const fitted = computed(() => {
 const fittedExtra = computed(() => {
   const extra = props.extra ?? []
   const room = props.width - measure(fitted.value)
-  if (!extra.length || room < EXTRA_GAP.length + measure(extra, EXTRA_GAP.length)) {
+  if (!extra.length || room < EXTRA_GAP.length + measureExtra(extra)) {
     const first = extra[0]
-    return first && room >= EXTRA_GAP.length + hintWidth(...first) ? [first] : []
+    return first && room >= EXTRA_GAP.length + measureExtra([first]) ? [first] : []
   }
   return extra
 })
@@ -64,7 +72,7 @@ const content = computed(() => {
   ])
   const extra = fittedExtra.value
   if (extra.length) {
-    const room = props.width - measure(fitted.value) - measure(extra, EXTRA_GAP.length)
+    const room = props.width - measure(fitted.value) - measureExtra(extra)
     chunks.push({ __isChunk: true, text: ' '.repeat(Math.max(0, room)) })
     extra.forEach(([key, label], index) => {
       if (index > 0) chunks.push({ __isChunk: true, text: EXTRA_GAP })

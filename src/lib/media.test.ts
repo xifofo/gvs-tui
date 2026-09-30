@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { cleanRELog, hlsExtinfSeconds, hlsKeyArgs, playlistOverall, playlistStatus, reProgress, reHttpFailureMonitor, reSidecarProgress, reWorkPhase, runM3u8dl, CdnDenied } from './media.ts'
+import { cleanRELog, formatSpeed, hlsExtinfSeconds, hlsKeyArgs, playlistOverall, playlistStatus, reProgress, reHttpFailureMonitor, reSidecarProgress, reWorkPhase, runM3u8dl, CdnDenied } from './media.ts'
 
 test('CENC key is also supplied to the HLS parser, skipping the key URI fetch', () => {
   const key = '0123456789abcdef0123456789abcdef'
@@ -11,6 +11,13 @@ test('CENC key is also supplied to the HLS parser, skipping the key URI fetch', 
   ])
   expect(() => hlsKeyArgs('invalid')).toThrow('密钥格式')
   expect(hlsKeyArgs()).toEqual([])
+})
+
+test('a 0-1 HLS ratio is not formatted as bytes per second', () => {
+  expect(formatSpeed(0.47, 1, 5)).toBe('速度未知')
+  expect(formatSpeed(0.47, 1, 5, { segments: { done: 47, total: 100 } })).toBe('47/100 段 · 速度未知')
+  expect(formatSpeed(0.2, 1, 3, { log: '合并 12.0 MB/40.0 MB' })).toBe('合并 12.0 MB/40.0 MB')
+  expect(formatSpeed(524288, 1048576, 1)).toBe('512.0 KB/1.0 MB  512.0 KB/s')
 })
 
 test('pipe progress handles partial tokens, multiple redraws and never reports completion early', () => {

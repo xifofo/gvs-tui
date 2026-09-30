@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { defaultAudioIndex } from './audio-selection.ts'
 import { createHash } from 'node:crypto'
 import { closeSync, openSync, readSync, statSync, writeFileSync } from 'node:fs'
 import { mkvLang, type MuxAudio } from './mkvmerge.ts'
@@ -201,6 +202,7 @@ export async function mp4boxMux(mp4box: string, video: string, audios: MuxAudio[
     const sources = [video, ...audios.map(a => a.path)]
     const before: Mp4TrackScan[] = []
     const args: string[] = ['-tmp', tmp]
+    const defaultIndex = defaultAudioIndex(audios)
     const probed = await Promise.all(sources.map(path => inspectMp4(mp4box, path, signal)))
     for (const [i, path] of sources.entries()) {
       const type = i === 0 ? 'vide' : 'soun'
@@ -211,7 +213,7 @@ export async function mp4boxMux(mp4box: string, video: string, audios: MuxAudio[
       if (i) {
         args.push('-lang', `${i + 1}=${mp4Lang(audios[i - 1]!.lang ?? '')}`)
         if (audios[i - 1]!.title) args.push('-name', `${i + 1}=${audios[i - 1]!.title}`)
-        if (i > 1) args.push('-disable', String(i + 1))
+        args.push(i - 1 === defaultIndex ? '-enable' : '-disable', String(i + 1))
       }
     }
     args.push('-timescale', '1000000', '-new', out)

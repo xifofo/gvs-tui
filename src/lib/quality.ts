@@ -690,7 +690,7 @@ export function tencentAudioLang(tr: Record<string, unknown>, label: string): st
 }
 
 /** urls: CDN mirrors to try in order (url first). */
-export type TencentAudioFile = { id: string; label: string; lang: string; url: string; urls: string[] }
+export type TencentAudioFile = { id: string; label: string; lang: string; url: string; urls: string[]; isDefault?: boolean }
 
 export type TencentAudioPlan = {
   files: TencentAudioFile[]
@@ -700,7 +700,7 @@ export type TencentAudioPlan = {
   substituted: string[]
 }
 
-type SelectedAudio = { id: string; label: string; lang: string; codec?: string }
+type SelectedAudio = { id: string; label: string; lang: string; codec?: string; isDefault?: boolean }
 
 const sameName = (a: string, b: string) => a.replace(/\s+/g, '').toLowerCase() === b.replace(/\s+/g, '').toLowerCase()
 
@@ -744,7 +744,8 @@ export function tencentAudioDownloadPlan(
       continue
     }
     used.add(row.id)
-    plan.files.push({ id: row.id, label: substitute ? row.label : s.label || row.label, lang: substitute ? row.lang : s.lang || row.lang, url: row.url, urls: row.urls })
+    plan.files.push({ id: row.id, label: substitute ? row.label : s.label || row.label, lang: substitute ? row.lang : s.lang || row.lang, url: row.url, urls: row.urls,
+      ...(s.isDefault !== undefined ? { isDefault: s.isDefault } : {}) })
   }
   return plan
 }

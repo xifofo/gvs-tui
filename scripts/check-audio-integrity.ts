@@ -14,7 +14,7 @@ import { asString } from '../src/lib/util.ts'
 const ffmpeg = lookFFmpeg('ffmpeg')
 if (!ffmpeg) throw new Error('no ffmpeg')
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const vid = process.argv[2] ?? 'XMjQ4NDcxODQwOA=='
 
 const data = await cli.invoke('youku', 'play', { vid, expand: '1', tier: 'multi' }, process.env.PROBE_SIGN === '1' ? cli.extra(cfg, 'youku') : undefined)

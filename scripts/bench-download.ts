@@ -8,7 +8,7 @@ import { loadConfig } from '../src/lib/config.ts'
 import { downloadProgress, pickHongguo, referer } from '../src/lib/media.ts'
 
 const cfg = loadConfig()
-const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key)
+const cli = new GwClient(process.env.PROBE_HOST ?? cfg.host, cfg.key, cfg.gatewayProxy)
 const vid = process.env.BENCH_VID ?? '7679474102679112766'
 
 const data = await cli.invoke('hongguo', 'resolve', { vid, platform: 'ios' })
