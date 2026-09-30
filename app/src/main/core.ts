@@ -3,7 +3,7 @@ import { ProviderSessions, type SessionCommand, type ProviderSessionView } from 
 import { supportsSearch, supportsBrowse, isManifestProvider } from '@tui/providers.ts'
 import { manifestDetail } from '@tui/manifest-detail.ts'
 import { providerLink } from '@tui/manifest-provider.ts'
-import { readTencentDiagnostics } from '@tui/tencent-diagnostics.ts'
+import { readTencentDiagnostics, tencentDiagnosticJobID } from '@tui/tencent-diagnostics.ts'
 import { needsTunnel } from '@tui/tunnel-policy.ts'
 import { parseEpisodes as parseEps } from '@tui/episodes.ts'
 // 桌面端业务核心：把 tui/src/lib 的能力编排成界面可调用的方法。
@@ -799,7 +799,8 @@ export class Core {
 
   async tencentDiagnostics(jobID?: number) {
     if (!this.has('tencent')) throw new Error('当前 Key 没有腾讯权限')
-    if (jobID !== undefined && (!Number.isSafeInteger(jobID) || this.jobs.get(jobID)?.task.provider !== 'tencent')) throw new Error('无效腾讯任务')
+    jobID = tencentDiagnosticJobID(jobID)
+    if (jobID !== undefined && this.jobs.get(jobID)?.task.provider !== 'tencent') throw new Error('无效腾讯任务')
     return readTencentDiagnostics(this.cfg.host + String.fromCharCode(0) + this.cfg.key, jobID === undefined ? '' : String(jobID), 100)
   }
 

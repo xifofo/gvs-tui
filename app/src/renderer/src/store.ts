@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { ipcArgs } from '@shared/ipc-args'
 import type {
   AppState,
   Card,
@@ -18,7 +19,7 @@ export type SettingsTab = 'download' | 'account' | 'gateway' | 'naming' | 'about
 
 // 参数可能是 Vue 响应式代理，IPC 的结构化克隆不认；统一转成纯数据再发。
 export const gvs = <K extends keyof GvsApi>(method: K, ...args: Parameters<GvsApi[K]>): ReturnType<GvsApi[K]> =>
-  window.gvs.call(method, ...(JSON.parse(JSON.stringify(args)) as Parameters<GvsApi[K]>))
+  window.gvs.call(method, ...ipcArgs(args))
 
 type Toast = { id: number; message: string; tone: Tone }
 

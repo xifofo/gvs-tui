@@ -139,7 +139,11 @@ export class GwClient {
     const diagnosticOperation = operation?.id || randomUUID()
     const diagnostic = (data?: Record<string, unknown>, error?: unknown) => {
       const risk = tencentRisk(data, error)
-      if (provider === 'tencent') writeTencentDiagnostic(this.host + String.fromCharCode(0) + this.key, { flow: operation?.root.flow || '', operation: diagnosticOperation, job: this.diagnosticJobID, action, phase: error ? 'error' : 'decision', status: risk.status, decision: risk.decision, httpStatus: risk.httpStatus, code: risk.code })
+      if (provider === 'tencent') {
+        writeTencentDiagnostic(this.host + String.fromCharCode(0) + this.key, { flow: operation?.root.flow || '', operation: diagnosticOperation, job: this.diagnosticJobID, action, phase: error ? 'error' : 'decision', status: risk.status, decision: risk.decision, httpStatus: risk.httpStatus, code: risk.code })
+        const code = risk.code && /^[0-9.]{1,16}$/.test(risk.code) ? risk.code : '-'
+        runLog(`tencent_decision action=${action} source=${this.source} observations=${cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1' ? 'on' : 'off'} job=${this.diagnosticJobID || '-'} status=${risk.status} decision=${risk.decision} code=${code} http=${risk.httpStatus || '-'}`)
+      }
       return risk
     }
     const t0 = Date.now()

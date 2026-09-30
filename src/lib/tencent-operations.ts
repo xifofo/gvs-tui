@@ -3,7 +3,7 @@ import { tencentRisk } from './tencent-risk.ts'
 import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
 
 export type ReportCall = (input: Record<string, unknown>) => Promise<Record<string, unknown>>
-type Root = { flow: string; pending?: Promise<string>; binding?: string; rejected?: boolean }
+type Root = { flow: string; pending?: Promise<string>; binding?: string; rejected?: boolean; observationSources?: string[] }
 export type TencentOperation = {
   root: Root; id: string; action: string; vid?: string; cid?: string
   started: number; cpu: NodeJS.CpuUsage
@@ -37,6 +37,9 @@ export class TencentOperations {
     if (!root.pending) root.pending = this.call({ session_type: 'tv', report_type: 'bind', flow_id: root.flow }).then(data => {
       if (typeof data.binding !== 'string' || !data.binding) throw new Error('Tencent report binding unavailable')
       root.binding = data.binding
+      root.observationSources = Array.isArray(data.observation_sources)
+        ? data.observation_sources.filter((value): value is string => typeof value === 'string')
+        : ['tui_process']
       return root.binding
     })
     await root.pending
@@ -73,7 +76,8 @@ export class TencentOperations {
   }
 
   observeTransfer(bytes: number, total: number): void {
-    if (!this.download || this.transferClosed || this.transferBusy || this.download.root.rejected || !Number.isFinite(bytes) || bytes < 0) return
+    // HLS callbacks also carry a 0–1 ratio; it is not a byte measurement.
+    if (!this.download || this.transferClosed || this.transferBusy || this.download.root.rejected || !Number.isFinite(bytes) || bytes < 0 || total === 1) return
     const now = performance.now()
     if (!this.sampleBase || bytes < this.sampleBase.bytes) this.sampleBase = { at: now, bytes }
     if (this.lastSample && now - this.lastSample < 5000 && (total <= 0 || bytes < total)) return
@@ -89,7 +93,7 @@ export class TencentOperations {
   async closeTransfer(cancelled = false, failed = false): Promise<void> {
     this.transferClosed = true
     await this.transferPending
-    if (this.download && (this.sampleBase || failed || cancelled)) await this.record(this.download, cancelled ? 'cancel' : failed ? 'error' : 'finish', cancelled ? 'cancelled' : failed ? 'error' : 'success').catch(() => {})
+    if (this.download) await this.record(this.download, cancelled ? 'cancel' : failed ? 'error' : 'finish', cancelled ? 'cancelled' : failed ? 'error' : 'success').catch(() => {})
   }
 
   private async record(op: TencentOperation, phase: string, outcome?: string, extra?: Record<string, number>): Promise<void> {
@@ -102,7 +106,7 @@ export class TencentOperations {
       metrics: { elapsed_ms: Math.max(0, performance.now() - op.started), process_cpu_user_us: cpu.user, process_cpu_system_us: cpu.system, rss_bytes: mem.rss, heap_used_bytes: mem.heapUsed, ...extra },
     }
     try {
-      const reply = this.source === 'electron_process' || op.root.rejected
+      const reply = !op.root.observationSources?.includes(this.source) || op.root.rejected
         ? { status: op.root.rejected ? 'stopped_locally' : 'local_only_gateway_source_unsupported' }
         : await this.call({ session_type: 'tv', report_type: 'observe', binding: op.root.binding, payload: JSON.stringify(event) })
       writeTencentDiagnostic(this.scope, { flow: op.root.flow, operation: op.id, job: this.jobID, action: op.action, phase, status: String(reply.status || 'unknown'), decision: 'local_observation' })

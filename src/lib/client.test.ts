@@ -97,6 +97,31 @@ test('HTTP denial is returned intact; aborts do not retry', async () => {
   expect(fetchSpy).toHaveBeenCalledTimes(2)
 })
 
+test('Electron business calls bind, submit measured events and stop before retrying a rejected job', async () => {
+  const requests: Array<{ action: string; input: Record<string, unknown> }> = []
+  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const request = JSON.parse(String(init?.body))
+    requests.push(request)
+    const data = request.input.report_type === 'bind'
+      ? { binding: 'fixture-binding', observation_sources: ['electron_process'] }
+      : request.input.report_type === 'observe'
+        ? { status: 'observed_locally', sent: false }
+        : request.input.vid === 'denied' ? { em: 93 } : { em: 0, has_url: true }
+    return Response.json({ code: 0, data })
+  }, { preconnect: fetch.preconnect }))
+  const cfg = { tencentMode: 'tv', tencentObservations: true } as FileConfig
+  const client = new GwClient('https://gateway.example', 'key', () => cfg, 'electron_process')
+  await client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+  expect(requests.map(r => r.input.report_type || r.action)).toEqual(['bind', 'observe', 'play', 'observe'])
+  expect(requests[2]!.input.report_binding).toBe('fixture-binding')
+  expect(JSON.parse(String(requests[1]!.input.payload)).source).toBe('electron_process')
+  const job = client.forkTencentJob(123, 'denied')
+  await expect(job.invoke('tencent', 'play', { vid: 'denied', session_type: 'tv' })).rejects.toThrow('停止')
+  const before = requests.length
+  await expect(job.invoke('tencent', 'play', { vid: 'denied', session_type: 'tv' })).rejects.toThrow('stopped')
+  expect(requests).toHaveLength(before)
+})
+
 test('a fresh process loads the saved gateway proxy without any proxy environment variable', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-gateway-proxy-'))
   const requests: string[] = []

@@ -221,6 +221,14 @@ DRM：`drm.content_key_hex`。本机 ffmpeg `-decryption_key`。IV 由网关解�
 
 `drm.enc`：0 无加密 / 1 ChaCha20 / 2 Widevine（网关不给 WV 密钥）。当前下载管线只当直链文件 remux。
 
+#### 桌面操作观测（2026-09-30）
+
+`tencentObservations=true` 时，TV 会话的搜索、详情、取流和下载共享 flow/job 上下文。网关 `report_type=bind` 返回 `observation_sources`；包含 `electron_process` 时桌面端才提交 `report_type=observe`，保持真实来源与进程指标。旧网关未声明支持时继续仅在本地记录。部署网关变更后，已有绑定须由下一次用户搜索建立的新 flow 更新能力声明。
+
+`observe` 只写网关日志，返回 `sent=false`、`report_requests=0`；它不等于腾讯 bosskv/GetFeature 上报。HLS 的 0–1 进度不记作字节数。明确风险拒绝后停止当前流程，不自动重复发送。桌面运行日志新增 `tencent_decision`，即使未启用观测也能看到来源、开关状态、脱敏错误码与处理决定。
+
+腾讯事件自动发送仍未接入：需要与当前设备/会话匹配的真实 TV 事件源和生命周期数据。此版本没有新增腾讯上游请求，也不以桌面 CPU、下载比例或随机标识填补 TV 字段。
+
 ### 7.3 红果 `hongguo`
 
 匿名，只要平台 Key。
