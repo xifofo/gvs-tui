@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GwClient } from './client'
+import type { FileConfig } from './config'
 import { fetchGateway, fetchRemote, isProxyEnvKey } from './proxy'
 
 let originalProxy: string | undefined
@@ -32,6 +33,32 @@ test('gateway API uses the saved proxy for authentication and takes edits on the
   cfg.gatewayProxy = ''
   await client.keyInfo()
   expect(routes).toEqual(['http://localhost:7897', 'http://localhost:7898', undefined])
+})
+
+test('Tencent job clients retain fixed and live proxy routes through nested forks', async () => {
+  const routes: unknown[] = []
+  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    routes.push((init as RequestInit & { proxy?: string })?.proxy)
+    return Response.json({ code: 0, data: { id: 'key' } })
+  }, { preconnect: fetch.preconnect }))
+  const fixed = new GwClient('https://gateway.example', 'key', 'http://localhost:7897')
+  await fixed.forkTencentJob(1, 'episode-1').keyInfo()
+  const cfg = { gatewayProxy: 'http://localhost:7898' } as FileConfig
+  for (const source of [() => cfg.gatewayProxy, () => cfg]) {
+    const parent = new GwClient('https://gateway.example', 'key', source)
+    const child = parent.forkTencentJob(2, 'episode-2').forkTencentJob(3, 'episode-3')
+    cfg.gatewayProxy = 'http://localhost:7898'
+    await child.keyInfo()
+    cfg.gatewayProxy = 'http://localhost:7899'
+    await child.keyInfo()
+    cfg.gatewayProxy = ''
+    await child.keyInfo()
+  }
+  expect(routes).toEqual([
+    'http://localhost:7897',
+    'http://localhost:7898', 'http://localhost:7899', undefined,
+    'http://localhost:7898', 'http://localhost:7899', undefined,
+  ])
 })
 
 test('environment override wins, local gateways bypass proxy, and unrelated requests stay separate', async () => {

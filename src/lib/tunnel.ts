@@ -3,6 +3,7 @@ import dns from 'node:dns/promises'
 import net from 'node:net'
 import tls from 'node:tls'
 import { sleep } from './util.ts'
+import { isLocalGateway } from './gateway-route.ts'
 
 type TunFrame = {
   t: string
@@ -69,8 +70,9 @@ export function runTunnel(
       let transport: 'ws' | 'legacy' = 'ws'
       let lastError = ''
       let stop: TunnelStop = { opened: false, code: 0, reason: '' }
-      const via = proxy().trim()
+      let via = ''
       try {
+        via = isLocalGateway(host) ? '' : proxy().trim()
         stop = await tunnelOnce(host, key, onStatus, signal, via)
         opened = stop.opened
         transport = 'ws'

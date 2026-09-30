@@ -3,6 +3,8 @@
  * Strip the env and re-exec once; keep the original URL in GVS_PROXY for
  * gateway/TMDB only. */
 
+import { isLocalGateway } from './gateway-route.ts'
+
 const PROXY_KEYS: Record<string, true> = {
   http_proxy: true,
   https_proxy: true,
@@ -27,8 +29,7 @@ export function normalizeHttpProxy(value: string): string {
 
 /** Saved gateway routing is separate from TMDB and media downloads. The tunnel reads the same proxy itself. */
 export async function fetchGateway(url: string, init: RequestInit, savedProxy = ''): Promise<Response> {
-  const host = new URL(url).hostname
-  if (['localhost', '127.0.0.1', '[::1]', '::1'].includes(host)) return fetch(url, init)
+  if (isLocalGateway(url)) return fetch(url, init)
   const proxy = normalizeHttpProxy(process.env.GVS_PROXY?.trim() || savedProxy)
   if (!proxy) return fetch(url, init)
   try {

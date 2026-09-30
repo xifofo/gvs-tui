@@ -7,6 +7,7 @@ import { GwClient } from './lib/client'
 import { wrapLines, displayWidth } from './lib/text'
 import { filename, folder } from './lib/name'
 import { jobNaming } from './lib/jobs'
+import { join } from 'node:path'
 const runtimes: Runtime[] = []
 const start = async () => {
   const r = new Runtime({ simulate: true })
@@ -668,7 +669,7 @@ test('confirmation shows the final subdirectory and scrolls long filenames befor
   r.handleKey('enter')
   await Bun.sleep(70)
   r.handleKey('enter')
-  ;(r as any).cfg.outDir = '/Volumes/影音库/' + '长路径/'.repeat(60)
+  ;(r as any).cfg.outDir = join('/Volumes/影音库', ...Array<string>(60).fill('长路径'))
   r.handleKey('enter')
   expect(r.snapshot.scene).toBe('confirm')
   const info = r.snapshot.confirmation!

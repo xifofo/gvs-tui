@@ -81,6 +81,7 @@ export class GwClient {
 
   forkTencentJob(jobID: number, vid: string): GwClient {
     const child = new GwClient(this.host, this.key, this.cfgOf, this.source)
+    child.proxyOf = this.proxyOf
     child.diagnosticJobID = String(jobID)
     if (!this.cfgOf?.()?.tencentObservations && process.env.GVS_TENCENT_OBSERVE !== '1') return child
     child.operations = this.operationTracker().fork(String(jobID), vid, async input => {
