@@ -261,7 +261,7 @@ function friendlyTencentPlayError(raw: string, network: boolean): string {
   const s = raw.trim()
   if (!s) return network ? '腾讯取流网络错误' : '腾讯取流失败'
   if (/^93(\.[0-9]+)?$/.test(s) || s.startsWith('93.') || /限制播放/.test(s) || /\bem\s*=\s*93\b/i.test(s)) {
-    return '该集触发权益风控(em=93)，通常需等待数小时；本次探测可能加重锁定。勿反复重试。'
+    return '该集触发权益风控(em=93)，已停止本次请求；恢复时间未知，请按官方提示处理，勿反复重试。'
   }
   if (/TV play request failed/i.test(s)) return '腾讯 TV 取流请求失败'
   if (/network/i.test(s)) return `腾讯取流网络错误：${s}`

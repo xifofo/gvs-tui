@@ -1,3 +1,4 @@
+import { supportsBrowse } from './providers.ts'
 import type { Row } from '../types'
 export type Section = {
   id: string
@@ -262,7 +263,7 @@ export class Discovery {
       let catalog = this.catalogs.get(provider)
       if (!catalog || refresh || this.now() - catalog.at > 300000) {
         try {
-          const data = await this.invoke(provider, 'browse_catalog', {})
+          const data = supportsBrowse(provider) ? await this.invoke(provider, 'browse_catalog', {}) : { sections: [{ id: 'hami-link', title: '粘贴 Hami 产品链接或 ID', mode: 'link', available: false, reason: '当前网关没有 Hami 搜索/榜单接口，请到搜索页输入产品链接或 ID' }] }
           if (!Array.isArray(data.sections)) throw new Error('INVALID_CATALOG')
           catalog = {
             sections: data.sections as Section[],
@@ -402,7 +403,7 @@ export class Discovery {
         }
       }
       if (refresh) input.refresh = '1'
-      const data = await this.invoke(this.view.provider, 'browse', input)
+      const data = await this.invoke(this.view.provider, this.view.provider === 'mewatch' ? 'browse_section' : 'browse', input)
       if (g !== this.generation || key !== this.key()) return
       if (
         this.view.compatibility &&

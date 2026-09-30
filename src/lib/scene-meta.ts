@@ -40,7 +40,7 @@ export const HINTS: Record<string, Array<[string, string]>> = {
     ['⏎', '打开'],
     ['←→', '栏目'],
     ['tab', '推荐/榜单'],
-    ['1-5', '平台'],
+    ['1-7', '平台'],
     ['r', '刷新'],
     ['/', '搜索'],
   ],

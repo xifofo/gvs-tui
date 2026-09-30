@@ -19,7 +19,7 @@ const LOGOS: Record<string, string> = { youku, tencent, hongguo, douyin }
     :style="{ width: size + 'px', height: size + 'px' }"
   />
   <!-- 黄果没有官方图标，用字标 -->
-  <span v-else class="plogo text" aria-hidden="true" :style="{ width: size + 'px', height: size + 'px', fontSize: Math.round(size * 0.6) + 'px' }">黄</span>
+  <span v-else class="plogo text" aria-hidden="true" :style="{ width: size + 'px', height: size + 'px', fontSize: Math.round(size * 0.6) + 'px' }">{{ ({ huangguo: '黄', mewatch: 'm', hamivideo: 'H' } as Record<string,string>)[provider] || provider.slice(0,1) }}</span>
 </template>
 
 <style scoped>

@@ -1,3 +1,4 @@
+import { probeManifest } from './manifest-provider.ts'
 import type { Audio, Episode, Quality, VipProbe } from '../types.ts'
 import type { FileConfig } from './config.ts'
 import { ReloginRequired, type GwClient } from './client.ts'
@@ -311,6 +312,7 @@ export async function probeOptions(
   opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }> } = {},
 ): Promise<StreamOptions> {
   switch (provider) {
+    case 'mewatch': case 'hamivideo': return probeManifest(cli, cfg, provider, vid)
     case 'hongguo': return probeHongguo(cli, vid)
     case 'huangguo': return probeHuangguo(cli, vid)
     case 'youku': return probeYouku(cli, cfg, vid, opts)
@@ -776,7 +778,7 @@ export function sortTencentQualities(rows: Quality[]): Quality[] {
  * Gateway already classifies 93; TUI must surface it and avoid silent empty-fail.
  */
 export const TENCENT_EM93_STATUS =
-  '该集触发权益风控(em=93)，通常需等待数小时；本次探测可能加重锁定。勿反复重试。'
+  '该集触发权益风控(em=93)，已停止本次请求；恢复时间未知，请按官方提示处理，勿反复重试。'
 
 /** True when play payload looks like em=93 episode entitlement / 限制播放. */
 export function isTencentEm93(data: Record<string, unknown>): boolean {

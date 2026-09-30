@@ -92,6 +92,7 @@ const stop = bridge.onSnapshot((next) => {
   if (next.scene !== 'search') query.value = next.query ?? query.value
   if (next.scene === 'setup') host.value = next.hostInput ?? host.value
   if (next.scene === 'edit') edit.value = next.editValue ?? edit.value
+  else edit.value = ''
 })
 
 onMounted(() => {

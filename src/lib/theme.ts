@@ -1,3 +1,4 @@
+import { PROVIDER_LABELS } from './providers.ts'
 // Single source of truth for the GVS terminal look: one cool neutral ramp, one
 // accent, and three semantic tones. Nothing outside this file names a color, so
 // the palette can be re-tuned in one place.
@@ -45,13 +46,7 @@ export function toneIcon(tone: Tone): string {
   return '·'
 }
 
-const PROVIDER_NAMES: Record<string, string> = {
-  hongguo: '红果',
-  huangguo: '黄果',
-  youku: '优酷',
-  tencent: '腾讯',
-  douyin: '抖音',
-}
+const PROVIDER_NAMES = PROVIDER_LABELS
 
 export function providerName(id: string): string {
   return PROVIDER_NAMES[id] ?? id

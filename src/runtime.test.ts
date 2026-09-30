@@ -301,7 +301,7 @@ test('Ctrl+1/2/3 switches platform like Alt (Windows Terminal friendly)', async 
 test('settings expose dual QR + cookie + account; Youku QR-only',async()=>{
  const r=await start();const x=r as any
  x.keyInfo={all:true,scope:[]};x.emit()
- expect(x.settingFields().filter((f:string)=>f.startsWith('腾讯'))).toEqual(['腾讯双扫码','腾讯 Cookie','腾讯登录','腾讯 caption=all','腾讯探测原画','腾讯 encode=all'])
+ expect(x.settingFields().filter((f:string)=>f.startsWith('腾讯'))).toEqual(['腾讯双扫码','腾讯 Cookie','腾讯登录','腾讯 caption=all','腾讯探测原画','腾讯 encode=all','腾讯观测绑定','腾讯诊断日志'])
  expect(x.settingValue('腾讯双扫码')).toContain('App')
  expect(x.settingValue('腾讯登录')).toMatch(/未登录|回车刷新/)
  expect(x.settingFields().filter((f:string)=>f.startsWith('优酷'))).toEqual(['优酷扫码','优酷登录'])
@@ -365,4 +365,16 @@ test('Tencent collection switching scopes selection and restores tabs after navi
   await x.detail('tencent', 'cover', 'i1')
   expect(r.snapshot.episodeGroup).toBe('专访')
   expect(r.snapshot.episodes!.find(e => e.vid === 'i1')?.selected).toBe(true)
+})
+
+test('new provider settings and single Hami scope are visible without inventing search',async()=>{
+ const r=await start();const x=r as any
+ x.keyInfo={all:false,scope:['hamivideo']};x.emit()
+ expect(x.providers()).toEqual(['hamivideo'])
+ expect(x.settingFields()).toContain('Hami Web 准备')
+ expect(x.settingFields()).toContain('Hami TV Cookie')
+ expect(x.settingFields()).not.toContain('mewatch 激活')
+ x.keyInfo={all:true,scope:[]};x.emit()
+ expect(x.settingFields()).toContain('mewatch 激活')
+ expect(x.settingFields()).toContain('腾讯诊断日志')
 })

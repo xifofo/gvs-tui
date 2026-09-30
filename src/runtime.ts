@@ -1,3 +1,9 @@
+import QRCode from 'qrcode'
+import { ProviderSessions, type SessionCommand } from './lib/provider-session.ts'
+import { manifestDetail } from './lib/manifest-detail.ts'
+import { providerLink } from './lib/manifest-provider.ts'
+import { readTencentDiagnostics, tencentDiagnosticPath } from './lib/tencent-diagnostics.ts'
+import { PROVIDER_IDS, supportsSearch, isManifestProvider } from './lib/providers.ts'
 import { needsTunnel } from './lib/tunnel-policy.ts'
 import { parseEpisodes as parseEps, episodeCollections } from './lib/episodes.ts'
 import { startTencentDualQR, pollTencentQR, pollTencentDualQR, applyTencentLogin, tencentLabels, tencentPlayInput, type TencentMode } from './lib/tencent-qr.ts'
@@ -75,7 +81,7 @@ import type {
   VipProbe,
 } from './types.ts'
 
-const ALL_PROVIDERS = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin']
+const ALL_PROVIDERS = PROVIDER_IDS
 
 /** 网关说「这个签名我不认识」的几种说法。 */
 const SIGN_DEAD_RE = /not found|revoked|invalid Yk-Sign|yk_sign not found/i
@@ -97,6 +103,10 @@ function trace(line: string): void {
 type Listener = (s: Snapshot) => void
 
 export class Runtime {
+  private readonly providerSessions = new ProviderSessions((p,a,input) => { if (!this.cli) throw new Error('请先连接网关'); return this.cli.invoke(p,a,input) })
+  private mewatchQR = false
+  private providerLoginBusy = false
+  private providerLoginGeneration = 0
   private cfg: FileConfig
   private cli: GwClient | null = null
   private keyInfo: KeyInfo | null = null
@@ -323,8 +333,8 @@ export class Runtime {
       return
     }
     const k = normKey(name, mods.shift)
-    // Alt/⌥ or Ctrl+1..5. Bare 1-5 is workspace-only (see updateWorkspace).
-    if ((mods.alt || mods.ctrl) && ['1', '2', '3', '4', '5'].includes(k)) {
+    // Alt/⌥ or Ctrl+1..7. Bare 1-7 is workspace-only (see updateWorkspace).
+    if ((mods.alt || mods.ctrl) && ['1', '2', '3', '4', '5', '6', '7'].includes(k)) {
       this.switchPlatform(Number(k) - 1)
       this.emit()
       return
@@ -523,11 +533,18 @@ export class Runtime {
     if (this.has('hongguo')) f.push('红果合并', '红果 NFO', '红果封装')
     if (this.has('huangguo')) f.push('黄果 NFO', '黄果封装')
     if (this.has('douyin')) f.push('抖音 Cookie')
+    if (this.has('mewatch')) f.push('mewatch 激活', 'mewatch 检查授权', 'mewatch 状态', 'mewatch profiles', 'mewatch profile', 'mewatch 退出')
+    if (this.has('hamivideo')) f.push('Hami 会话类型', 'Hami TV Cookie', 'Hami TV 续期', 'Hami Web 准备', 'Hami 手机号（确认发码）', 'Hami 短信码', 'Hami 状态', 'Hami 退出')
+    if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯诊断日志')
     f.push('运行日志')
     return f
   }
 
   private settingValue(f: string): string {
+    if (f === 'Hami 会话类型') return this.cfg.hamiClient || 'tv'
+    if (f === '腾讯观测绑定') return this.cfg.tencentObservations ? '开 · 本地观测不等于腾讯已接收' : '关 · 风险诊断仍本地记录'
+    if (f === '腾讯诊断日志') return tencentDiagnosticPath()
+    if (f.startsWith('Hami ') || f.startsWith('mewatch ')) return '回车操作 · 账号材料不保存到本机配置'
     if ((Object.values(tencentLabels) as string[]).includes(f)) return '独立扫码 · 不覆盖其他 Cookie'
     if (f === '腾讯双扫码') return '默认 · App + 极光 TV 同时出码并轮询'
     if (f === '腾讯登录') return this.txAcct ? txAccountSummary(this.txAcct) : '回车刷新账号信息'
@@ -1057,6 +1074,7 @@ export class Runtime {
       ? [
           job.title,
           `状态 ${job.status} · ${Math.round(job.pct * 100)}%`,
+          ...readTencentDiagnostics(this.cfg.host + String.fromCharCode(0) + this.cfg.key, String(job.id), 20).map(e => `[腾讯诊断] ${e.at} ${e.action}/${e.phase} ${e.status} → ${e.decision}${e.code ? ' code=' + e.code : ''}`),
           ...wrapLines(
             this.logs.get(job.id)?.join('\n') ||
               [job.err, job.log].filter(Boolean).join('\n') ||
@@ -1159,7 +1177,7 @@ export class Runtime {
       this.say('当前 Key 无此平台权限', 'warn')
       return
     }
-    if (['1', '2', '3', '4', '5'].includes(k)) {
+    if (['1', '2', '3', '4', '5', '6', '7'].includes(k)) {
       this.switchPlatform(Number(k) - 1)
       return
     }
@@ -1300,6 +1318,9 @@ export class Runtime {
       this.say('请选择有权限的平台并输入关键词', 'warn')
       return
     }
+    const manifest = providerLink(query)
+    if (manifest) { if (!this.has(manifest.provider)) { this.say('当前 Key 没有该平台权限', 'warn'); return }; void this.detail(manifest.provider, manifest.url); return }
+    if (!supportsSearch(p)) { void this.detail(p, query); return }
     const yk = extractYoukuVideoId(query),
       dy = extractDouyinURL(query),
       txLinks = extractTencentLinks(query)
@@ -1573,6 +1594,8 @@ export class Runtime {
 
   private updateEdit(k: string): void {
     if (k === 'esc') {
+      this.providerLoginGeneration++
+      this.editValue = ''
       this.scene = this.editField === '确认下载目录' ? 'confirm' : 'settings'
       return
     }
@@ -1580,6 +1603,15 @@ export class Runtime {
   }
 
   private async openSetting(f: string): Promise<void> {
+    if (f === '腾讯诊断日志') { this.say(tencentDiagnosticPath() + ' · 任务详情可看该任务诊断'); this.emit(); return }
+    if (f === '腾讯观测绑定') { this.cfg.tencentObservations = !this.cfg.tencentObservations; this.persistConfig(); this.emit(); return }
+    if (f === 'Hami 会话类型') { this.cfg.hamiClient = this.cfg.hamiClient === 'web' ? 'tv' : 'web'; this.persistConfig(); this.emit(); return }
+    const loginCommands: Record<string, SessionCommand> = {
+      'mewatch profiles': {provider:'mewatch',op:'profiles'}, 'Hami TV 续期': {provider:'hamivideo',op:'refresh'},
+      'mewatch 激活': {provider:'mewatch',op:'start'}, 'mewatch 检查授权': {provider:'mewatch',op:'poll'}, 'mewatch 状态': {provider:'mewatch',op:'status'}, 'mewatch 退出': {provider:'mewatch',op:'logout'},
+      'Hami Web 准备': {provider:'hamivideo',op:'web_start'}, 'Hami 状态': {provider:'hamivideo',op:this.cfg.hamiClient === 'web' ? 'web_status' : 'status'}, 'Hami 退出': {provider:'hamivideo',op:this.cfg.hamiClient === 'web' ? 'web_logout' : 'logout'},
+    }
+    if (loginCommands[f]) { await this.providerLogin(loginCommands[f]!); return }
     if (
       this.simulated &&
       [
@@ -1781,7 +1813,34 @@ export class Runtime {
     this.emit()
   }
 
+  private async providerLogin(command: SessionCommand): Promise<void> {
+    if (this.simulated || !this.cli || !this.has(command.provider) || this.providerLoginBusy) { this.say('请先连接有权限的真实网关，或等待当前请求完成', 'warn'); this.emit(); return }
+    this.providerLoginBusy = true
+    const generation = this.providerLoginGeneration
+    const scope = this.cfg.host + ':' + this.cfg.key
+    this.providerSessions.setScope(scope)
+    try {
+      const view = await this.providerSessions.command(command)
+      if (scope !== this.cfg.host + ':' + this.cfg.key || generation !== this.providerLoginGeneration) return
+      if (command.op === 'web_verify' && view.authenticated) { this.cfg.hamiClient = 'web'; this.persistConfig() }
+      if (command.op === 'import' && view.state === 'imported') { this.cfg.hamiClient = 'tv'; this.persistConfig() }
+      if (command.provider === 'mewatch' && view.state === 'pending' && view.url) {
+        if (command.op === 'start') { this.cancelQRScene(); this.mewatchQR = true; this.scene = 'qr'; this.qrAscii = await QRCode.toString(view.url, { type: 'terminal', small: true }) }
+        if (this.mewatchQR) this.qrHint = `mewatch 官方激活页 · 代码 ${view.userCode || ''} · 回车检查（至少 ${view.interval || 5}s）`
+      } else if (command.provider === 'mewatch' && this.mewatchQR) { this.cancelQRScene(); this.scene = 'settings' }
+      this.say(view.summary + (view.profiles?.length ? ' · ' + view.profiles.map(p => p.id + ':' + p.name).join(' / ') : '') + (view.url && this.scene !== 'qr' ? ' · ' + view.url : ''), view.authenticated ? 'ok' : 'info')
+    } catch (e) { this.say(e instanceof Error ? e.message : '账号操作失败', 'err') }
+    finally { this.providerLoginBusy = false; this.emit() }
+  }
+
   private async commitEdit(v: string): Promise<void> {
+    const commands: Record<string, SessionCommand> = {
+      'Hami TV Cookie': {provider:'hamivideo',op:'import',cookie:v},
+      'Hami 手机号（确认发码）': {provider:'hamivideo',op:'web_send_code',phone:v,confirm:true},
+      'Hami 短信码': {provider:'hamivideo',op:'web_verify',code:v},
+      'mewatch profile': {provider:'mewatch',op:'profile',profileId:v.split(' ')[0],pin:v.split(' ')[1]},
+    }
+    if (commands[this.editField]) { this.editValue = ''; this.scene = 'settings'; this.emit(); await this.providerLogin(commands[this.editField]!); return }
     if (this.editField === '确认下载目录') {
       const next = normalizeOutDir(v)
       if (!next) {
@@ -1868,7 +1927,7 @@ export class Runtime {
       title: ep.title,
       series: this.detailTitle,
       vid: ep.vid,
-      season: movie ? 0 : 1,
+      season: movie ? 0 : (ep.season || 1),
       episode: movie ? 0 : ep.number || i + 1,
       collection: ep.collection,
       height: 0,
@@ -2500,7 +2559,7 @@ export class Runtime {
       this.emit()
       return
     }
-    const input: Record<string, unknown> = { id: trimmed }
+    const input: Record<string, unknown> = isManifestProvider(provider) && trimmed.startsWith('https://') ? { url: trimmed } : { id: trimmed }
     if (provider === 'hongguo') input.seriesId = trimmed
     else if (provider === 'youku') {
       input.showId = trimmed
@@ -2511,7 +2570,7 @@ export class Runtime {
     } else if (provider === 'tencent') input.cid = trimmed
     try {
       const data = await this.work(() =>
-        this.cli!.invoke(provider, 'detail', input),
+        isManifestProvider(provider) ? manifestDetail((p,a,i) => this.cli!.invoke(p,a,i), provider, trimmed) : this.cli!.invoke(provider, 'detail', input),
       )
       if (generation !== this.requestGeneration) return
       this.detailTitle = asString(data.title)
@@ -2535,7 +2594,7 @@ export class Runtime {
             : '电影'
           : `${n} 集`
       this.say(
-        n ? `${this.detailTitle} · ${noun} · 回车去画质` : '这部没有返回正片',
+        n ? `${this.detailTitle} · ${noun} · 回车去画质${data.hasMore === true ? ' · 分页未完整，仅显示已取得分集' : ''}` : '这部没有返回正片',
         n ? 'ok' : 'warn',
       )
     } catch (e) {
@@ -2549,7 +2608,7 @@ export class Runtime {
     provider: string,
     data: Record<string, unknown>,
   ): Promise<void> {
-    if (this.detailInfo?.kind !== 'movie') return
+    if (this.detailInfo?.kind !== 'movie' || isManifestProvider(provider)) return
     const generation = this.requestGeneration
     let play: Record<string, unknown> | undefined
     if (provider === 'youku' && !youkuEditionsFromDetail(data).length) {
@@ -2606,6 +2665,8 @@ export class Runtime {
   }
 
   private cancelQRScene(): void {
+    this.providerLoginGeneration++
+    this.mewatchQR = false
     this.stopQR()
     this.qrTencent = null
     this.qrTencentDual = false
@@ -2616,6 +2677,7 @@ export class Runtime {
 
   private async pollQR(): Promise<void> {
     if (this.scene !== 'qr' || !this.cli || this.qrBusy) return
+    if (this.mewatchQR) { await this.providerLogin({provider:'mewatch',op:'poll'}); return }
     if (!this.qrTencentDual && !this.qrTencent && !this.qrTicket && !this.qrLoginToken) return
     this.qrBusy = true
     try {

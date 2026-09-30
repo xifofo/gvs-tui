@@ -1,6 +1,7 @@
 import { CdnDenied } from './media.ts'
 import { sleep } from './util.ts'
 import { HlsRefreshError } from './hls-relay.ts'
+import { TencentRiskStop, tencentRisk } from './tencent-risk.ts'
 
 export const CDN_REFRESH_RETRIES = 5
 
@@ -17,6 +18,7 @@ export async function retryCdnRefresh<T>(
       // A pause/cancel must never be read as a CDN status message.
       if (signal?.aborted) throw signal.reason ?? e
       if (e instanceof HlsRefreshError) throw e
+      if (e instanceof TencentRiskStop || tencentRisk(undefined, e).stop) throw e
       const message = e instanceof Error ? e.message : String(e)
       const status = e instanceof CdnDenied ? e.status
         : Number(message.match(/\b(403|410)\b/)?.[1] ?? (/\bForbidden\b/i.test(message) ? 403 : 0))

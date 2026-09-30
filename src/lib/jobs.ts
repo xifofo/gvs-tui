@@ -1,3 +1,4 @@
+import { resolveManifest, requireClearDownload } from './manifest-provider.ts'
 import { tencentPlayInput } from './tencent-qr.ts'
 import { tencentAudioDownloadPlan, tencentAudioPlanNote, tencentPlayQualityInput } from './quality.ts'
 import { resolveHongguoDownload } from './hongguo.ts'
@@ -133,10 +134,18 @@ export class JobHub {
   enqueue(cfg: FileConfig, cli: GwClient, id: number, t: DlTask): void {
     // A double click / retry must not run the same row twice.
     if (this.isActive(id)) return
+    const taskClient = t.provider === 'tencent' ? cli.forkTencentJob?.(id, t.vid) ?? cli : cli
+    const taskConfig = { ...cfg }
     this.q.push({
       id,
       provider: t.provider,
-      run: (signal, hooks) => this.start(this.onEvt, cfg, cli, id, t, signal, hooks),
+      run: async (signal, hooks) => {
+        let failed = false
+        const emit = (event: JobEvt) => { if (event.err) failed = true; this.onEvt(event) }
+        try { await this.start(emit, taskConfig, taskClient, id, t, signal, hooks) }
+        catch (error) { failed = true; throw error }
+        finally { if (t.provider === 'tencent') await taskClient.closeTencentTransfer?.(signal?.aborted, failed).catch(() => {}) }
+      },
     })
     this.pump()
   }
@@ -289,6 +298,9 @@ async function runTask(
     if (n.container === 'mkv' && !mkvmerge) throw new Error('没有 mkvmerge')
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
+      case 'mewatch': case 'hamivideo':
+        await dlManifestProvider(cli, cfg, t, out, emit, retryNote, work, signal)
+        break
       case 'hongguo':
         await dlHongguo(cli, t, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads, work, signal)
         break
@@ -596,9 +608,13 @@ async function dlTencent(
   const temps = [raw]
   let done = false
   emit('下载', 0.1, '')
+  const transferProgress = () => {
+    const display = speedCB(emit, '下载', 0.1, 0.55)
+    return (n: number, total: number) => { cli.observeTencentTransfer(n, total); display(n, total) }
+  }
   try {
     try {
-      await downloadProgress(cdn, raw, referer('tencent'), speedCB(emit, '下载', 0.1, 0.55), retryNote, cfg.threads, cipher, undefined, signal)
+      await downloadProgress(cdn, raw, referer('tencent'), transferProgress(), retryNote, cfg.threads, cipher, undefined, signal)
     } catch (e) {
       signal?.throwIfAborted()
       if (!(e instanceof CdnDenied)) throw e
@@ -610,7 +626,7 @@ async function dlTencent(
       logTencentDownloadHost(cdn, t)
       // Audio playlists come from the same play response; refresh them too.
       plan = tencentAudioDownloadPlan(played, t.audioTracks ?? [])
-      await downloadProgress(cdn, raw, referer('tencent'), speedCB(emit, '下载', 0.1, 0.55), retryNote, cfg.threads, cipher, undefined, signal)
+      await downloadProgress(cdn, raw, referer('tencent'), transferProgress(), retryNote, cfg.threads, cipher, undefined, signal)
     }
     // 封装直接写 out：中止时删掉截断的成品，别留下看似完成的文件。
     const muxToOut = async (mux: () => Promise<void>) => {
@@ -1057,4 +1073,18 @@ export function youkuAudioFetchPlan(
     audioVid: trackVid(t, track.id, track.vid),
     trackId: track.id,
   }))
+}
+
+/** Media is fetched on this client; gateway traffic is limited to resolve calls. */
+async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, note: RetryNote, work: string, signal?: AbortSignal): Promise<void> {
+  const sources = await resolveManifest(cli, cfg, t.provider, t.vid, t.quality || 'auto')
+  signal?.throwIfAborted()
+  const source = sources[0]!
+  requireClearDownload(source)
+  const ref = source.headers.Referer || source.headers.referer || ''
+  if (!['dash','hls'].includes(source.format.toLowerCase()) && !new URL(source.url).pathname.match(/[.](mpd|m3u8)$/i)) {
+    throw new Error('该源不是已接入的 DASH/HLS 清单；拒绝伪装封装格式')
+  }
+  emit('下载', 0.05, '源站 CDN → 本机；网关不转发视频')
+  await downloadPlaylist({ src: source.url, dest: out, ref, headers: source.headers, clear: true, threads: cfg.threads, select: 'muxed', transport: 're', workDir: work, workTag: 'manifest', signal, cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.9 * p, info?.log || '本机直连 CDN') } })
 }

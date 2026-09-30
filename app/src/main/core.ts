@@ -1,3 +1,9 @@
+import { createHash } from 'node:crypto'
+import { ProviderSessions, type SessionCommand, type ProviderSessionView } from '@tui/provider-session.ts'
+import { supportsSearch, supportsBrowse, isManifestProvider } from '@tui/providers.ts'
+import { manifestDetail } from '@tui/manifest-detail.ts'
+import { providerLink } from '@tui/manifest-provider.ts'
+import { readTencentDiagnostics } from '@tui/tencent-diagnostics.ts'
 import { needsTunnel } from '@tui/tunnel-policy.ts'
 import { parseEpisodes as parseEps } from '@tui/episodes.ts'
 // 桌面端业务核心：把 tui/src/lib 的能力编排成界面可调用的方法。
@@ -86,6 +92,7 @@ type JobRecord = { view: JobView; task: DlTask; pin: Pin }
 
 /** 入队那一刻钉住的配置：继续下载要写回同样的路径与分片布局。key / cookie / sign 永不落盘。 */
 export type Pin = {
+  hamiClient?: 'tv' | 'web'
   outDir: string
   tmpDir: string
   threads: number
@@ -105,6 +112,7 @@ const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ?
 
 function pinOf(cfg: FileConfig): Pin {
   return {
+    hamiClient: cfg.hamiClient || 'tv',
     outDir: cfg.outDir,
     tmpDir: cfg.tmpDir,
     threads: cfg.threads,
@@ -158,6 +166,7 @@ function treeSize(path: string): number {
 function toEpisodeView(e: Episode): EpisodeView {
   return {
     vid: e.vid,
+    season: e.season,
     title: e.title,
     number: e.number,
     group: e.group ?? '',
@@ -191,7 +200,7 @@ function buildDetail(provider: Provider, id: string, data: Record<string, unknow
     id,
     title: asString(data.title) || asString(raw.title) || asString(show.title) || fallbackTitle || hint?.title || '',
     poster: detailPoster(data) || hint?.poster || '',
-    desc: asString(data.desc) || asString(raw.desc) || asString(data.intro) || asString(data.description),
+    desc: (data.hasMore === true ? '目录分页未完整，仅显示已取得分集。' : '') + (asString(data.desc) || asString(raw.desc) || asString(data.intro) || asString(data.description)),
     category,
     year: anyInt(data.year) || anyInt(raw.year),
     tags: pickTags(data, raw),
@@ -258,6 +267,8 @@ function mask(key: string): string {
 
 export class Core {
   private cfg: FileConfig = loadConfig()
+  private readonly providerSessions = new ProviderSessions((p,a,input) => this.invoke(p,a,input))
+  private readonly providerAccounts = new Map<string, ProviderSessionView>()
   private cli: GwClient | null = null
   private keyInfo: KeyInfo | null = null
   private keyError = ''
@@ -448,7 +459,7 @@ export class Core {
     this.connecting = true
     this.keyError = ''
     this.emit.state()
-    this.cli = new GwClient(this.cfg.host, this.cfg.key, () => this.cfg)
+    this.cli = new GwClient(this.cfg.host, this.cfg.key, () => this.cfg, 'electron_process')
     try {
       this.keyInfo = await this.cli.keyInfo()
     } catch (e) {
@@ -520,6 +531,7 @@ export class Core {
 
   state(): AppState {
     return {
+      accountScope: createHash('sha256').update(this.cfg.host + String.fromCharCode(0) + this.cfg.key).digest('hex'),
       configured: !!this.keyInfo,
       connecting: this.connecting,
       keyName: this.keyInfo?.name ?? '',
@@ -546,6 +558,8 @@ export class Core {
       tmdbKey: c.tmdbKey,
       tmdbLang: c.tmdbLang,
       threads: c.threads,
+      tencentObservations: !!c.tencentObservations,
+      hamiClient: c.hamiClient || 'tv',
       tencentCookie: c.tencentCookie,
       douyinCookie: c.douyinCookie ?? '',
       hongguoNfo: c.hongguoNfo,
@@ -580,6 +594,10 @@ export class Core {
           ? { provider: p, short: 'Cookie', summary: 'Cookie 已设置', tone: 'ok' }
           : { provider: p, short: '未设置', summary: '搜索需要网页登录 Cookie（sessionid）', tone: 'warn' }
       }
+      if (isManifestProvider(p)) {
+        const account = this.providerAccounts.get(p + (p === 'hamivideo' ? ':' + (this.cfg.hamiClient || 'tv') : ''))
+        return { provider: p, short: account?.authenticated ? '已登录' : '待检查', summary: account?.summary || '网关保存独立账号会话；请到平台账号设置登录或检查', tone: account?.authenticated ? 'ok' : 'muted' }
+      }
       return { provider: p, short: '免登录', summary: '无需登录', tone: 'muted' }
     })
   }
@@ -592,6 +610,7 @@ export class Core {
     if (!/^https?:\/\//.test(h)) throw new Error('网关地址要以 http:// 或 https:// 开头')
     if (!k) throw new Error('请填写 API Key')
     const prev = { host: this.cfg.host, key: this.cfg.key }
+    this.providerAccounts.clear()
     this.cfg.host = h
     this.cfg.key = k
     try {
@@ -618,6 +637,8 @@ export class Core {
     if (patch.tmdbKey !== undefined) c.tmdbKey = patch.tmdbKey.trim()
     if (patch.tmdbLang !== undefined) c.tmdbLang = patch.tmdbLang.trim() || 'zh-CN'
     if (patch.threads !== undefined) c.threads = clampThreads(patch.threads)
+    if (patch.tencentObservations !== undefined) c.tencentObservations = patch.tencentObservations === true
+    if (patch.hamiClient !== undefined) { if (!['tv','web'].includes(patch.hamiClient)) throw new Error('无效 Hami 会话类型'); c.hamiClient = patch.hamiClient }
     if (patch.tencentCookie !== undefined) c.tencentCookie = patch.tencentCookie.trim()
     if (patch.douyinCookie !== undefined) c.douyinCookie = patch.douyinCookie.trim()
     if (patch.hongguoNfo !== undefined) c.hongguoNfo = patch.hongguoNfo
@@ -775,7 +796,25 @@ export class Core {
 
   // ---------------------------------------------------------------- 浏览 / 搜索
 
+  async tencentDiagnostics(jobID?: number) {
+    if (!this.has('tencent')) throw new Error('当前 Key 没有腾讯权限')
+    if (jobID !== undefined && (!Number.isSafeInteger(jobID) || this.jobs.get(jobID)?.task.provider !== 'tencent')) throw new Error('无效腾讯任务')
+    return readTencentDiagnostics(this.cfg.host + String.fromCharCode(0) + this.cfg.key, jobID === undefined ? '' : String(jobID), 100)
+  }
+
+  async providerSession(command: SessionCommand): Promise<ProviderSessionView> {
+    if (!this.has(command.provider)) throw new Error('当前 Key 没有该平台权限')
+    const scope = this.cfg.host + ':' + this.cfg.key
+    this.providerSessions.setScope(scope)
+    const view = await this.providerSessions.command(command)
+    if (scope !== this.cfg.host + ':' + this.cfg.key) throw new Error('账号连接已切换')
+    this.providerAccounts.set(command.provider + (command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
+    this.emit.state()
+    return view
+  }
+
   async catalog(provider: Provider): Promise<Section[]> {
+    if (!supportsBrowse(provider)) return [{ id: 'hami-link', title: '粘贴 Hami 产品链接', mode: 'link', available: false, reason: '当前网关仅支持产品链接/ID，尚无搜索或榜单接口' }]
     let sections: Array<Record<string, unknown>>
     try {
       const data = await this.invoke(provider, 'browse_catalog', {})
@@ -804,7 +843,7 @@ export class Core {
       input.cursor = cursor
       if (provider === 'hongguo') input.offset = cursor
     }
-    const data = await this.invoke(provider, 'browse', { ...input })
+    const data = await this.invoke(provider, provider === 'mewatch' ? 'browse_section' : 'browse', { ...input })
     const cards = toCards(provider, { ...data, contentType: data.contentType || (section.mode === 'rank' ? 'rank' : '') })
     const next = str(data.nextCursor)
     const channels: Section[] = []
@@ -820,6 +859,8 @@ export class Core {
   }
 
   parseLink(text: string): LinkTarget {
+    const manifest = providerLink(text)
+    if (manifest) return { kind: manifest.provider, url: manifest.url }
     const vid = extractYoukuVideoId(text)
     if (vid) return { kind: 'youku', vid }
     const tx = extractTencentLinks(text, 1)[0]
@@ -828,11 +869,12 @@ export class Core {
   }
 
   searchTargets(): Provider[] {
-    return this.providers().filter((p) => p !== 'douyin' || !!this.cfg.douyinCookie)
+    return this.providers().filter((p) => supportsSearch(p) && (p !== 'douyin' || !!this.cfg.douyinCookie))
   }
 
   /** 按平台单独搜：界面并发调用，先到先显示，不被最慢的平台拖住。 */
   async searchProvider(provider: Provider, query: string): Promise<SearchGroup> {
+    if (!supportsSearch(provider)) return { provider, cards: [], error: '当前平台请粘贴产品链接打开详情' }
     const q = query.trim()
     try {
       const data = await this.invoke(provider, 'search', { q, pageSize: 20 })
@@ -845,7 +887,7 @@ export class Core {
   // ---------------------------------------------------------------- 详情
 
   async detail(provider: Provider, id: string, hint?: { title?: string; poster?: string }): Promise<DetailView> {
-    const input: Record<string, unknown> = { id }
+    const input: Record<string, unknown> = isManifestProvider(provider) && id.startsWith('https://') ? { url: id } : { id }
     if (provider === 'hongguo') input.seriesId = id
     else if (provider === 'youku') {
       input.showId = id
@@ -853,7 +895,7 @@ export class Core {
       // 详情页只用到会员/DRM/语言版本；完整多档在进入画质页时的 play 里取。
       input.tier = 'single'
     } else if (provider === 'tencent') input.cid = id
-    const data = await this.invoke(provider, 'detail', input)
+    const data = isManifestProvider(provider) ? await manifestDetail((p,a,i) => this.invoke(p,a,i), provider, id) : await this.invoke(provider, 'detail', input)
     const eps = parseEps(data)
     // 有些老片/短剧详情接口不给海报和片名，卡片上其实已经有，拿它兜底。
     const view = buildDetail(provider, id, data, '', eps, hint)
@@ -862,6 +904,7 @@ export class Core {
   }
 
   async detailFromLink(link: LinkTarget): Promise<DetailView> {
+    if (link.kind === 'mewatch' || link.kind === 'hamivideo') return this.detail(link.kind, link.url)
     if (link.kind === 'youku') {
       let data: Record<string, unknown> = {}
       try {
@@ -908,7 +951,7 @@ export class Core {
 
   /** runtime.ts applyMovieEditions：电影按语言版本展开 */
   private async applyMovieEditions(view: DetailView, data: Record<string, unknown>): Promise<void> {
-    if (view.kind !== 'movie') return
+    if (view.kind !== 'movie' || isManifestProvider(view.provider)) return
     let play: Record<string, unknown> | undefined
     if (view.provider === 'youku' && !youkuEditionsFromDetail(data).length) {
       const vid = youkuMoviePick(data)?.vid || ''
@@ -1024,7 +1067,7 @@ export class Core {
         title: ep.title,
         series: req.detail.title,
         vid: ep.vid,
-        season: movie ? 0 : 1,
+        season: movie ? 0 : (ep.season || 1),
         episode: movie ? 0 : ep.number || i + 1,
         collection: ep.collection,
         height: 0,

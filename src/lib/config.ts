@@ -13,6 +13,10 @@ export type FileConfig = {
   tmdbLang: string
   youkuSign: string
   tencentMode?: "cookie" | "web" | "app" | "tv"
+  /** Bind TV operations and record real client metrics locally on the gateway. */
+  tencentObservations?: boolean
+  /** Hami Web and TV are separate gateway sessions. */
+  hamiClient?: 'tv' | 'web'
   tencentTVDevice?: string
   tencentTVQUA?: string
   tencentTVVersion?: string
@@ -197,6 +201,7 @@ export function loadConfig(): FileConfig {
   // `GVS_HOST=http://127.0.0.1:8080 bun run dev` against a local gateway build.
   if (process.env.GVS_HOST) cfg.host = process.env.GVS_HOST
   if (process.env.GVS_KEY) cfg.key = process.env.GVS_KEY
+  if (process.env.GVS_TENCENT_OBSERVE) cfg.tencentObservations = process.env.GVS_TENCENT_OBSERVE === '1'
   cfg.host = (cfg.host || 'http://127.0.0.1:8080').replace(/\/+$/, '')
   const outChanged = ensureOutDir(cfg)
   if (!cfg.releaseGroup) cfg.releaseGroup = 'ADWeb'

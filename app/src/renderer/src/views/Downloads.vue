@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TencentDiagnostics from '../components/TencentDiagnostics.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import type { JobView } from '@shared/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -7,6 +8,8 @@ import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
 import { ago, errText, gvs, store, toast } from '../store'
 
+const diagnosticsJob = ref<number | undefined>()
+const showDiagnostics = ref(false)
 type Filter = 'all' | 'active' | 'paused' | 'failed' | 'done'
 const filter = computed({ get: () => store.dlFilter as Filter, set: (v: Filter) => (store.dlFilter = v) })
 
@@ -169,6 +172,7 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
             <span class="mono small dim pc">{{ pct(j) }}%</span>
           </div>
           <div class="ja">
+            <button v-if="j.provider === 'tencent'" class="btn sm" @click="diagnosticsJob = j.id; showDiagnostics = true">腾讯诊断</button>
             <template v-if="j.state === 'failed'">
               <button type="button" class="btn sm" :disabled="busy.has(j.id)" @click="call(() => gvs('retryJob', j.id), [j.id])">
                 <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="retry" :size="15" />重试
@@ -195,6 +199,7 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
       </div>
     </section>
 
+    <TencentDiagnostics v-if="showDiagnostics" :job-id="diagnosticsJob" @close="showDiagnostics = false" />
     <ConfirmDialog
       v-if="pendingConfirm?.job"
       title="删除这个任务？"

@@ -2,6 +2,10 @@ import { truncate } from './util.ts'
 import type { FileConfig } from './config.ts'
 import { fetchRemote } from './proxy.ts'
 import { runLog, summarizeInput, summarizeResult } from './runlog.ts'
+import { TencentOperations, type TencentOperation } from './tencent-operations.ts'
+import { randomUUID } from 'node:crypto'
+import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
+import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
 export type KeyInfo = {
   id: string
   name: string
@@ -37,12 +41,42 @@ export class GwClient {
   key: string
   /** 读当前配置；给抖音请求自动带上 Dy-Cookie（调用方不用逐处传 extra）。 */
   private cfgOf?: () => FileConfig
+  private operations?: TencentOperations
+  private operationScope = ''
+  private diagnosticJobID = ''
 
-  constructor(host: string, key: string, cfgOf?: () => FileConfig) {
+  constructor(host: string, key: string, cfgOf?: () => FileConfig, private readonly source: 'tui_process' | 'electron_process' = 'tui_process') {
     this.host = host.replace(/\/+$/, '')
     this.key = key
     this.cfgOf = cfgOf
   }
+
+  private operationTracker(): TencentOperations {
+    const scope = `${this.host}\0${this.key}`
+    if (!this.operations || this.operationScope !== scope) {
+      this.operationScope = scope
+      this.operations = new TencentOperations(async input => {
+        const envelope = await this.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, undefined, 5000)
+        return (envelope.data ?? {}) as Record<string, unknown>
+      }, runLog, this.diagnosticJobID, undefined, scope, this.source)
+    }
+    return this.operations
+  }
+
+  forkTencentJob(jobID: number, vid: string): GwClient {
+    const child = new GwClient(this.host, this.key, this.cfgOf, this.source)
+    child.diagnosticJobID = String(jobID)
+    if (!this.cfgOf?.().tencentObservations && process.env.GVS_TENCENT_OBSERVE !== '1') return child
+    child.operations = this.operationTracker().fork(String(jobID), vid, async input => {
+      const envelope = await child.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, undefined, 5000)
+      return (envelope.data ?? {}) as Record<string, unknown>
+    })
+    child.operationScope = `${child.host}\0${child.key}`
+    return child
+  }
+
+  observeTencentTransfer(bytes: number, total: number): void { this.operations?.observeTransfer(bytes, total) }
+  async closeTencentTransfer(cancelled = false, failed = false): Promise<void> { await this.operations?.closeTransfer(cancelled, failed) }
 
   allows(scope: string[] | undefined, all: boolean, name: string): boolean {
     if (all) return true
@@ -66,12 +100,30 @@ export class GwClient {
     extra?: Record<string, string>,
     opts?: { timeoutMs?: number },
   ): Promise<Record<string, unknown>> {
+    let operation: TencentOperation | undefined
+    let tracker: TencentOperations | undefined
+    const cfg = this.cfgOf?.()
+    if (provider === 'tencent' && action !== 'report' && (cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1') && (input.session_type === 'tv' || cfg?.tencentMode === 'tv')) {
+      tracker = this.operationTracker()
+      try { operation = await tracker.begin(action, input) } catch (error) {
+        const risk = tencentRisk(undefined, error)
+        writeTencentDiagnostic(this.host + String.fromCharCode(0) + this.key, { flow: '', operation: randomUUID(), job: this.diagnosticJobID, action, phase: 'binding', status: risk.status, decision: risk.decision })
+        throw error
+      }
+      input = tracker.boundInput(operation, input)
+    }
     const timeoutMs =
       opts?.timeoutMs ??
       (provider === 'tencent' && action === 'play' ? TENCENT_PLAY_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
     if (provider === 'douyin' && !extra?.['Dy-Cookie']) {
       const ck = this.cfgOf?.().douyinCookie
       if (ck) extra = { ...extra, 'Dy-Cookie': ck }
+    }
+    const diagnosticOperation = operation?.id || randomUUID()
+    const diagnostic = (data?: Record<string, unknown>, error?: unknown) => {
+      const risk = tencentRisk(data, error)
+      if (provider === 'tencent') writeTencentDiagnostic(this.host + String.fromCharCode(0) + this.key, { flow: operation?.root.flow || '', operation: diagnosticOperation, job: this.diagnosticJobID, action, phase: error ? 'error' : 'decision', status: risk.status, decision: risk.decision, httpStatus: risk.httpStatus, code: risk.code })
+      return risk
     }
     const t0 = Date.now()
     const headerNote = extra
@@ -88,11 +140,16 @@ export class GwClient {
         timeoutMs,
       )
       const data = (env.data ?? {}) as Record<string, unknown>
+      await tracker?.finish(operation, data)
+      const risk = diagnostic(data)
+      if (provider === 'tencent' && risk.stop) throw new TencentRiskStop(risk)
       runLog(
         `invoke ${provider}/${action} ${summarizeInput(input)}${headerNote ? ` hdr=${headerNote}` : ''} ${Date.now() - t0}ms ok ${summarizeResult({ ...data, code: env.code, msg: env.msg })}`,
       )
       return data
     } catch (e) {
+      diagnostic(undefined, e)
+      if (!(e instanceof TencentRiskStop)) await tracker?.finish(operation, undefined, e).catch(() => {})
       const msg = e instanceof Error ? e.message : String(e)
       runLog(
         `invoke ${provider}/${action} ${summarizeInput(input)}${headerNote ? ` hdr=${headerNote}` : ''} ${Date.now() - t0}ms fail ${truncate(msg, 160)}`,
@@ -135,9 +192,9 @@ export class GwClient {
     } catch {
       throw new Error(`http ${res.status}: ${truncate(text, 180)}`)
     }
-    if (env.code !== 0) {
+    if (!res.ok || env.code !== 0) {
       const message = limitError(env.msg) || `http ${res.status}`
-      throw RELOGIN_RE.test(message) ? new ReloginRequired(message) : new Error(message)
+      throw RELOGIN_RE.test(message) ? new ReloginRequired(message) : Object.assign(new Error(message), { httpStatus: res.status, code: env.code })
     }
     return env
   }

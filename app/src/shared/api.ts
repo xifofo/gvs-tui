@@ -1,15 +1,15 @@
+import type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
+export type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
+import { PROVIDER_IDS, PROVIDER_LABELS } from '../../../src/lib/providers'
 // 主进程 ↔ 界面之间的契约。只放可序列化的纯数据。
 
-export const PROVIDERS = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin'] as const
+export const PROVIDERS = PROVIDER_IDS
 export type Provider = (typeof PROVIDERS)[number]
 
-export const PROVIDER_NAME: Record<string, string> = {
-  youku: '优酷',
-  tencent: '腾讯',
-  hongguo: '红果',
-  huangguo: '黄果',
-  douyin: '抖音',
-}
+export const PROVIDER_NAME = PROVIDER_LABELS
+
+export type { SessionCommand, ProviderSessionView } from '../../../src/lib/provider-session'
+import type { SessionCommand, ProviderSessionView } from '../../../src/lib/provider-session'
 
 export type Tone = 'ok' | 'warn' | 'err' | 'muted'
 
@@ -33,6 +33,8 @@ export type SettingsView = {
   tmdbKey: string
   tmdbLang: string
   threads: number
+  tencentObservations: boolean
+  hamiClient: 'tv' | 'web'
   tencentCookie: string
   douyinCookie: string
   hongguoNfo: boolean
@@ -44,6 +46,7 @@ export type SettingsView = {
 export type SettingsPatch = Partial<Omit<SettingsView, 'keyMasked' | 'hasKey'>> & { key?: string }
 
 export type AppState = {
+  accountScope?: string
   configured: boolean
   connecting: boolean
   keyName: string
@@ -88,9 +91,11 @@ export type SearchResult = { query: string; groups: SearchGroup[]; ms: number }
 export type LinkTarget =
   | { kind: 'youku'; vid: string }
   | { kind: 'tencent'; cid: string; vid: string; url: string }
+  | { kind: 'mewatch' | 'hamivideo'; url: string }
   | { kind: 'none' }
 
 export type EpisodeView = {
+  season?: number
   vid: string
   title: string
   number: number
@@ -209,6 +214,8 @@ export type UpdateState = {
 
 /** 界面可调用的全部方法（preload 按名字转发到主进程）。 */
 export interface GvsApi {
+  tencentDiagnostics(jobID?: number): Promise<TencentDiagnostic[]>
+  providerSession(command: SessionCommand): Promise<ProviderSessionView>
   state(): Promise<AppState>
   setup(host: string, key: string): Promise<AppState>
   saveSettings(patch: SettingsPatch): Promise<AppState>

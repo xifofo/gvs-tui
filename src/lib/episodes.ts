@@ -7,8 +7,9 @@ export function parseEpisodes(data: Record<string, unknown>): Episode[] {
   const official = Array.isArray(data.episode_groups)
   const eps: Episode[] = []
   const seen = new Set<string>()
-  for (const [i, it] of (Array.isArray(data.episodes) ? data.episodes : []).entries()) {
-    if (!isObj(it)) continue
+  for (const [i, row] of (Array.isArray(data.episodes) ? data.episodes : []).entries()) {
+    if (!isObj(row)) continue
+    const it = { ...(isObj(row.meta) ? row.meta : {}), ...row }
     const vid = firstStr(it, 'vid', 'id')
     if (!vid || seen.has(vid)) continue
     const title = firstStr(it, 'title', 'name')
@@ -16,9 +17,9 @@ export function parseEpisodes(data: Record<string, unknown>): Episode[] {
     const duration = anyInt(it.duration) || anyInt(it.duration_ms ? Number(it.duration_ms) / 1000 : 0)
     const extra = /周边|花絮|彩蛋|预告|预约|trailer|advert|extra|clip/i.test(`${group} ${title}`) || it.is_trailer === true
     if (!official && extra && duration < 600) continue
-    const n = anyInt(it.ep) || anyInt(it.number) || Number.parseInt(String(it.stage ?? ''), 10)
+    const n = anyInt(it.ep) || anyInt(it.number) || anyInt(it.episodeNumber) || Number.parseInt(String(it.stage ?? ''), 10)
     eps.push({ vid, title, number: n > 0 ? n : i + 1, selected: false,
-      duration: duration || undefined, group,
+      duration: duration || undefined, group, season: anyInt(it.seasonNumber) || anyInt(it.season) || undefined,
       collection: official ? group || '正片' : undefined })
     seen.add(vid)
   }

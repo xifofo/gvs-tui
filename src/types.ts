@@ -11,6 +11,7 @@ export type Row = {
   tags?: string[]
 }
 export type Episode = {
+  season?: number
   title: string
   vid: string
   number: number

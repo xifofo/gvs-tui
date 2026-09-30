@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import TencentDiagnostics from '../components/TencentDiagnostics.vue'
+import ProviderAccounts from '../components/ProviderAccounts.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { PROVIDER_NAME, type Provider, type SettingsPatch } from '@shared/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -37,6 +39,7 @@ function reset() {
 }
 watch(() => store.state?.settings, reset, { immediate: true })
 
+const diagnosticsOpen = ref(false)
 const saving = ref('')
 async function save(patch: SettingsPatch, what: string) {
   saving.value = what
@@ -224,6 +227,8 @@ const plat = (p: Provider) => hasProvider(p)
         <!-- 平台账号 -->
         <section v-else-if="store.settingsTab === 'account'" class="card">
           <h2 class="h2s">平台账号</h2>
+          <ProviderAccounts />
+          <TencentDiagnostics v-if="diagnosticsOpen" @close="diagnosticsOpen = false" />
 
           <div v-if="plat('youku')" class="srow">
             <div class="sl">
@@ -246,6 +251,8 @@ const plat = (p: Provider) => hasProvider(p)
               <span class="sd">{{ account('tencent')?.summary }}</span>
             </div>
             <div class="sc">
+              <button type="button" class="btn sm" @click="diagnosticsOpen = true">风控处理日志</button>
+              <button type="button" class="btn sm" @click="save({ tencentObservations: !s.tencentObservations }, 'tx-observe')">观测绑定：{{ s.tencentObservations ? '开' : '关' }}</button>
               <button type="button" class="btn sm" @click="store.qr = 'tencent'"><Icon name="qr" :size="15" />双扫码</button>
               <button type="button" class="btn sm" @click="showTencentCookie = !showTencentCookie">{{ showTencentCookie ? '收起' : '粘贴 Cookie' }}</button>
             </div>

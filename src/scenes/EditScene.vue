@@ -33,6 +33,10 @@ const fieldW = computed(() => boxW.value - 4)
 const FIELD_HINTS: Record<string, string> = {
   下载目录: '绝对路径，例如 D:\\GVS',
   下载线程: '1–16（路并发）',
+  'Hami TV Cookie': '仅本次 POST 提交，不写客户端配置；支持 Header 或 Netscape 文本',
+  'Hami 手机号（确认发码）': '先执行 Hami Web 准备；回车即明确同意向此号码发一次短信',
+  'Hami 短信码': '六位数字，保留前导零；提交后清空输入',
+  'mewatch profile': 'profileId，可选空格加 PIN（仅本次提交）',
   '腾讯 Cookie': '整段粘贴浏览器 Cookie',
   '抖音 Cookie': '整段粘贴浏览器 Cookie',
   发布组: '留空则用默认前缀',
