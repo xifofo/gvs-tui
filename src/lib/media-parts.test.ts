@@ -14,14 +14,21 @@ const HALF = SIX_MB / 2
  * download looks on the wire (a 403 is different: it is classified as "cdn
  * ignored range" and falls back to a single connection).
  */
-function rangeServer(payload: Buffer) {
+function rangeServer(payload: Buffer, hangInitial = false) {
   const state = { served: 0, hang: true, hung: 0 }
   const server = Bun.serve({
     hostname: '127.0.0.1', port: 0,
     fetch(req) {
       const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.get('range') || '')
       // `payload.buffer` would be the whole backing store, not this slice.
-      if (!range) return new Response(new Uint8Array(payload), { headers: { 'content-length': String(payload.length) } })
+      if (!range) {
+        if (hangInitial && state.hang) {
+          const chunk = new Uint8Array(payload.subarray(0, 4096))
+          state.served += chunk.length
+          return new Response(new ReadableStream({ start(c) { c.enqueue(chunk) } }), { headers: { 'content-length': String(payload.length) } })
+        }
+        return new Response(new Uint8Array(payload), { headers: { 'content-length': String(payload.length) } })
+      }
       const start = Number(range[1])
       const end = range[2] ? Math.min(Number(range[2]), payload.length - 1) : payload.length - 1
       const headers = { 'Content-Range': `bytes ${start}-${end}/${payload.length}` }
@@ -129,7 +136,7 @@ test('a single-connection download has no parts sidecar to leave behind', async 
 test('bytes downloaded from a different source are discarded, never appended to', async () => {
   const payload = Buffer.alloc(SIX_MB, 0x99)
   const other = Buffer.alloc(SIX_MB, 0x11)
-  const cdn = rangeServer(payload)
+  const cdn = rangeServer(payload, true)
   const otherCdn = rangeServer(other)
   await inTempDir('gvs-source', async (dir) => {
     const dest = join(dir, 'video.mp4')
@@ -155,7 +162,7 @@ test('bytes downloaded from a different source are discarded, never appended to'
 
 test('a resumed attempt of the very same URL keeps its partial bytes', async () => {
   const payload = Buffer.alloc(SIX_MB, 0x77)
-  const cdn = rangeServer(payload)
+  const cdn = rangeServer(payload, true)
   await inTempDir('gvs-same-source', async (dir) => {
     const dest = join(dir, 'video.mp4')
     const ctrl = new AbortController()
