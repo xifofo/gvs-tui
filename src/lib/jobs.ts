@@ -1,4 +1,6 @@
 import { resolveManifest, requireClearDownload } from './manifest-provider.ts'
+import { youkuMediaError } from './media-output.ts'
+import { decryptYoukuTs } from './youku-ts.ts'
 import { tencentPlayInput } from './tencent-qr.ts'
 import { tencentAudioDownloadPlan, tencentAudioPlanNote, tencentPlayQualityInput } from './quality.ts'
 import { resolveHongguoDownload } from './hongguo.ts'
@@ -370,15 +372,6 @@ function scratchLog(msg: string): void {
   runLog(`scratch ${msg}`)
 }
 
-function isViewingLimit(message: string): boolean {
-  return /channel element|Prediction is not allowed|is not allocated|Error submitting packet/i.test(message)
-}
-
-/** Same advice the mux stage gives, for a track that fails to decode first. */
-function viewingLimitError(): Error {
-  return new Error('片源超出试看段后无法解码（未登录或非会员）：设置 → 优酷扫码 登录后重下')
-}
-
 /**
  * Write the finished file under a hidden name beside `out`, then rename it in
  * place: a pause, cancel or crash mid-write never leaves a truncated file that
@@ -742,6 +735,14 @@ async function dlYouku(
       dest,
       ref: referer('youku'),
       key,
+      prepareCencTs: key ? async (source, progress) => {
+        const clear = source + '.youku-clear.ts'
+        const mp4 = source + '.youku-clear.mp4'
+        const stats = await decryptYoukuTs(source, clear, key, signal, progress)
+        scratchLog(`youku TS processed audioPES=${stats.audioPES} videoPES=${stats.videoPES}`)
+        await ffmpegRemux(await ensureFFmpeg(), clear, mp4, undefined, signal)
+        return mp4
+      } : undefined,
       clear: !key,
       threads: cfg.threads,
       select,
@@ -851,8 +852,7 @@ async function dlYouku(
         await validateAudio(ffmpeg, path, signal)
       } catch (e) {
         if (signal?.aborted) throw e
-        const msg = e instanceof Error ? e.message : String(e)
-        throw isViewingLimit(msg) ? viewingLimitError() : e
+        throw youkuMediaError(e)
       }
     }
     // Every track was validated on its own input, so the muxed file needs no
@@ -883,9 +883,7 @@ async function dlYouku(
       return out
     } catch (e) {
       if (signal?.aborted) throw e
-      const msg = e instanceof Error ? e.message : String(e)
-      if (isViewingLimit(msg)) throw viewingLimitError()
-      throw e
+      throw youkuMediaError(e)
     }
   } finally {
     // Failed muxes retain original tracks for diagnosis/retry. Developers can

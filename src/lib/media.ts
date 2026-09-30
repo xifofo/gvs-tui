@@ -11,6 +11,7 @@ import { mkvmergeRemux } from './mkvmerge.ts'
 import { ensureFFmpeg, ensureM3u8dl, ensureMkvmerge, ensurePackager } from './tools.ts'
 import { createHlsRelay, type RelayEvent } from './hls-relay.ts'
 import { moveFileSync } from './file-move.ts'
+import { assertCencMp4Output, isMpegTsFile } from './media-output.ts'
 import { removeScratch, scratchDir, scratchDirIn } from './scratch.ts'
 
 /** A CDN refused us (403/410 …) — usually the signed URL expired mid-flight. */
@@ -878,6 +879,8 @@ export async function downloadPlaylist(opts: {
   key?: string
   /** HLS 密钥算法。默认 CENC（优酷）；黄果是 AES_128。 */
   keyMethod?: HlsKeyMethod
+  /** Provider-specific legacy TS handling. Must return an MP4; never guesses a cipher. */
+  prepareCencTs?: (source: string, progress: (bytes: number, total: number) => void) => Promise<string>
   cipher?: HlsCipher
   /** Only set when the gateway explicitly says the selected track is clear. */
   clear?: boolean
@@ -1022,12 +1025,20 @@ export async function downloadPlaylist(opts: {
       }
     }
     opts.signal?.throwIfAborted()
-    const found = pickREOutput(workDir)
+    let found = pickREOutput(workDir)
     if (!found) {
       const status = reHttpFailureMonitor().feed(diagnostics + '\n')
       if (status) throw new CdnDenied(status, '')
       throw new Error(`N_m3u8DL-RE 未生成文件：${diagnostics.slice(-3000) || '下载器未返回诊断信息'}`)
     }
+    const expectsCenc = !!opts.key && (opts.keyMethod ?? 'CENC') === 'CENC'
+    if (expectsCenc && opts.prepareCencTs && isMpegTsFile(found)) {
+      opts.cb?.(playlistOverall('decrypt', 0, true), 1, { phase: 'decrypt', log: '处理优酷 TS 音视频包' })
+      found = await opts.prepareCencTs(found, (n, total) => {
+        opts.cb?.(playlistOverall('decrypt', Math.min(0.99, n/Math.max(1,total)), true), 1, { phase: 'decrypt', log: '处理优酷 TS 音视频包' })
+      })
+    }
+    assertCencMp4Output(found, expectsCenc)
     try { unlinkSync(opts.dest) } catch { /* first write */ }
     moveFileSync(found, opts.dest)
     if (statSync(opts.dest).size === 0) throw new Error('N_m3u8DL-RE 生成的文件为空')
