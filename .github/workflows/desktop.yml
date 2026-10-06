@@ -92,3 +92,4 @@ jobs:
             **Windows**：下载 `GVS-Setup-*-x64.exe` 安装；已安装的会在后台自动更新。
             **macOS**：按芯片下载 `arm64`（M 系列）或 `x64`（Intel）的 dmg。未签名，首次打开请右键 → 打开；
             需先 `brew install ffmpeg gpac mkvtoolnix`。
+            Windows 和两种 Mac 安装包均自带维护版 RE，无需用户自行构建 RE。
