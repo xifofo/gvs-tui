@@ -9,7 +9,7 @@ import type { GwClient } from './client.ts'
 import type { FileConfig } from './config.ts'
 import type { DlTask } from './jobs.ts'
 import { asString, isObj } from './util.ts'
-import { downloadPlaylist, headersFor } from './media.ts'
+import { downloadPlaylist, formatSpeed, headersFor } from './media.ts'
 import { ensureFFmpeg, ensureM3u8dl } from './tools.ts'
 import { tierHeight } from './name.ts'
 
@@ -90,7 +90,8 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   const manifest = join(work,'iq-video.m3u8'), video = join(work,'iq-video.ts')
   writeFileSync(manifest,plan.playlist,{mode:0o600})
   emit('视频下载',0.02,'IQ 清单包含明文及 BBTS 段，按原顺序下载')
-  await downloadPlaylist({src:manifest,dest:video,ref:'https://www.iq.com/',key:plan.key,keyMethod:'IQ_BBTS',select:'video',threads:cfg.threads,workDir:work,workTag:'iq-video',signal,cb:(n,total,info)=>emit(info?.phase==='decrypt'?'视频解密':'视频下载',0.02+0.66*(total>1?n/total:n),info?.log || '')})
+  const videoStarted = Date.now()
+  await downloadPlaylist({src:manifest,dest:video,ref:'https://www.iq.com/',key:plan.key,keyMethod:'IQ_BBTS',select:'video',threads:cfg.threads,workDir:work,workTag:'iq-video',signal,cb:(n,total,info)=>emit(info?.phase==='decrypt'?'视频解密':'视频下载',0.02+0.66*(total>1?n/total:n),formatSpeed(n,total,(Date.now()-videoStarted)/1000,info))})
   const available = Array.isArray(data.audios) ? data.audios.filter(isObj) : []
   const requested = task.audioTracks?.length ? task.audioTracks.map(t => t.id) : available.filter(a => a.default === true).map(a => asString(a.id))
   if (!requested.length) throw new Error('IQ 没有返回默认独立音轨，请重新探测')
