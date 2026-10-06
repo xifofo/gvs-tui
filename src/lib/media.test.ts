@@ -152,6 +152,43 @@ test('RE log lines switch work from download to merge then decrypt', () => {
   expect(reWorkPhase('Binary merging...\nDecrypting using SHAKA_PACKAGER...')).toBe('decrypt')
 })
 
+test('a completed HLS part does not hide the remaining parts download speed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-re-parts-'))
+  try {
+    const first = join(dir, 'download', '0____', 'parts', '0000'), second = join(dir, 'download', '0____', 'parts', '0001')
+    mkdirSync(first, { recursive: true }); mkdirSync(second, { recursive: true })
+    writeFileSync(join(dir, 'download', 'meta_selected.json'), JSON.stringify([{ Playlist: { MediaParts: [{ MediaSegments: [{}, {}] }, { MediaSegments: [{}, {}] }] } }]))
+    writeFileSync(join(first, '0.ts'), Buffer.alloc(100)); writeFileSync(join(first, '1.ts'), Buffer.alloc(200))
+    writeFileSync(join(first, 'part.ts'), Buffer.alloc(300))
+    writeFileSync(join(second, '0.ts.tmp'), Buffer.alloc(50))
+    expect(reWorkPhase('Binary merging...', dir)).toBe('download')
+    expect(reWorkPhase('Binary merging...\nDecrypting using SHAKA_PACKAGER', dir)).toBe('download')
+    expect(reDownloadedSegments(dir)).toEqual({ done: 2, total: 4, bytes: 350 })
+    rmSync(join(second, '0.ts.tmp'))
+    writeFileSync(join(second, '0.ts'), Buffer.alloc(100)); writeFileSync(join(second, '1.ts'), Buffer.alloc(200))
+    expect(reWorkPhase('Binary merging...', dir)).toBe('merge')
+    writeFileSync(join(dir, 'download.ts'), Buffer.alloc(150))
+    const merge = reSidecarProgress(dir, 'merge')
+    expect(merge.ratio).toBeCloseTo(0.25)
+    expect(merge.log).toBe('合并 150 B/600 B')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('running RE keeps reporting bytes while a later HLS part downloads', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-re-parts-live-'))
+  try {
+    const part = join(dir, 'download', 'parts', '0000')
+    mkdirSync(part, { recursive: true })
+    writeFileSync(join(dir, 'download', 'meta_selected.json'), JSON.stringify([{ Playlist: { MediaParts: [{ MediaSegments: [{}, {}, {}, {}] }] } }]))
+    writeFileSync(join(part, '0.ts'), Buffer.alloc(100)); writeFileSync(join(part, '1.ts'), Buffer.alloc(200))
+    const script = `const fs=require('node:fs');console.log('Binary merging...');setTimeout(()=>{fs.writeFileSync(${JSON.stringify(join(part,'2.ts'))},Buffer.alloc(100));fs.writeFileSync(${JSON.stringify(join(part,'3.ts'))},Buffer.alloc(200));},650);setTimeout(()=>{},1150)`
+    const phases: Array<{phase?: string; done?: number; bytes?: number}> = []
+    await runM3u8dl(process.execPath, ['-e', script], '', (_n,_total,info) => phases.push({phase:info?.phase,done:info?.segments?.done,bytes:info?.transfer?.bytes}), undefined, dir)
+    expect(phases.some(p=>p.phase==='download'&&p.done===2&&p.bytes===300)).toBe(true)
+    expect(phases.some(p=>p.phase==='merge')).toBe(true)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}, 5000)
+
 test('sidecar merge and shaka tempfile sizes become visible progress', () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-re-bytes-'))
   try {

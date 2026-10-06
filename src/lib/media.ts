@@ -708,18 +708,23 @@ function dirFileSizes(dir: string, pred?: (name: string) => boolean): number {
   return n
 }
 
-export function reWorkPhase(text: string): PlaylistPhase {
+export function reWorkPhase(text: string, workDir?: string): PlaylistPhase {
   const s = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-  if (/Decrypting using/i.test(s)) return 'decrypt'
-  if (/二进制合并|Binary merging/i.test(s)) return 'merge'
-  return 'download'
+  const phase = /Decrypting using/i.test(s) ? 'decrypt' : /二进制合并|Binary merging/i.test(s) ? 'merge' : 'download'
+  if (phase !== 'download' && workDir) {
+    const segments = reDownloadedSegments(workDir)
+    // RE merges each HLS part before it downloads the next part. A part's
+    // merge message must not permanently hide the remaining download speed.
+    if (segments && segments.done < segments.total) return 'download'
+  }
+  return phase
 }
 
 /** Byte progress for RE merge / Shaka decrypt. Demux has no output yet. */
 export function reSidecarProgress(dir: string, phase: 'merge' | 'decrypt'): { ratio: number; log: string } {
   if (phase === 'merge') {
-    const total = dirFileSizes(join(dir, 'download'))
-    const done = fileSize(join(dir, 'download.mp4'))
+    const total = reDownloadedSegments(dir)?.bytes ?? dirFileSizes(join(dir, 'download'), name => !name.endsWith('.json'))
+    const done = Math.max(...['mp4', 'ts', 'mkv', 'm4a', 'webm'].map(ext => fileSize(join(dir, `download.${ext}`))))
     if (!total) return { ratio: 0, log: '合并' }
     return { ratio: Math.min(1, done / total), log: `合并 ${human(done)}/${human(total)}` }
   }
@@ -870,7 +875,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   emitSidecar()
   const collect = (chunk: string) => {
     output = (output + chunk).slice(-16384)
-    bumpPhase(reWorkPhase(chunk))
+    bumpPhase(reWorkPhase(chunk, cwd))
     progress(chunk)
     emitSidecar()
     const status = failures.feed(chunk)
@@ -902,7 +907,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
         }
       } catch { /* log is not created yet */ }
     }
-    bumpPhase(reWorkPhase(log + '\n' + output))
+    bumpPhase(reWorkPhase(log + '\n' + output, cwd))
     emitSidecar()
   }, 250) : undefined
   const stopLogWatch = () => { clearInterval(logWatch) }

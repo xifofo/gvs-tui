@@ -138,11 +138,17 @@ function createWindow(): void {
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
-app.on('second-instance', () => {
-  if (!win) return
+function showMainWindow(): void {
+  if (!win || win.isDestroyed()) {
+    createWindow()
+    return
+  }
   if (win.isMinimized()) win.restore()
+  win.show()
   win.focus()
-})
+}
+
+app.on('second-instance', showMainWindow)
 
 app.whenReady().then(() => {
   // macOS 需要编辑菜单，复制/粘贴快捷键才生效；Windows 不要菜单栏。
@@ -155,9 +161,7 @@ app.whenReady().then(() => {
   createWindow()
   void core.boot().catch(() => {})
   updater.start()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  app.on('activate', showMainWindow)
 })
 
 // Windows 上 Electron 退出不会顺手杀子进程（N_m3u8DL-RE / ffmpeg 会继续占着文件写），
