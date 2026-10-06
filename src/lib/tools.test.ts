@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { mkvLang } from './mkvmerge.ts'
-import { ffmpegMissingError, lookBundledFFmpeg, m3u8dlRid, mp4BoxMissingError, pickM3u8dlAsset, pickMkvmergeAsset, pickPackagerAsset, toolRuns, unixHostWrapper } from './tools.ts'
+import { ffmpegMissingError, lookBundledFFmpeg, m3u8dlRid, mp4BoxMissingError, pickM3u8dlAsset, pickMkvmergeAsset, pickPackagerAsset, toolArchiveCommand, toolRuns, unixHostWrapper } from './tools.ts'
 
 const m3u8Names = [
   'N_m3u8DL-RE_v0.6.0-beta_android-bionic-x64_20260629.tar.gz',
@@ -9,6 +9,14 @@ const m3u8Names = [
   'N_m3u8DL-RE_v0.6.0-beta_win-arm64_20260629.zip',
   'N_m3u8DL-RE_v0.6.0-beta_win-x64_20260629.zip',
 ]
+
+test('managed RE ZIP uses a ZIP-capable extractor on Unix and keeps tar formats', () => {
+  for (const platform of ['linux', 'darwin'] as const) {
+    expect(toolArchiveCommand('/tmp/managed.zip', '/tmp/out', platform)).toEqual({command:'unzip',args:['-q','/tmp/managed.zip','-d','/tmp/out']})
+  }
+  expect(toolArchiveCommand('managed.zip','out','win32').command).toBe('tar')
+  expect(toolArchiveCommand('/tmp/upstream.tar.gz','/tmp/out','linux')).toEqual({command:'tar',args:['-xzf','/tmp/upstream.tar.gz','-C','/tmp/out']})
+})
 
 test('m3u8dlRid windows x64', () => {
   expect(m3u8dlRid('win32', 'x64')).toBe('win-x64')

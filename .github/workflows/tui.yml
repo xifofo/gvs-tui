@@ -16,7 +16,7 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
       - name: Install HLS fixture tool
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg unzip
       - run: bun run build
       - name: Guard process.env not inlined as {}
         run: |

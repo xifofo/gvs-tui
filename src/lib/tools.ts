@@ -354,21 +354,29 @@ async function githubLatest(repo: string, signal?: AbortSignal, note?: (s: strin
   return data.assets
 }
 
-function extract(archive: string, dest: string): Promise<void> {
+export function toolArchiveCommand(archive: string, dest: string, platform = process.platform): { command: string; args: string[] } {
   const lower = archive.toLowerCase()
+  if (lower.endsWith('.zip') && platform !== 'win32') {
+    return { command: 'unzip', args: ['-q', archive, '-d', dest] }
+  }
   const args = lower.endsWith('.tar.xz') || lower.endsWith('.txz')
     ? ['-xJf', archive, '-C', dest]
     : lower.endsWith('.gz')
       ? ['-xzf', archive, '-C', dest]
       : ['-xf', archive, '-C', dest]
+  return { command: 'tar', args }
+}
+
+function extract(archive: string, dest: string): Promise<void> {
+  const { command, args } = toolArchiveCommand(archive, dest)
   const { promise, resolve, reject } = Promise.withResolvers<void>()
-  const child = spawn('tar', args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
+  const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
   let err = ''
   child.stderr.on('data', (d: Buffer) => { err += d.toString() })
-  child.once('error', (e) => reject(new Error(`无法解压（需要 tar）：${e.message}`)))
+  child.once('error', (e) => reject(new Error(`无法解压（需要 ${command}）：${e.message}`)))
   child.once('close', (code) => {
     if (code === 0) resolve()
-    else reject(new Error(`tar 解压失败 (${code}): ${err.trim().slice(0, 240)}`))
+    else reject(new Error(`${command} 解压失败 (${code}): ${err.trim().slice(0, 240)}`))
   })
   return promise
 }
