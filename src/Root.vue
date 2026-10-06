@@ -18,6 +18,8 @@ import {
   bold,
   fg,
   onKeyDown,
+  onPaste,
+  decodePasteBytes,
   useExit,
   useInterval,
   useTerminalSize,
@@ -115,7 +117,13 @@ watch(key, (value) => {
   if (state.value.scene === 'setup') bridge.set('key', value)
 })
 watch(edit, (value) => {
-  if (state.value.scene === 'edit') bridge.set('edit', value)
+  if (state.value.scene === 'edit' && state.value.editField !== 'IQ 登录密码') bridge.set('edit', value)
+})
+
+onPaste((event) => {
+  if (state.value.scene === 'edit' && state.value.editField === 'IQ 登录密码') {
+    bridge.set('secretAppend', decodePasteBytes(event.bytes)); event.preventDefault()
+  }
 })
 
 onKeyDown((event) => {
@@ -123,6 +131,12 @@ onKeyDown((event) => {
   if (event.ctrl && name === 'c') {
     exit()
     return
+  }
+  if (state.value.scene === 'edit' && state.value.editField === 'IQ 登录密码') {
+    if (['enter', 'return', 'escape', 'esc'].includes(name)) bridge.key(event.name)
+    else if (name === 'backspace') bridge.set('secretBackspace', '')
+    else if (!event.ctrl && !event.meta && !event.super && event.sequence && !/[\u0000-\u001f\u007f]/.test(event.sequence)) bridge.set('secretAppend', event.sequence)
+    event.preventDefault(); return
   }
   if (name === 'q' && state.value.scene === 'home') {
     exit()

@@ -4,6 +4,7 @@ import { fetchGateway } from './proxy.ts'
 import { runLog, summarizeInput, summarizeResult } from './runlog.ts'
 import { TencentOperations, type TencentOperation } from './tencent-operations.ts'
 import { randomUUID } from 'node:crypto'
+import { normalizeIQCookie } from './iq.ts'
 import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
 import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
 export type KeyInfo = {
@@ -107,6 +108,8 @@ export class GwClient {
     if (provider === 'youku' && cfg.youkuSign && !skipSign) h['Yk-Sign'] = cfg.youkuSign
     if (provider === 'tencent' && (!cfg.tencentMode || cfg.tencentMode === 'cookie') && cfg.tencentCookie) h['Tx-Cookie'] = cfg.tencentCookie
     if (provider === 'douyin' && cfg.douyinCookie) h['Dy-Cookie'] = cfg.douyinCookie
+    if (provider === 'iq' && cfg.iqCookie) h['Iq-Cookie'] = normalizeIQCookie(cfg.iqCookie)
+    if (provider === 'iq' && cfg.iqProfile) h['Iq-Profile'] = cfg.iqProfile
     return h
   }
 

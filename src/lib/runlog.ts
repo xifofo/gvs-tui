@@ -122,7 +122,7 @@ export function summarizeInput(input: Record<string, unknown> | undefined): stri
   if (!input) return '-'
   const parts: string[] = []
   for (const [k, v] of Object.entries(input)) {
-    if (/cookie|token|sign|auth|passwd|password|secret|authorization|binding|phone|code|pin|flowId|challenge|license|payload|key/i.test(k)) {
+    if (/cookie|token|sign|auth|passwd|password|secret|authorization|binding|phone|code|pin|flowId|challenge|license|payload|key|username|email/i.test(k)) {
       parts.push(`${k}=***`)
       continue
     }

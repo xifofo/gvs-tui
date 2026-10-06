@@ -1,6 +1,6 @@
 # Windows x64 媒体工具
 
-这些未修改的上游二进制文件由普通 Git 跟踪，clone/pull 后即可使用，无需 Git LFS、解压或另外下载工具。仅适用于 Windows x64。`manifest.json` 记录确切版本、文件长度及 SHA-256；`bun run tools:check` 在禁止网络的条件下验证文件和启动。macOS 的 `bin/ffmpeg`、`bin/MP4Box` 由 `tools:prepare` 生成为指向 Homebrew 的 wrapper，不要把 Cellar 里的 Mach-O 复制进来，也不要提交这些 wrapper。
+这些媒体工具由普通 Git 跟踪，clone/pull 后即可使用，无需 Git LFS、解压或另外下载工具。仅适用于 Windows x64。`manifest.json` 记录确切版本、文件长度及 SHA-256；`bun run tools:check` 在禁止网络的条件下验证文件和启动。macOS 的 `bin/ffmpeg`、`bin/MP4Box` 由 `tools:prepare` 生成为指向 Homebrew 的 wrapper，不要把 Cellar 里的 Mach-O 复制进来，也不要提交这些 wrapper。
 
 - `ffmpeg.exe`：9.0.1 essentials，102,856,192 字节，低于 GitHub 单文件 100 MiB 上限。采用 essentials 而非超过上限的 full 版；项目使用的流复制、解码检查、AES 解密、H.264/HEVC/AAC 功能已验证。不包含用于本机诊断的 ffprobe/ffplay，因为运行时不调用它们。
   - [原始发行包](https://github.com/GyanD/codexffmpeg/releases/download/9.0.1/ffmpeg-9.0.1-essentials_build.zip)
@@ -10,9 +10,9 @@
   - [原始发行包](https://github.com/Jesseatgao/MKVToolNix-static-builds/releases/download/v58.0.0-mingw-w64-posixv1.8el9/mkvtoolnix-x86_64-win.zip)
   - [对应源代码](https://mkvtoolnix.download/sources/mkvtoolnix-58.0.0.tar.xz)，[静态构建仓库与环境](https://github.com/Jesseatgao/MKVToolNix-static-builds/tree/v58.0.0-mingw-w64-posixv1.8el9)
   - GPL v2；许可证见 `licenses/MKVToolNix-GPL-2.0.txt`。
-- `N_m3u8DL-RE.exe`：0.6.0-beta，2026-06-29 发行包，源码提交 `df70f0b3da0c630bd413bf617e758051f6b64757`。
-  - [原始发行包](https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.6.0-beta/N_m3u8DL-RE_v0.6.0-beta_win-x64_20260629.zip)
-  - [对应源代码](https://github.com/nilaoda/N_m3u8DL-RE/tree/df70f0b3da0c630bd413bf617e758051f6b64757)
+- `N_m3u8DL-RE.exe`：GVS 自维护 `0.6.0-gvs-iq.1`，支持 IQ_BBTS。固定上游提交 `2f64dcbba38012021d6cb25cb35009372a7a80fc`，修改后的源码和构建脚本均在本仓库。
+  - 源码：`third_party/N_m3u8DL-RE/`；维护说明：`third_party/N_m3u8DL-RE/README-GVS.md`。
+  - 构建：`pwsh ./scripts/build-managed-re.ps1 -Runtime win-x64 -Install`（.NET SDK10）；Windows 二进制已本地构建并验收。
   - MIT；许可证见 `licenses/N_m3u8DL-RE-MIT.txt`。
 - `packager-win-x64.exe`：Shaka Packager 3.9.3，用于优酷加密轨道处理。
   - [原始文件](https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-win-x64.exe)
@@ -24,4 +24,4 @@
   - [对应 GPAC 源码](https://github.com/gpac/gpac/tree/260872025)，[构建说明](https://wiki.gpac.io/Build/archives/GPAC-build-MP4Box-only-all-platforms/)。程序报告的构建配置为 `--static-bin --use-zlib=no`，MINI build。
   - LGPL v2.1+；许可证原文见 `licenses/GPAC-LGPL-2.1.txt`。不附带 StaxRip 的凭据、配置、旧 gpac.exe 或其它程序。
 
-FFmpeg、RE、mkvmerge、MP4Box 的下载归档已与 GitHub 发行资产 SHA-256 核对；Shaka 文件已与发行资产摘要核对。更新工具时须同步修改哈希清单，重新运行 `tools:check` 及媒体回归测试。不要提交日志、用户配置、其它平台程序或重复的工具副本。
+FFmpeg、mkvmerge、MP4Box 的下载归档已与 GitHub 发行资产 SHA-256 核对；Shaka 文件已与发行资产摘要核对。RE 以本仓库源码构建，manifest 记录本地维护版本的 SHA-256。更新工具时须同步修改哈希清单，重新运行 `tools:check` 及媒体回归测试。不要提交日志、用户配置、其它平台程序或重复的工具副本。

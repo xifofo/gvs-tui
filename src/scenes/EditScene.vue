@@ -31,6 +31,10 @@ const fieldW = computed(() => boxW.value - 4)
 
 /** What the field expects, for the fields where the format is not obvious. */
 const FIELD_HINTS: Record<string, string> = {
+  'IQ 登录账号': '本人 IQ 邮箱或手机号；手机号下一步填写国家区号',
+  'IQ 登录区号': '国家区号，例如 86、852、886，不加 +',
+  'IQ 登录密码': '输入或粘贴密码，回车仅本次提交，Esc 清空取消',
+  'IQ Web Cookie换TV': '本人 Web Cookie Header 或 Netscape 文本，仅本次提交',
   下载目录: '绝对路径，例如 D:\\GVS',
   下载线程: '1–16（路并发）',
   'Hami TV Cookie': '仅本次 POST 提交，不写客户端配置；支持 Header 或 Netscape 文本',
@@ -71,6 +75,7 @@ const hint = computed(() => FIELD_HINTS[props.state.editField ?? ''] ?? '')
       :paddingRight="1"
     >
       <Input
+        v-if="state.editField !== 'IQ 登录密码'"
         ref="editField"
         v-model="edit"
         autofocus
@@ -80,6 +85,7 @@ const hint = computed(() => FIELD_HINTS[props.state.editField ?? ''] ?? '')
         :placeholderColor="c.faint"
         :width="fieldW"
       />
+      <Text v-else :content="ink(c.text, state.editValue || '输入密码…')" :width="fieldW" :height="1" />
     </Box>
     <Text
       v-if="hint"

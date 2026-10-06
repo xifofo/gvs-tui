@@ -1,10 +1,10 @@
-export type SessionProvider = 'mewatch' | 'hamivideo'
-export type SessionCommand = { provider: SessionProvider; op: string; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string }
-export type ProviderSessionView = { provider: SessionProvider; state: string; authenticated: boolean; summary: string; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
+export type SessionProvider = 'mewatch' | 'hamivideo' | 'iq'
+export type SessionCommand = { provider: SessionProvider; op: string; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string }
+export type ProviderSessionView = { provider: SessionProvider; state: string; authenticated: boolean; summary: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
 const positive = (v: unknown, fallback: number) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback
-const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']) }
+const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']) }
 
 /** Source credentials are transient: never persist or log command inputs. */
 export class ProviderSessions {
@@ -32,9 +32,14 @@ export class ProviderSessions {
       if (!prev?.expiresAt || this.now() >= prev.expiresAt) throw new Error('激活码已过期，请重新开始')
       if (this.now() < this.nextPoll) return { ...prev, interval: Math.ceil((this.nextPoll - this.now()) / 1000) }
     }
-    if (c.op === 'import') {
+    if (c.op === 'import' || (c.provider === 'iq' && c.op === 'web_import')) {
       if (!c.cookie?.trim() || c.cookie.length > 65536) throw new Error('请输入有效的本人 Cookie 文本')
       input.cookie = c.cookie
+    }
+    if (c.provider === 'iq' && c.op === 'password') {
+      if (!c.username?.trim() || !c.password || c.username.length > 256 || c.password.length > 256) throw new Error('请输入本人账号和密码（最多256字符）')
+      input.username = c.username.trim(); input.password = c.password
+      if (c.areaCode) input.areaCode = c.areaCode
     }
     if (c.op === 'web_send_code' || c.op === 'web_verify') {
       if (!this.flow || this.now() >= this.flowExpires) throw new Error('短信登录流程已过期，请重新准备')
@@ -64,6 +69,16 @@ export class ProviderSessions {
       const authenticated = data.authenticated === true || data.authorized === true || data.signedIn === true || data.loggedIn === true || state === 'authorized' || state === 'authenticated'
       const previous = c.provider === 'mewatch' ? this.activation : this.views.get(key)
       const view: ProviderSessionView = { provider: c.provider, state, authenticated, summary: authenticated ? '已登录；播放仍以源站授权为准' : state === 'imported' ? '已导入；尚未验证订阅' : state }
+      if (c.provider === 'iq') {
+        view.webAuthenticated = data.webAuthenticated === true; view.tvAuthenticated = data.tvAuthenticated === true
+        view.authenticated = view.webAuthenticated && view.tvAuthenticated
+        view.summary = text(data.summary) || (view.authenticated ? 'Web 登录和 TV 会话转换已完成' : 'IQ 会话尚未完成')
+        const uri = text(data.url)
+        if (uri) { const u = new URL(uri); if (u.protocol !== 'https:' || !['www.iq.com', 'iq.com'].includes(u.hostname)) throw new Error('拒绝非官方 IQ 登录地址'); view.url = u.href }
+        view.userCode = text(data.userCode) || undefined
+        if (data.interval) view.interval = positive(data.interval, 2)
+        if (data.expiresAt) view.expiresAt = positive(data.expiresAt, 0) * 1000
+      }
       if (c.provider === 'mewatch' && state === 'pending') {
         view.userCode = text(data.userCode) || previous?.userCode
         const uri = text(data.verificationUriComplete) || text(data.verificationUri) || previous?.url

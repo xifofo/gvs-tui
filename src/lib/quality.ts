@@ -1,4 +1,5 @@
 import { probeManifest } from './manifest-provider.ts'
+import { iqOptions } from './iq.ts'
 import type { Audio, Episode, Quality, VipProbe } from '../types.ts'
 import type { FileConfig } from './config.ts'
 import { ReloginRequired, type GwClient } from './client.ts'
@@ -314,6 +315,7 @@ export async function probeOptions(
   opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }> } = {},
 ): Promise<StreamOptions> {
   switch (provider) {
+    case 'iq': return iqOptions(await cli.invoke('iq','probe',{vid},cli.extra(cfg,'iq'),{timeoutMs:150000}))
     case 'mewatch': case 'hamivideo': return probeManifest(cli, cfg, provider, vid)
     case 'hongguo': return probeHongguo(cli, vid)
     case 'huangguo': return probeHuangguo(cli, vid)

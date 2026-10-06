@@ -758,7 +758,7 @@ export function playlistOverall(phase: PlaylistPhase, fraction: number, decrypts
 
 
 /** HLS 解密参数。CENC 走 Shaka；AES_128 由 RE 自己解，不需要解密引擎。 */
-export type HlsKeyMethod = 'AES_128' | 'CENC'
+export type HlsKeyMethod = 'AES_128' | 'CENC' | 'IQ_BBTS'
 
 export function hlsKeyArgs(key?: string, method: HlsKeyMethod = 'CENC'): string[] {
   if (!key) return []
@@ -767,6 +767,7 @@ export function hlsKeyArgs(key?: string, method: HlsKeyMethod = 'CENC'): string[
   // RE 的 HLS 加密方式用下划线拼写（AES_128 / CENC，见 --morehelp custom-hls-method）。
   // AES-128 只需要 KEY：`--key` 是给 CENC 的 KID:KEY 用的。
   if (method === 'AES_128') return ['--custom-hls-key', hex, '--custom-hls-method', 'AES_128']
+  if (method === 'IQ_BBTS') return ['--custom-hls-key', hex, '--custom-hls-method', 'IQ_BBTS', '--custom-hls-scope', 'VIDEO']
   return ['--key', key, '--custom-hls-key', hex, '--custom-hls-method', 'CENC']
 }
 
@@ -1017,6 +1018,7 @@ export async function downloadPlaylist(opts: {
     ? scratchDirIn(join(opts.workDir, tag), 're-', opts.log)
     : scratchDir(opts.dest, 'gvs-re-')
   const logFile = join(workDir, 're.log')
+  const iqKeyFile = join(workDir, 'iq-key.bin')
   const errorLog = `${opts.dest}.download-error.log`
   let diagnostics = ''
   const relayEvents: RelayEvent[] = []
@@ -1026,6 +1028,10 @@ export async function downloadPlaylist(opts: {
     const threads = Number.isFinite(opts.threads) ? Math.max(1, Math.floor(opts.threads!)) : 1
     const ffmpeg = await ensureFFmpeg()
     const keyArgs = hlsKeyArgs(opts.key, opts.keyMethod)
+    if (opts.key && opts.keyMethod === 'IQ_BBTS') {
+      writeFileSync(iqKeyFile, Buffer.from(opts.key.split(':').at(-1)!, 'hex'), { mode: 0o600 })
+      keyArgs[keyArgs.indexOf('--custom-hls-key') + 1] = iqKeyFile
+    }
     let source = opts.src
     if (opts.transport === 'node') {
       // The supplied CENC key replaces remote/skd key discovery entirely.
@@ -1158,6 +1164,7 @@ export async function downloadPlaylist(opts: {
     } catch { /* preserve the original failure if the diagnostic cannot be saved */ }
     throw e
   } finally {
+    try { unlinkSync(iqKeyFile) } catch { /* no IQ key or downloader already removed it */ }
     await relay?.close()
     try {
       if (succeeded || !readdirSync(workDir).length) removeScratch(workDir)

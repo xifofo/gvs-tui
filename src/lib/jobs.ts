@@ -27,6 +27,7 @@ import { asString, human, isObj } from './util.ts'
 import type { Job, TencentQualitySelection } from '../types.ts'
 import { tencentDownloadSelection } from './tencent-quality-selection.ts'
 import { moveFileSync } from './file-move.ts'
+import { downloadIQ } from './iq.ts'
 import { runLog } from './runlog.ts'
 import { prepareAudioLanguage } from './audio-language.ts'
 import type { TmdbDetails } from './tmdb.ts'
@@ -344,6 +345,9 @@ async function runTask(
     if (n.container === 'mkv' && !mkvmerge) throw new Error('没有 mkvmerge')
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
+      case 'iq':
+        await downloadIQ(cli,cfg,t,out,work,emit,signal)
+        break
       case 'mewatch': case 'hamivideo':
         await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
         break

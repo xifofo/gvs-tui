@@ -1,3 +1,2 @@
-bin/*.exe binary
-# Preserve verbatim upstream license/build notices, including whitespace.
-bin/licenses/* -whitespace
+# Preserve the pinned upstream vendor's original whitespace.
+third_party/N_m3u8DL-RE/** whitespace=-blank-at-eol

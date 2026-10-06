@@ -16,9 +16,15 @@
     },
     {
       "name": "N_m3u8DL-RE.exe",
-      "version": "0.6.0-beta (df70f0b3)",
-      "bytes": 13287936,
-      "sha256": "35e7c16983f0315bba2a3f37dc392fdfa074be614c8effb642b78376b18ba272"
+      "version": "0.6.0-gvs-iq.1",
+      "bytes": 38502987,
+      "sha256": "d44c521c22290df94b5568d3f6fde3b47acc90ae3e70b9efba732257133c467f",
+      "source": "third_party/N_m3u8DL-RE",
+      "capabilities": [
+        "IQ_BBTS",
+        "native-crc-order",
+        "preserve-ts-pcr-continuity"
+      ]
     },
     {
       "name": "packager-win-x64.exe",

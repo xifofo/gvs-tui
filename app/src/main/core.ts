@@ -28,7 +28,7 @@ import {
   type DlTask,
   type JobEvt,
 } from '@tui/jobs.ts'
-import { extractTencentLinks, extractYoukuVideoId } from '@tui/link.ts'
+import { extractTencentLinks, extractYoukuVideoId, extractIQLink } from '@tui/link.ts'
 import { youkuSpokenLangKey } from '@tui/media.ts'
 import { filename, folder, sourceTag, tierHeight, dots, type Naming } from '@tui/name.ts'
 import { isDtsAudio } from '@tui/mp4box.ts'
@@ -567,6 +567,8 @@ export class Core {
       hamiClient: c.hamiClient || 'tv',
       tencentCookie: c.tencentCookie,
       douyinCookie: c.douyinCookie ?? '',
+      iqCookie: c.iqCookie ?? '',
+      iqProfile: c.iqProfile ?? '',
       hongguoNfo: c.hongguoNfo,
       huangguoNfo: c.huangguoNfo,
       hongguoFmt: c.hongguoFmt,
@@ -598,6 +600,10 @@ export class Core {
         return this.cfg.douyinCookie
           ? { provider: p, short: 'Cookie', summary: 'Cookie 已设置', tone: 'ok' }
           : { provider: p, short: '未设置', summary: '搜索需要网页登录 Cookie（sessionid）', tone: 'warn' }
+      }
+      if (p === 'iq') {
+        const account = this.providerAccounts.get('iq')
+        return { provider:p, short:account?.authenticated?'已登录':this.cfg.iqCookie?'会话已设':'待登录', summary:account?.summary || '到平台账号设置登录 IQ，自动获取 Web 和 TV 会话', tone:account?.authenticated?'ok':'muted' }
       }
       if (isManifestProvider(p)) {
         const account = this.providerAccounts.get(p + (p === 'hamivideo' ? ':' + (this.cfg.hamiClient || 'tv') : ''))
@@ -646,6 +652,8 @@ export class Core {
     if (patch.hamiClient !== undefined) { if (!['tv','web'].includes(patch.hamiClient)) throw new Error('无效 Hami 会话类型'); c.hamiClient = patch.hamiClient }
     if (patch.tencentCookie !== undefined) c.tencentCookie = patch.tencentCookie.trim()
     if (patch.douyinCookie !== undefined) c.douyinCookie = patch.douyinCookie.trim()
+    if (patch.iqCookie !== undefined) c.iqCookie = patch.iqCookie.trim()
+    if (patch.iqProfile !== undefined) c.iqProfile = patch.iqProfile.trim()
     if (patch.hongguoNfo !== undefined) c.hongguoNfo = patch.hongguoNfo
     if (patch.huangguoNfo !== undefined) c.huangguoNfo = patch.huangguoNfo
     if (patch.hongguoFmt !== undefined) c.hongguoFmt = patch.hongguoFmt
@@ -814,6 +822,7 @@ export class Core {
     this.providerSessions.setScope(scope)
     const view = await this.providerSessions.command(command)
     if (scope !== this.cfg.host + ':' + this.cfg.key) throw new Error('账号连接已切换')
+    if (command.provider === 'iq' && (view.authenticated || command.op === 'logout')) { this.cfg.iqCookie = ''; saveConfig(this.cfg) }
     this.providerAccounts.set(command.provider + (command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
     this.emit.state()
     return view
@@ -865,6 +874,8 @@ export class Core {
   }
 
   parseLink(text: string): LinkTarget {
+    const iqLink = extractIQLink(text)
+    if (iqLink) return { kind: 'iq', url: iqLink }
     const manifest = providerLink(text)
     if (manifest) return { kind: manifest.provider, url: manifest.url }
     const vid = extractYoukuVideoId(text)
@@ -910,6 +921,7 @@ export class Core {
   }
 
   async detailFromLink(link: LinkTarget, hint?: DetailHint): Promise<DetailView> {
+    if (link.kind === 'iq') return this.detail('iq', link.url, hint)
     if (link.kind === 'mewatch' || link.kind === 'hamivideo') return this.detail(link.kind, link.url, hint)
     if (link.kind === 'youku') {
       let data: Record<string, unknown> = {}

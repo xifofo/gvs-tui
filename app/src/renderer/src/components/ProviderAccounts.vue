@@ -6,6 +6,7 @@ const allowed = (p: string) => (store.state?.providers || []).some(v => v === p)
 const busy = ref(false)
 const views = reactive<Record<string, ProviderSessionView>>({})
 const cookie = ref(''), phone = ref(''), code = ref(''), profile = ref(''), pin = ref('')
+const iqUsername = ref(''), iqPassword = ref(''), iqAreaCode = ref('')
 const mode = computed(() => store.state?.settings.hamiClient || 'tv')
 const hami = computed(() => views['hamivideo:' + mode.value])
 async function command(c: SessionCommand) {
@@ -15,7 +16,7 @@ async function command(c: SessionCommand) {
     views[c.provider + (c.provider === 'hamivideo' ? ':' + (c.op.startsWith('web_') ? 'web' : 'tv') : '')] = v
     toast(v.summary, v.authenticated ? 'ok' : 'muted')
   } catch (e) { toast(errText(e), 'err') }
-  finally { busy.value = false; cookie.value = ''; code.value = ''; pin.value = ''; if (c.op === 'web_send_code') phone.value = '' }
+  finally { busy.value = false; cookie.value = ''; code.value = ''; pin.value = ''; iqPassword.value = ''; if (c.op === 'web_send_code') phone.value = '' }
 }
 async function setMode(event: Event) {
   const hamiClient = (event.target as HTMLSelectElement).value as 'tv' | 'web'
@@ -24,10 +25,34 @@ async function setMode(event: Event) {
 watch(() => store.state?.accountScope || ((store.state?.settings.host || '') + ':' + (store.state?.settings.keyMasked || '')), () => {
   for (const key of Object.keys(views)) delete views[key]
   cookie.value = ''; phone.value = ''; code.value = ''; pin.value = ''
+  iqUsername.value = ''; iqPassword.value = ''; iqAreaCode.value = ''
 })
 </script>
 
 <template>
+  <div v-if="allowed('iq')" class="provider-account">
+    <h3>IQ 海外版 · 账号登录</h3>
+    <p>账号密码登录后自动取得 Web 会话，再换取 TV 下载会话。密码仅本次提交；遇到人工验证时按源站要求完成。</p>
+    <div class="controls">
+      <input v-model="iqUsername" class="input" autocomplete="username" placeholder="邮箱或手机号" aria-label="本人 IQ 邮箱或手机号" />
+      <input v-model="iqAreaCode" class="input" inputmode="numeric" autocomplete="off" placeholder="手机区号（邮箱留空）" aria-label="手机号国家区号" />
+      <input v-model="iqPassword" class="input" type="password" autocomplete="off" placeholder="密码（提交后清空）" aria-label="IQ 登录密码" />
+      <button class="btn sm" :disabled="busy || !iqUsername.trim() || !iqPassword" @click="command({provider:'iq',op:'password',username:iqUsername,password:iqPassword,areaCode:iqAreaCode})">登录并换取 TV 会话</button>
+    </div>
+    <div class="controls">
+      <button class="btn sm" :disabled="busy" @click="command({provider:'iq',op:'status'})">账号状态</button>
+      <button class="btn sm" :disabled="busy || !views.iq?.webAuthenticated" @click="command({provider:'iq',op:'exchange_tv'})">重新换取 TV 会话</button>
+      <button class="btn sm" :disabled="busy || !views.iq?.userCode" @click="command({provider:'iq',op:'poll'})">检查授权</button>
+      <button class="btn sm" :disabled="busy" @click="command({provider:'iq',op:'logout'})">退出</button>
+    </div>
+    <p v-if="views.iq" aria-live="polite">{{ views.iq.summary }}</p>
+    <p v-if="views.iq?.userCode">TV 激活码：{{ views.iq.userCode }}</p>
+    <input v-if="views.iq?.url" class="input" :value="views.iq.url" readonly aria-label="IQ 官方验证页面" />
+    <details><summary>使用已有 Web Cookie</summary>
+      <textarea v-model="cookie" class="input" autocomplete="off" spellcheck="false" placeholder="本人 Web Cookie Header 或 Netscape 文本，仅本次提交" aria-label="本人 IQ Web Cookie" />
+      <button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'iq',op:'web_import',cookie})">验证 Web Cookie 并换取 TV 会话</button>
+    </details>
+  </div>
   <div v-if="allowed('mewatch')" class="provider-account">
     <h3>mewatch · 官方设备激活</h3>
     <p>网关按当前 Key 保存会话。激活页登录后，按返回间隔检查；不会自动反复发起登录。</p>

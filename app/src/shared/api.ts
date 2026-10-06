@@ -38,6 +38,8 @@ export type SettingsView = {
   hamiClient: 'tv' | 'web'
   tencentCookie: string
   douyinCookie: string
+  iqCookie: string
+  iqProfile: string
   hongguoNfo: boolean
   huangguoNfo: boolean
   hongguoFmt: string
@@ -96,7 +98,7 @@ export type SearchResult = { query: string; groups: SearchGroup[]; ms: number }
 export type LinkTarget =
   | { kind: 'youku'; vid: string }
   | { kind: 'tencent'; cid: string; vid: string; url: string }
-  | { kind: 'mewatch' | 'hamivideo'; url: string }
+  | { kind: 'mewatch' | 'hamivideo' | 'iq'; url: string }
   | { kind: 'none' }
 
 export type EpisodeView = {

@@ -22,6 +22,19 @@ const row = (id: string, rank = 1) => ({
   rank,
   target: { type: 'detail', id },
 })
+
+test('IQ opens its actual rank columns when the default home mode has no section', async () => {
+  const calls: Array<{action:string;input:Record<string,unknown>}> = []
+  const d = new Discovery(async (_p,action,input) => {
+    calls.push({action,input})
+    return action === 'browse_catalog' ? {sections} : {items:[row('album')],contentType:'rank',hasMore:false}
+  }, () => {})
+  await d.open('iq')
+  expect(d.view.mode).toBe('rank')
+  expect(d.view.rows).toHaveLength(1)
+  expect(calls.at(-1)?.input.sectionId).toBe('a')
+  expect(calls.at(-1)?.input.mode).toBe('rank')
+})
 test('discovery keeps actual rank and explicit title-search target without an ID', () => {
   const rows = discoveryRows('tencent', {
     contentType: 'rank',

@@ -1,0 +1,60 @@
+name: GVS maintained RE
+on:
+  workflow_dispatch:
+  push:
+    paths: ['third_party/N_m3u8DL-RE/**', 'scripts/build-managed-re.ps1', '.github/workflows/managed-re.yml']
+    tags: ['managed-re-v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: macos-latest
+            rid: osx-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+          - os: windows-latest
+            rid: win-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build our pinned RE
+        shell: pwsh
+        run: ./scripts/build-managed-re.ps1 -Runtime '${{ matrix.rid }}' -Output '.build/managed-re/${{ matrix.rid }}'
+      - name: IQ native CRC and clear-segment regression
+        run: dotnet test third_party/N_m3u8DL-RE/src/N_m3u8DL-RE.Tests/N_m3u8DL-RE.Tests.csproj -c Release --filter FullyQualifiedName~IqBbtsTests
+      - name: Package binary
+        shell: pwsh
+        run: Compress-Archive -Path '.build/managed-re/${{ matrix.rid }}/N_m3u8DL-RE*', '.build/managed-re/${{ matrix.rid }}/LICENSE.txt', '.build/managed-re/${{ matrix.rid }}/gvs-source.json', '.build/managed-re/${{ matrix.rid }}/README-GVS.md' -DestinationPath '.build/N_m3u8DL-RE_${{ matrix.rid }}_gvs-iq.1.zip'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GVS-RE-${{ matrix.rid }}
+          path: .build/N_m3u8DL-RE_${{ matrix.rid }}_gvs-iq.1.zip
+          if-no-files-found: error
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/managed-re-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          make_latest: 'false'
+          files: artifacts/*.zip

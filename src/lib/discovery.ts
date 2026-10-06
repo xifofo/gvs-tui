@@ -291,6 +291,12 @@ export class Discovery {
       if (g !== this.generation) return
       this.view.sections = catalog.sections
       this.view.compatibility = catalog.compatibility
+      if (provider === 'iq' && !catalog.sections.some(s => s.mode === this.view.mode)) {
+        this.view.mode = catalog.sections.find(s => s.available)?.mode || catalog.sections[0]?.mode || mode
+        const remembered = this.selections.get(provider + '|' + this.view.mode)
+        this.view.sectionIndex = remembered?.index ?? 0
+        this.view.filters = { ...remembered?.filters }
+      }
       this.view.sectionIndex = Math.min(
         this.view.sectionIndex,
         Math.max(0, this.visibleSections.length - 1),

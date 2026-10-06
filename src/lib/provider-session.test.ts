@@ -3,6 +3,19 @@ import { ProviderSessions } from './provider-session.ts'
 import { summarizeInput } from './runlog.ts'
 
 describe('shared client provider sessions', () => {
+  test('IQ retains Web and TV verification separately and transmits password transiently', async () => {
+    let sent: Record<string, unknown> = {}
+    const s = new ProviderSessions(async (p, _a, input) => { expect(p).toBe('iq'); sent = input; return { state:'tv_ready', authenticated:true, webAuthenticated:true, tvAuthenticated:true, summary:'Web 和 TV 已完成', cookie:'PRIVATE_COOKIE' } })
+    const view = await s.command({provider:'iq',op:'password',username:'example@example.invalid',password:'  PRIVATE_PASSWORD  '})
+    expect(sent.password).toBe('  PRIVATE_PASSWORD  ')
+    expect(view.authenticated).toBe(true); expect(view.webAuthenticated).toBe(true); expect(view.tvAuthenticated).toBe(true)
+    expect(JSON.stringify(view)).not.toContain('PRIVATE_')
+    expect(summarizeInput(sent)).not.toContain('example@example.invalid'); expect(summarizeInput(sent)).not.toContain('PRIVATE_PASSWORD')
+  })
+  test('IQ Web authentication alone does not imply a ready TV download session', async () => {
+    const s = new ProviderSessions(async () => ({state:'web_ready', authenticated:true, webAuthenticated:true,tvAuthenticated:false}))
+    expect((await s.command({provider:'iq',op:'status'})).authenticated).toBe(false)
+  })
   test('mewatch respects poll interval and exposes no opaque tokens', async () => {
     let time=1000; const calls: unknown[]=[]
     const s = new ProviderSessions(async (_p,_a,input) => {calls.push(input);return input.op === 'start' ? {status:'pending',userCode:'ABCD',verificationUri:'https://example.test/activate',expiresIn:600,interval:5,device_code:'PRIVATE'} : {status:'authorized',access_token:'PRIVATE'}},() => time)

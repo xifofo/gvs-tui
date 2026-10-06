@@ -3,9 +3,10 @@ import youku from '../assets/platforms/youku.svg'
 import tencent from '../assets/platforms/tencent.svg'
 import hongguo from '../assets/platforms/hongguo.svg'
 import douyin from '../assets/platforms/douyin.svg'
+import iq from '../assets/platforms/iq.svg'
 
 withDefaults(defineProps<{ provider: string; size?: number }>(), { size: 18 })
-const LOGOS: Record<string, string> = { youku, tencent, hongguo, douyin }
+const LOGOS: Record<string, string> = { youku, tencent, hongguo, douyin, iq }
 </script>
 
 <template>

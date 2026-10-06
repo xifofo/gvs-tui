@@ -8,6 +8,19 @@ const QQ_BARE_RE =
 
 export type TencentLinkIds = { vid: string; cid: string; url: string }
 
+/** Strict overseas IQ page matching; domestic IQIYI pages are a different source. */
+export function extractIQLink(text: string): string {
+  const values = text.match(/https?:\/\/[^\s<>"'，。、]+|(?:www\.|m\.)?iq\.com\/[^\s<>"'，。、]+/gi) ?? []
+  for (const raw of values) {
+    try {
+      const u = new URL((/^https?:/i.test(raw) ? raw : `https://${raw}`).replace(TRAIL, ''))
+      if (u.username || u.password || !['iq.com','www.iq.com','m.iq.com'].includes(u.hostname)) continue
+      if (/^\/(album|play|detail)\/[^/]+/.test(u.pathname)) return u.href
+    } catch {}
+  }
+  return ''
+}
+
 /** Accept video-page URLs only; show IDs and unrelated hosts are not video IDs. */
 export function extractYoukuVideoId(text: string): string {
   const urls = text.match(/https?:\/\/[^\s<>"'，。、]+|(?:[a-z0-9-]+\.)*youku\.com\/[^\s<>"'，。、]+/gi) ?? []

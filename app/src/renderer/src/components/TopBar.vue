@@ -31,7 +31,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 const running = computed(() => store.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length)
 // 只有优酷/腾讯支持粘贴播放页链接；Key 没这两家权限就别提链接
 const placeholder = computed(() => {
-  const sites = [hasProvider('youku') && '优酷', hasProvider('tencent') && '腾讯', hasProvider('mewatch') && 'mewatch', hasProvider('hamivideo') && 'Hami'].filter(Boolean)
+  const sites = [hasProvider('youku') && '优酷', hasProvider('tencent') && '腾讯', hasProvider('mewatch') && 'mewatch', hasProvider('hamivideo') && 'Hami', hasProvider('iq') && 'IQ'].filter(Boolean)
   return sites.length ? `搜剧名，或直接粘贴${sites.join(' / ')}链接` : '搜剧名'
 })
 const shortcut = computed(() => (store.state?.platform === 'darwin' ? '⌘ K' : 'Ctrl K'))

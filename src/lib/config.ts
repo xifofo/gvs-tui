@@ -27,6 +27,10 @@ export type FileConfig = {
   tencentCookie: string
   /** 抖音网页登录 Cookie（含 sessionid），搜索需要；随请求以 Dy-Cookie 头发给网关 */
   douyinCookie?: string
+  /** Own IQ overseas Cookie; only sent in authorized gateway calls. */
+  iqCookie?: string
+  /** Advanced source deviceId + certificate digest; server certificate normally supplies it. */
+  iqProfile?: string
   /** Opt-in: probe play with encode=all (风控敏感，默认关) */
   tencentEncodeAll?: boolean
   /** Opt-in: catalog probe with source=1 / 原画 (默认关，易触发权益锁) */
@@ -203,6 +207,7 @@ export function loadConfig(): FileConfig {
   } catch {
     existed = false
   }
+  delete (cfg as unknown as Record<string, unknown>).iqKeys
   // Point a single run somewhere else without touching the saved config, e.g.
   // `GVS_HOST=http://127.0.0.1:8080 bun run dev` against a local gateway build.
   if (process.env.GVS_HOST) cfg.host = process.env.GVS_HOST
@@ -229,5 +234,7 @@ export function loadConfig(): FileConfig {
 export function saveConfig(cfg: FileConfig): void {
   const p = configPath()
   mkdirSync(join(p, '..'), { recursive: true })
-  writeFileSync(p, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 })
+  const current = { ...cfg } as unknown as Record<string, unknown>
+  delete current.iqKeys
+  writeFileSync(p, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 })
 }

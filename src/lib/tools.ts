@@ -7,7 +7,8 @@ import { fetchToolBytes } from './tool-download.ts'
 import { moveFileSync } from './file-move.ts'
 export { tuiBinDir } from './tool-paths.ts'
 
-const M3U8_REPO = 'nilaoda/N_m3u8DL-RE'
+const M3U8_REPO = 'my-name-is-alan/gvs-tui'
+const M3U8_RELEASE = 'managed-re-v0.6.0-iq.1'
 const MKV_REPO = 'Jesseatgao/MKVToolNix-static-builds'
 const SHAKA_REPO = 'shaka-project/shaka-packager'
 
@@ -231,6 +232,7 @@ export function ensureM3u8dl(note?: (s: string) => void, signal?: AbortSignal): 
   }
   m3u8Inflight ||= pullGithub({
     repo: M3U8_REPO,
+    releaseTag: M3U8_RELEASE,
     pick: (names) => pickM3u8dlAsset(names, m3u8dlRid()),
     want: { 'n_m3u8dl-re': true, 'n_m3u8dl-re.exe': true },
     destName: m3u8dlName(),
@@ -293,6 +295,7 @@ export async function ensureTools(note?: (s: string) => void, signal?: AbortSign
 
 async function pullGithub(opts: {
   repo: string
+  releaseTag?: string
   pick: (names: string[]) => string
   want: Record<string, true>
   destName: string
@@ -301,7 +304,7 @@ async function pullGithub(opts: {
   signal?: AbortSignal
 }): Promise<string> {
   opts.note?.(`正在从 GitHub 拉取 ${opts.label}…`)
-  const assets = await githubLatest(opts.repo, opts.signal, opts.note)
+  const assets = await githubLatest(opts.repo, opts.signal, opts.note, opts.releaseTag)
   const name = opts.pick(assets.map((a) => a.name))
   const asset = assets.find((a) => a.name === name)
   if (!asset) throw new Error(`GitHub 发行包没有 ${opts.label}`)
@@ -342,8 +345,8 @@ async function pullGithub(opts: {
   }
 }
 
-async function githubLatest(repo: string, signal?: AbortSignal, note?: (s: string) => void): Promise<Asset[]> {
-  const bytes = await fetchToolBytes(`https://api.github.com/repos/${repo}/releases/latest`, {
+async function githubLatest(repo: string, signal?: AbortSignal, note?: (s: string) => void, tag?: string): Promise<Asset[]> {
+  const bytes = await fetchToolBytes(`https://api.github.com/repos/${repo}/releases/${tag ? 'tags/' + encodeURIComponent(tag) : 'latest'}`, {
     label: `${repo} 版本列表`, accept: 'application/vnd.github+json', signal, note,
   })
   const data = JSON.parse(bytes.toString('utf8')) as { assets?: Asset[] }

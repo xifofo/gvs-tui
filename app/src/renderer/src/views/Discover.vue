@@ -9,7 +9,7 @@ import { errText, go, gvs, openCard, store } from '../store'
 
 defineOptions({ name: 'DiscoverView' })
 
-const browsable = computed<Provider[]>(() => (store.state?.providers ?? []).filter((p) => p !== 'douyin'))
+const browsable = computed<Provider[]>(() => (store.state?.providers ?? []).filter((p) => p !== 'douyin' && p !== 'iq'))
 const provider = ref<Provider | null>(null)
 const sections = ref<Section[]>([])
 const section = ref<Section | null>(null)

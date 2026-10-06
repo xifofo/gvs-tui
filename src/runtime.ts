@@ -58,7 +58,7 @@ import {
 } from './lib/youku-session.ts'
 import { normalizeTmdbProxy, tmdbSearch } from './lib/tmdb.ts'
 import { mediaKindFromMetadata, movieEdition, type TitleKind } from './lib/media-kind.ts'
-import { clipTitle, extractDouyinURL, extractTencentLinks, extractYoukuVideoId } from './lib/link.ts'
+import { clipTitle, extractDouyinURL, extractTencentLinks, extractYoukuVideoId, extractIQLink } from './lib/link.ts'
 import { pickDouyinURL, pickURL, tencentPlayProbeOk } from './lib/media.ts'
 import {
   installRunLogProcessHooks,
@@ -136,6 +136,8 @@ export class Runtime {
   private query = ''
   private editField = ''
   private editValue = ''
+  private iqLoginUsername = ''
+  private iqLoginAreaCode = ''
   private hostFocused = true
   private keyFocused = false
   private rows: Row[] = []
@@ -327,6 +329,11 @@ export class Runtime {
   }
 
   set(field: string, value: string): void {
+    if (this.scene === 'edit' && this.editField === 'IQ 登录密码') {
+      if (field === 'secretAppend') this.editValue = (this.editValue + value.replace(/[\r\n]/g, '')).slice(0, 256)
+      if (field === 'secretBackspace') this.editValue = [...this.editValue].slice(0, -1).join('')
+      this.emit(); return
+    }
     if (field === 'query') {
       this.query = value
       this.requestGeneration++
@@ -470,6 +477,7 @@ export class Runtime {
   }
 
   close(): void {
+    this.editValue = ''; this.iqLoginUsername = ''; this.iqLoginAreaCode = ''
     this.stopQR()
     this.discovery.invalidate()
     this.requestGeneration++
@@ -555,6 +563,7 @@ export class Runtime {
     if (this.has('hongguo')) f.push('红果合并', '红果 NFO', '红果封装')
     if (this.has('huangguo')) f.push('黄果 NFO', '黄果封装')
     if (this.has('douyin')) f.push('抖音 Cookie')
+    if (this.has('iq')) f.push('IQ 账号密码登录', 'IQ Web Cookie换TV', 'IQ 账号状态', 'IQ 换TV', 'IQ 检查授权', 'IQ 退出', 'IQ Cookie', 'IQ 设备资料')
     if (this.has('mewatch')) f.push('mewatch 激活', 'mewatch 检查授权', 'mewatch 状态', 'mewatch profiles', 'mewatch profile', 'mewatch 退出')
     if (this.has('hamivideo')) f.push('Hami 会话类型', 'Hami TV Cookie', 'Hami TV 续期', 'Hami Web 准备', 'Hami 手机号（确认发码）', 'Hami 短信码', 'Hami 状态', 'Hami 退出')
     if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯诊断日志')
@@ -563,6 +572,9 @@ export class Runtime {
   }
 
   private settingValue(f: string): string {
+    if (f.startsWith('IQ ') && !['IQ Cookie', 'IQ 设备资料'].includes(f)) return '回车操作 · 密码仅本次提交'
+    if (f === 'IQ Cookie') return this.cfg.iqCookie ? '已保存 · 独立音轨会话' : '回车粘贴本人 IQ 会话'
+    if (f === 'IQ 设备资料') return this.cfg.iqProfile ? '已保存' : '网关已配置设备证书时可留空；或粘贴设备资料 JSON'
     if (f === 'Hami 会话类型') return this.cfg.hamiClient || 'tv'
     if (f === '腾讯观测绑定') return this.cfg.tencentObservations ? '开 · 本地观测不等于腾讯已接收' : '关 · 风险诊断仍本地记录'
     if (f === '腾讯诊断日志') return tencentDiagnosticPath()
@@ -674,6 +686,8 @@ export class Runtime {
         return this.cfg.tencentCookie
       case '抖音 Cookie':
         return this.cfg.douyinCookie ?? ''
+      case 'IQ Cookie': return this.cfg.iqCookie ?? ''
+      case 'IQ 设备资料': return this.cfg.iqProfile ?? ''
       default:
         return ''
     }
@@ -768,7 +782,7 @@ export class Runtime {
       keyFocused: this.keyFocused,
       keyConfigured: Boolean(this.cfg.key.trim()),
       editField: this.editField,
-      editValue: this.editValue,
+      editValue: this.editField === 'IQ 登录密码' ? '•'.repeat(this.editValue.length) : this.editValue,
       qrAscii: this.qrAscii,
       qrPngPaths: this.qrPngPaths,
       qrHint: this.qrHint,
@@ -1345,6 +1359,8 @@ export class Runtime {
       return
     }
     const manifest = providerLink(query)
+    const iqLink = extractIQLink(query)
+    if (iqLink) { if (!this.has('iq')) { this.say('当前 Key 没有 IQ 海外版权限', 'warn'); return }; void this.detail('iq', iqLink); return }
     if (manifest) { if (!this.has(manifest.provider)) { this.say('当前 Key 没有该平台权限', 'warn'); return }; void this.detail(manifest.provider, manifest.url); return }
     if (!supportsSearch(p)) { void this.detail(p, query); return }
     const yk = extractYoukuVideoId(query),
@@ -1668,17 +1684,24 @@ export class Runtime {
     if (k === 'esc') {
       this.providerLoginGeneration++
       this.editValue = ''
+      this.iqLoginUsername = ''
+      this.iqLoginAreaCode = ''
       this.scene = this.editField === '确认下载目录' ? 'confirm' : 'settings'
       return
     }
-    if (k === 'enter') void this.commitEdit(this.editValue.trim())
+    if (k === 'enter') void this.commitEdit(this.editField === 'IQ 登录密码' ? this.editValue : this.editValue.trim())
   }
 
   private async openSetting(f: string): Promise<void> {
+    if (f === 'IQ 账号密码登录') {
+      this.iqLoginUsername = ''; this.iqLoginAreaCode = ''; this.editField = 'IQ 登录账号'; this.editValue = ''; this.scene = 'edit'
+      this.say('输入本人 IQ 邮箱或手机号，下一步输入密码'); this.emit(); return
+    }
     if (f === '腾讯诊断日志') { this.say(tencentDiagnosticPath() + ' · 任务详情可看该任务诊断'); this.emit(); return }
     if (f === '腾讯观测绑定') { this.cfg.tencentObservations = !this.cfg.tencentObservations; this.persistConfig(); this.emit(); return }
     if (f === 'Hami 会话类型') { this.cfg.hamiClient = this.cfg.hamiClient === 'web' ? 'tv' : 'web'; this.persistConfig(); this.emit(); return }
     const loginCommands: Record<string, SessionCommand> = {
+      'IQ 账号状态': {provider:'iq',op:'status'}, 'IQ 换TV': {provider:'iq',op:'exchange_tv'}, 'IQ 检查授权': {provider:'iq',op:'poll'}, 'IQ 退出': {provider:'iq',op:'logout'},
       'mewatch profiles': {provider:'mewatch',op:'profiles'}, 'Hami TV 续期': {provider:'hamivideo',op:'refresh'},
       'mewatch 激活': {provider:'mewatch',op:'start'}, 'mewatch 检查授权': {provider:'mewatch',op:'poll'}, 'mewatch 状态': {provider:'mewatch',op:'status'}, 'mewatch 退出': {provider:'mewatch',op:'logout'},
       'Hami Web 准备': {provider:'hamivideo',op:'web_start'}, 'Hami 状态': {provider:'hamivideo',op:this.cfg.hamiClient === 'web' ? 'web_status' : 'status'}, 'Hami 退出': {provider:'hamivideo',op:this.cfg.hamiClient === 'web' ? 'web_logout' : 'logout'},
@@ -1896,8 +1919,9 @@ export class Runtime {
     try {
       const view = await this.providerSessions.command(command)
       if (scope !== this.cfg.host + ':' + this.cfg.key || generation !== this.providerLoginGeneration) return
+      if (command.provider === 'iq' && (view.authenticated || command.op === 'logout')) { this.cfg.iqCookie = ''; this.persistConfig() }
       if (command.op === 'web_verify' && view.authenticated) { this.cfg.hamiClient = 'web'; this.persistConfig() }
-      if (command.op === 'import' && view.state === 'imported') { this.cfg.hamiClient = 'tv'; this.persistConfig() }
+      if (command.provider === 'hamivideo' && command.op === 'import' && view.state === 'imported') { this.cfg.hamiClient = 'tv'; this.persistConfig() }
       if (command.provider === 'mewatch' && view.state === 'pending' && view.url) {
         if (command.op === 'start') { this.cancelQRScene(); this.mewatchQR = true; this.scene = 'qr'; this.qrAscii = await QRCode.toString(view.url, { type: 'terminal', small: true }) }
         if (this.mewatchQR) this.qrHint = `mewatch 官方激活页 · 代码 ${view.userCode || ''} · 回车检查（至少 ${view.interval || 5}s）`
@@ -1908,7 +1932,21 @@ export class Runtime {
   }
 
   private async commitEdit(v: string): Promise<void> {
+    if (this.editField === 'IQ 登录账号') {
+      if (!v.trim()) { this.say('账号不能为空', 'warn'); return }
+      this.iqLoginUsername = v.trim(); this.editField = v.includes('@') ? 'IQ 登录密码' : 'IQ 登录区号'; this.editValue = ''; this.emit(); return
+    }
+    if (this.editField === 'IQ 登录区号') {
+      if (!/^\d{1,4}$/.test(v)) { this.say('输入手机号国家区号，例如 86、852、886', 'warn'); return }
+      this.iqLoginAreaCode = v; this.editField = 'IQ 登录密码'; this.editValue = ''; this.emit(); return
+    }
+    if (this.editField === 'IQ 登录密码') {
+      const username = this.iqLoginUsername, password = v, areaCode = this.iqLoginAreaCode
+      this.iqLoginUsername = ''; this.iqLoginAreaCode = ''; this.editValue = ''; this.scene = 'settings'; this.emit()
+      await this.providerLogin({provider:'iq',op:'password',username,password,areaCode}); return
+    }
     const commands: Record<string, SessionCommand> = {
+      'IQ Web Cookie换TV': {provider:'iq',op:'web_import',cookie:v},
       'Hami TV Cookie': {provider:'hamivideo',op:'import',cookie:v},
       'Hami 手机号（确认发码）': {provider:'hamivideo',op:'web_send_code',phone:v,confirm:true},
       'Hami 短信码': {provider:'hamivideo',op:'web_verify',code:v},
@@ -1994,6 +2032,8 @@ export class Runtime {
       case '抖音 Cookie':
         this.cfg.douyinCookie = v.trim()
         break
+      case 'IQ Cookie': this.cfg.iqCookie = v; break
+      case 'IQ 设备资料': this.cfg.iqProfile = v; break
     }
     this.persistConfig()
     this.say(`${this.editField} 已保存`, 'ok')

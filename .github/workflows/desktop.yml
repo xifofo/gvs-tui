@@ -33,6 +33,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build our maintained RE (Windows)
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: pwsh
+        run: ./scripts/build-managed-re.ps1 -Runtime win-x64 -Install
+      - name: Build our maintained RE (macOS)
+        if: runner.os == 'macOS'
+        working-directory: .
+        shell: pwsh
+        run: |
+          ./scripts/build-managed-re.ps1 -Runtime osx-arm64
+          ./scripts/build-managed-re.ps1 -Runtime osx-x64
       # app 复用 ../src/lib，类型检查需要仓库根的依赖
       - run: bun install --frozen-lockfile
         working-directory: .

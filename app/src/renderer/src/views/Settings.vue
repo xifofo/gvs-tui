@@ -29,6 +29,8 @@ const form = reactive({
   threads: 4,
   tencentCookie: '',
   douyinCookie: '',
+  iqCookie: '',
+  iqProfile: '',
   hongguoNfo: true,
   huangguoNfo: true,
   hongguoFmt: 'mkv',
@@ -286,6 +288,18 @@ const plat = (p: Provider) => hasProvider(p)
               <div class="field-act">
                 <button type="button" class="btn sm" :disabled="form.douyinCookie === s.douyinCookie" @click="save({ douyinCookie: form.douyinCookie }, 'dy')">保存 Cookie</button>
               </div>
+            </div>
+          </div>
+
+          <div v-if="plat('iq')" class="srow wrap">
+            <div class="sl"><span class="st acct"><PlatformLogo provider="iq" :size="20" />{{ PROVIDER_NAME.iq }}</span><span class="sd">本人 IQ 海外版会话；普通话独立音轨与字幕随下载合流。</span></div>
+            <div class="field-full">
+              <textarea v-model="form.iqCookie" class="input" spellcheck="false" placeholder="IQ Cookie Header" />
+              <div class="field-actions"><button type="button" class="btn sm" @click="save({ iqCookie: form.iqCookie }, 'iq')">保存会话</button></div>
+              <details><summary>高级设备资料（网关已配置设备证书时可留空）</summary>
+                <textarea v-model="form.iqProfile" class="input" spellcheck="false" placeholder='设备资料 JSON：deviceId、ccsn；不填写逐集 key' />
+                <button type="button" class="btn sm" @click="save({ iqProfile: form.iqProfile }, 'iq-profile')">保存设备资料</button>
+              </details>
             </div>
           </div>
         </section>
