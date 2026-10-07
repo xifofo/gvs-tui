@@ -10,7 +10,7 @@ import type { FileConfig } from './config.ts'
 import { configPath } from './config.ts'
 import type { DlTask } from './jobs.ts'
 import { asString, isObj, sleep } from './util.ts'
-import { CdnDenied, downloadPlaylist, formatSpeed, headersFor, transferSpeed } from './media.ts'
+import { CdnDenied, downloadPlaylist, downloadProgress, formatSpeed, headersFor, transferSpeed } from './media.ts'
 import { ensureFFmpeg, ensureM3u8dl } from './tools.ts'
 import { tierHeight } from './name.ts'
 import { adoptIQResume, iqResumeIdentity, iqVideoComplete, markIQVideoComplete } from './iq-resume.ts'
@@ -148,6 +148,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
     const started=Date.now(), measure=transferSpeed()
     await downloadIQParts(parts.map((part,pi)=>({url:asString(part.url),path:paths[pi]!})),{
       identity:JSON.stringify([task.vid,plan.rendition,id]),threads:cfg.threads,headers:headersFor('https://www.iq.com/'),signal,
+      downloadRanges:(url,path,threads,received,abort)=>downloadProgress(url,path,'https://www.iq.com/',received,undefined,threads,undefined,undefined,abort,fetchMediaProbe),
       progress:(bytes,done,total)=>emit('音轨下载',0.70+0.12*(index+Math.min(1,Number(audio.size)>0?bytes/Number(audio.size):done/Math.max(1,total)))/requested.length,
         formatSpeed(0,1,(Date.now()-started)/1000,{segments:{done,total},transfer:measure(bytes)})),
     })

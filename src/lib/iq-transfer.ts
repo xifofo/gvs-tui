@@ -10,6 +10,7 @@ export async function downloadIQParts(parts: Part[], options: {
   identity: string; threads: number; headers: Record<string,string>; signal?: AbortSignal
   progress?: (bytes: number, completed: number, total: number) => void
   fetcher?: (url: string, init: RequestInit) => Promise<Response>
+  downloadRanges?: (url: string, path: string, threads: number, received: (bytes: number) => void, signal: AbortSignal) => Promise<void>
 }): Promise<void> {
   options.signal?.throwIfAborted()
   const controller = new AbortController()
@@ -34,6 +35,13 @@ export async function downloadIQParts(parts: Part[], options: {
       signal.throwIfAborted()
       const index=next++, part=parts[index]!
       if(complete[index])continue
+      if(options.downloadRanges){
+        await options.downloadRanges(part.url,part.path,options.threads,n=>{bytes[index]=n;report()},signal)
+        bytes[index]=statSync(part.path).size
+        if(!bytes[index])throw new Error('IQ 音轨分块为空')
+        writeFileSync(`${part.path}.complete.json`,JSON.stringify({identity:identities[index],bytes:bytes[index]}))
+        complete[index]=true;report();continue
+      }
       for(let attempt=0;;attempt++){
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
         try {
@@ -57,7 +65,9 @@ export async function downloadIQParts(parts: Part[], options: {
       }
     }
   }
-  const count=Math.min(parts.length,Math.max(1,Math.min(16,Math.floor(options.threads)||1)))
+  // Range mode uses the whole connection budget inside one file, including
+  // the last remaining chunk. Do not multiply it by a second worker pool.
+  const count=options.downloadRanges?1:Math.min(parts.length,Math.max(1,Math.min(16,Math.floor(options.threads)||1)))
   const workers=Array.from({length:count},worker)
   try {await Promise.all(workers)}
   catch(error){controller.abort(error);await Promise.allSettled(workers);throw error}

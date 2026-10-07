@@ -27,6 +27,7 @@ const RETRY_STATUS = new Set([403, 408, 410, 425, 429, 500, 502, 503, 504])
 const MAX_ATTEMPTS = 5
 
 export type RetryNote = (attempt: number, total: number, why: string) => void
+export type MediaFetch = (src: string, init: RequestInit) => Promise<Response>
 
 export function headersFor(ref: string, from = 0, extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = {
@@ -58,12 +59,13 @@ async function openStream(
   note?: RetryNote,
   headers?: Record<string, string>,
   signal?: AbortSignal,
+  fetcher: MediaFetch = fetch,
 ): Promise<{ res: Response; body: ReadableStream<Uint8Array> | null }> {
   let lastErr: unknown = null
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     signal?.throwIfAborted()
     try {
-      const res = await fetch(src, { headers: headersFor(ref, from, headers), signal })
+      const res = await fetcher(src, { headers: headersFor(ref, from, headers), signal })
       if (res.ok || res.status === 206) return { res, body: res.body }
       if (RESPECT_AFTER.has(res.status)) {
         const wait = Number(res.headers.get('retry-after') ?? 0) * 1000
@@ -363,11 +365,11 @@ const SEGMENT_BUFFER_BYTES = 64 << 20
 type RangeProbe = { total: number; ranges: boolean }
 
 /** Ask for one byte to learn the size and whether the CDN honours `Range`. */
-async function probeRange(src: string, ref: string, headers?: Record<string, string>, signal?: AbortSignal): Promise<RangeProbe> {
+async function probeRange(src: string, ref: string, headers?: Record<string, string>, signal?: AbortSignal, fetcher: MediaFetch = fetch): Promise<RangeProbe> {
   try {
     const requestHeaders = new Headers(headersFor(ref, 0, headers))
     requestHeaders.set('Range', 'bytes=0-0')
-    const res = await fetch(src, { headers: requestHeaders, signal })
+    const res = await fetcher(src, { headers: requestHeaders, signal })
     const cr = res.headers.get('content-range') ?? ''
     const total = Number(cr.split('/')[1] ?? 0)
     await res.body?.cancel().catch(() => {})
@@ -522,6 +524,7 @@ async function downloadParallel(
   headers?: Record<string, string>,
   signal?: AbortSignal,
   identity?: string,
+  fetcher: MediaFetch = fetch,
 ): Promise<void> {
   const parts = Math.max(2, threads)
   const span = Math.ceil(total / parts)
@@ -558,7 +561,7 @@ async function downloadParallel(
           try {
             const requestHeaders = new Headers(headersFor(ref, from, headers))
             requestHeaders.set('Range', `bytes=${from}-${end}`)
-            const res = await fetch(src, { headers: requestHeaders, signal })
+            const res = await fetcher(src, { headers: requestHeaders, signal })
             if (res.status !== 206) {
               await res.body?.cancel().catch(() => {})
               throw new Error('cdn ignored range')
@@ -1203,6 +1206,7 @@ export async function downloadProgress(
   cipher?: HlsCipher,
   headers?: Record<string, string>,
   signal?: AbortSignal,
+  fetcher: MediaFetch = fetch,
 ): Promise<void> {
   if (/\.(?:m3u8|mpd)/i.test(src)) {
     const tmp = /\.mkv$/i.test(dest) ? `${dest}.re.mp4` : dest
@@ -1219,10 +1223,10 @@ export async function downloadProgress(
   // downloaded from the previous one instead of appending to them.
   const identity = sourceIdentity(src, cipher)
   if (threads > 1) {
-    const probe = await probeRange(src, ref, headers, signal)
+    const probe = await probeRange(src, ref, headers, signal, fetcher)
     if (probe.ranges && probe.total >= PARALLEL_MIN_BYTES) {
       try {
-        return await downloadParallel(src, dest, ref, probe.total, threads, cb, note, headers, signal, identity)
+        return await downloadParallel(src, dest, ref, probe.total, threads, cb, note, headers, signal, identity, fetcher)
       } catch (e) {
         if (signal?.aborted) throw e
         if (e instanceof Error && /cdn ignored range/.test(e.message)) {
@@ -1233,7 +1237,7 @@ export async function downloadProgress(
       }
     }
   }
-  return downloadSingle(src, dest, ref, cb, note, headers, signal, identity)
+  return downloadSingle(src, dest, ref, cb, note, headers, signal, identity, fetcher)
 }
 
 async function downloadSingle(
@@ -1245,10 +1249,11 @@ async function downloadSingle(
   headers?: Record<string, string>,
   signal?: AbortSignal,
   identity?: string,
+  fetcher: MediaFetch = fetch,
 ): Promise<void> {
   let have = resumableBytes(dest, identity)
   for (let round = 1; round <= MAX_ATTEMPTS; round++) {
-    const { res, body } = await openStream(src, ref, have, note, headers, signal)
+    const { res, body } = await openStream(src, ref, have, note, headers, signal, fetcher)
     if (!body) throw new Error('cdn empty body')
     const len = Number(res.headers.get('content-length') ?? 0)
     const total = have + len
