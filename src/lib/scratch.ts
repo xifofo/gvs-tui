@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, rmdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -35,6 +35,24 @@ export function scratchDirIn(root: string | undefined, prefix: string, note?: (m
     note?.(`无法在 ${root} 创建工作目录（${e instanceof Error ? e.message : String(e)}），改用系统临时目录`)
     return mkdtempSync(join(tmpdir(), prefix))
   }
+}
+
+/** Reuse fragments only after the provider has supplied a matching content identity. */
+export function resumeScratchDir(root: string, identity: string, note?: (msg: string) => void): string {
+  if (!/^[a-f\d]{64}$/.test(identity)) throw new Error('下载续传身份格式无效')
+  let names: string[] = []
+  try { names = readdirSync(root) } catch { /* first download */ }
+  for (const name of names) {
+    if (!name.startsWith('re-')) continue
+    const dir = join(root, name)
+    try {
+      const state = JSON.parse(readFileSync(join(dir, 'resume.json'), 'utf8'))
+      if (state.version === 1 && state.identity === identity) return dir
+    } catch { /* unknown or incompatible cache stays intact */ }
+  }
+  const dir = scratchDirIn(root, 're-', note)
+  writeFileSync(join(dir, 'resume.json'), JSON.stringify({ version: 1, identity }))
+  return dir
 }
 
 /** Remove a scratch directory and the `.gvs-tmp` parent when nothing else is using it. */

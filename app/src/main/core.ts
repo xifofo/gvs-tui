@@ -362,6 +362,11 @@ export class Core {
       const id = anyInt(view.id)
       if (!id || this.jobs.has(id)) continue
       view.busy = undefined
+      // Older IQ versions displayed the cropped height instead of the 4K tier.
+      if (rec.task.provider === 'iq' && Number(rec.task.height) >= 2160 && /^\d+P\b/i.test(view.quality)) {
+        view.quality = view.quality.replace(/^\d+P\b/i, '4K')
+        changed = true
+      }
       if (view.state === 'running' || view.state === 'queued') {
         view.state = 'paused'
         view.status = '已中断'

@@ -20,6 +20,13 @@ test('IQ metadata uses independent default Dolby, not embedded AAC',()=>{
   expect(result.qualities[0]?.stream).toBe('tv:800:hevc')
   expect(result.audios[0]).toMatchObject({codec:'eac3',selected:true,isDefault:true,embedded:false})
   expect(result.audios[1]?.selected).toBe(false)
+  expect(result.qualities[0]).toMatchObject({label:'4K',tier:2160,width:3840,height:1608})
+})
+
+test('IQ widescreen labels use the resolution tier while retaining actual pixel dimensions',()=>{
+  const {qualities}=iqOptions({formats:[{id:'tv:800:hevc',label:'1608P',width:3840,height:1608},{id:'tv:600:hevc',label:'808P',width:1920,height:808}]})
+  expect(qualities[0]).toMatchObject({label:'4K',width:3840,height:1608,tier:2160})
+  expect(qualities[1]).toMatchObject({label:'1080P',width:1920,height:808,tier:1080})
 })
 test('IQ protected plans fail rather than use an absent or wrong-format key',()=>{
   const playlist='#EXTM3U\n#EXTINF:4,\nhttps://cdn.iq.com/first.ts\n#EXT-X-ENDLIST\n'

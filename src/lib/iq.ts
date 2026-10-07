@@ -8,15 +8,20 @@ import type { Audio, Quality } from '../types.ts'
 import type { GwClient } from './client.ts'
 import type { FileConfig } from './config.ts'
 import type { DlTask } from './jobs.ts'
-import { asString, isObj } from './util.ts'
-import { downloadPlaylist, formatSpeed, headersFor } from './media.ts'
+import { asString, isObj, sleep } from './util.ts'
+import { CdnDenied, downloadPlaylist, formatSpeed, headersFor } from './media.ts'
 import { ensureFFmpeg, ensureM3u8dl } from './tools.ts'
 import { tierHeight } from './name.ts'
+import { adoptIQResume, iqResumeIdentity, iqVideoComplete, markIQVideoComplete } from './iq-resume.ts'
 
 export function iqOptions(data: Record<string, unknown>): { qualities: Quality[]; audios: Audio[] } {
   const formats = Array.isArray(data.formats) ? data.formats.filter(isObj) : []
   const tracks = Array.isArray(data.audios) ? data.audios.filter(isObj) : []
-  const qualities = formats.map(f => ({ id: asString(f.id), label: asString(f.label), title: `IQ TV · ${asString(f.codec).toUpperCase()}`, size: Number(f.size) || 0, width: Number(f.width) || 0, height: Number(f.height) || 0, codec: asString(f.codec), drm: Number(f.drm) === 5 ? 'IQ BBTS' : 'none', stream: asString(f.id), fps: Number(f.fps) || 25, tier: tierHeight(Number(f.width) || 0, Number(f.height) || 0) })).filter(f => f.id)
+  const qualities = formats.map(f => {
+    const width = Number(f.width) || 0, height = Number(f.height) || 0, tier = tierHeight(width,height)
+    const label = tier >= 2160 ? '4K' : tier ? `${tier}P` : asString(f.label)
+    return { id: asString(f.id), label, title: `IQ TV · ${asString(f.codec).toUpperCase()}`, size: Number(f.size) || 0, width, height, codec: asString(f.codec), drm: Number(f.drm) === 5 ? 'IQ BBTS' : 'none', stream: asString(f.id), fps: Number(f.fps) || 25, tier }
+  }).filter(f => f.id)
   const audios = tracks.map(a => ({ id: asString(a.id), label: asString(a.label), lang: asString(a.lang), codec: asString(a.codec), isDefault: a.default === true, selected: a.default === true, embedded: false })).filter(a => a.id)
   return { qualities, audios }
 }
@@ -84,14 +89,33 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   const re = await ensureM3u8dl()
   const version = spawnSync(re,['--version'],{encoding:'utf8',windowsHide:true,timeout:10000})
   if (version.status !== 0 || !/gvs-iq\./i.test(version.stdout+version.stderr)) throw new Error('IQ 需要 GVS 自维护 RE，请更新内置工具或运行 build-managed-re')
-  const data = await cli.invoke('iq','play',{vid:task.vid,quality:task.quality},cli.extra(cfg,'iq'),{timeoutMs:150000})
-  const plan = iqPlan(data)
+  const play = () => cli.invoke('iq','play',{vid:task.vid,quality:task.quality},cli.extra(cfg,'iq'),{timeoutMs:150000})
+  let data = await play()
+  let plan = iqPlan(data)
   mkdirSync(work,{recursive:true})
   const manifest = join(work,'iq-video.m3u8'), video = join(work,'iq-video.ts')
-  writeFileSync(manifest,plan.playlist,{mode:0o600})
-  emit('视频下载',0.02,'IQ 清单包含明文及 BBTS 段，按原顺序下载')
+  adoptIQResume(work,manifest,plan)
+  const identity = iqResumeIdentity(plan)
   const videoStarted = Date.now()
-  await downloadPlaylist({src:manifest,dest:video,ref:'https://www.iq.com/',key:plan.key,keyMethod:'IQ_BBTS',select:'video',threads:cfg.threads,workDir:work,workTag:'iq-video',signal,cb:(n,total,info)=>emit(info?.phase==='decrypt'?'视频解密':'视频下载',0.02+0.66*(total>1?n/total:n),formatSpeed(n,total,(Date.now()-videoStarted)/1000,info))})
+  for (let retry=0; !iqVideoComplete(video,identity); retry++) {
+    signal?.throwIfAborted()
+    writeFileSync(manifest,plan.playlist,{mode:0o600})
+    emit('视频下载',0.02,'校验片源后续传，保留已完成分片')
+    try {
+      await downloadPlaylist({src:manifest,dest:video,ref:'https://www.iq.com/',key:plan.key,keyMethod:'IQ_BBTS',select:'video',threads:cfg.threads,workDir:work,workTag:'iq-video',resumeIdentity:identity,signal,cb:(n,total,info)=>emit(info?.phase==='decrypt'?'视频解密':info?.phase==='merge'?'视频合并':'视频下载',0.02+0.66*(total>1?n/total:n),formatSpeed(n,total,(Date.now()-videoStarted)/1000,info))})
+      markIQVideoComplete(video,identity)
+    } catch (error) {
+      signal?.throwIfAborted()
+      const transient = error instanceof CdnDenied && [403,408,410,429,500,502,503,504].includes(error.status) ||
+        error instanceof Error && /ResponseEnded|premature|timed?\s*out|connection.*(?:reset|closed)|unexpected.*end/i.test(error.message)
+      if (!transient || retry >= 2) throw error
+      emit('重试',0.02,`CDN 中断，刷新链接并续传 ${retry+1}/2`)
+      await sleep(2000*(retry+1),signal)
+      data = await play()
+      plan = iqPlan(data)
+      if (iqResumeIdentity(plan) !== identity) throw new Error('IQ 重新取链后片源或密钥改变，原分片已保留，请重新探测')
+    }
+  }
   const available = Array.isArray(data.audios) ? data.audios.filter(isObj) : []
   const requested = task.audioTracks?.length ? task.audioTracks.map(t => t.id) : available.filter(a => a.default === true).map(a => asString(a.id))
   if (!requested.length) throw new Error('IQ 没有返回默认独立音轨，请重新探测')

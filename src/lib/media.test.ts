@@ -119,8 +119,17 @@ test('stop only once RE explicitly exhausts its own retries', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-re-log-'))
   try {
     const log = join(dir, 're.log')
-    writeFileSync(log, 'WARN: HTTP 403 Forbidden\nThe retry attempts have been exhausted and the download of this segment has failed.')
-    await expect(runM3u8dl(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], log)).rejects.toBeInstanceOf(CdnDenied)
+    const script = `require('fs').writeFileSync(process.argv[1], 'WARN: HTTP 403 Forbidden\\nThe retry attempts have been exhausted and the download of this segment has failed.'); setInterval(() => {}, 1000)`
+    await expect(runM3u8dl(process.execPath, ['-e', script, log], log)).rejects.toBeInstanceOf(CdnDenied)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}, 5000)
+
+test('resuming a scratch directory ignores exhausted retries in the previous run log', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-re-old-log-')), log = join(dir, 're.log')
+  try {
+    writeFileSync(log, 'Response status code does not indicate success: 502 (Bad Gateway).\nThe retry attempts have been exhausted\n')
+    const script = `setTimeout(() => { require('fs').writeFileSync(process.argv[1], 'fresh run completed'); process.exit(0) }, 700)`
+    expect(await runM3u8dl(process.execPath, ['-e', script, log], log, undefined, undefined, dir)).toContain('fresh run completed')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }, 5000)
 
@@ -128,8 +137,8 @@ test('successful exit preserves file diagnostics and redacts keys and media URLs
   const dir = mkdtempSync(join(tmpdir(), 'gvs-re-log-'))
   try {
     const log = join(dir, 're.log'), key = '0123456789abcdef0123456789abcdef'
-    writeFileSync(log, `ERROR: decrypt failed; key=${key}; source=https://cdn.test/file?secret=token`)
-    const info = await runM3u8dl(process.execPath, ['-e', `console.log('Output is redirected.')`], log)
+    const script = `require('fs').writeFileSync(process.argv[1], ${JSON.stringify(`ERROR: decrypt failed; key=${key}; source=https://cdn.test/file?secret=token`)}); console.log('Output is redirected.')`
+    const info = await runM3u8dl(process.execPath, ['-e', script, log], log)
     expect(info).toContain('decrypt failed')
     expect(info).not.toContain(key)
     expect(info).not.toContain('secret=token')

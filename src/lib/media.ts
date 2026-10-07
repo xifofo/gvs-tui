@@ -12,7 +12,7 @@ import { ensureFFmpeg, ensureM3u8dl, ensureMkvmerge, ensurePackager } from './to
 import { createHlsRelay, type RelayEvent } from './hls-relay.ts'
 import { moveFileSync } from './file-move.ts'
 import { assertCencMp4Output, isMpegTsFile } from './media-output.ts'
-import { removeScratch, scratchDir, scratchDirIn } from './scratch.ts'
+import { removeScratch, resumeScratchDir, scratchDir, scratchDirIn } from './scratch.ts'
 import { tencentActualVersion, type ActualVersion } from './actual-version.ts'
 
 /** A CDN refused us (403/410 …) — usually the signed URL expired mid-flight. */
@@ -816,6 +816,13 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     reject(signal.reason ?? new Error('已停止'))
     return promise
   }
+  // A reused scratch folder may contain exhausted retries from an older run.
+  // Remove that log before spawning, so the watcher cannot stop a fresh process.
+  if (logFile) {
+    try { unlinkSync(logFile) } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') { reject(e); return promise }
+    }
+  }
   const child = spawn(bin, args, {
     windowsHide: true,
     detached: process.platform !== 'win32',
@@ -999,12 +1006,14 @@ export async function downloadPlaylist(opts: {
   onRefresh?: (attempt: number, total: number) => void
   /**
    * Explicit parent for RE's scratch folder. When set, the folder is a
-   * deterministic child of it so a resume can reuse downloaded segments;
-   * otherwise it sits beside `dest` for same-volume renames.
+   * track parent can reuse downloaded segments when resumeIdentity is set;
+   * otherwise retries start afresh beside `dest` for same-volume renames.
    */
   workDir?: string
   /** Whitespace-free suffix identifying this track inside `workDir`. */
   workTag?: string
+  /** Provider-verified hash of rendition, timeline and key, permitting fragment reuse. */
+  resumeIdentity?: string
   signal?: AbortSignal
   /** Reports the fallback to system temp when `workDir` cannot be created. */
   log?: (msg: string) => void
@@ -1013,14 +1022,15 @@ export async function downloadPlaylist(opts: {
   const executable = await ensureM3u8dl()
   mkdirSync(dirname(opts.dest), { recursive: true })
   const tag = workTagOf(opts.workTag, opts.dest)
-  if (opts.workDir) {
+  if (opts.workDir && !opts.resumeIdentity) {
     // A deterministic parent means an aborted run could otherwise pile up
     // `re-*` folders forever; RE cannot be trusted to resume those fragments
     // cheaply, so a restart always starts from an empty folder.
     removeStaleChildren(join(opts.workDir, tag))
   }
   const workDir = opts.workDir
-    ? scratchDirIn(join(opts.workDir, tag), 're-', opts.log)
+    ? opts.resumeIdentity ? resumeScratchDir(join(opts.workDir, tag), opts.resumeIdentity, opts.log)
+      : scratchDirIn(join(opts.workDir, tag), 're-', opts.log)
     : scratchDir(opts.dest, 'gvs-re-')
   const logFile = join(workDir, 're.log')
   const iqKeyFile = join(workDir, 'iq-key.bin')
