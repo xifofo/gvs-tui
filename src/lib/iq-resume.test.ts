@@ -10,6 +10,7 @@ const plan = { rendition: 'rendition-a', key: '01'.repeat(16), playlist: '#EXTM3
 test('IQ resume accepts refreshed signatures but rejects changed bytes, timeline, key or rendition', () => {
   const identity = iqResumeIdentity(plan)
   expect(iqResumeIdentity({ ...plan, playlist: plan.playlist.replace('qd_sc=old', 'qd_sc=new') })).toBe(identity)
+  expect(iqResumeIdentity({ ...plan, playlist: plan.playlist.replace('data.video.iq.com', 'akmcdnoversea.inter.iqiyi.com') })).toBe(identity)
   for (const changed of [
     { ...plan, key: '02'.repeat(16) }, { ...plan, rendition: 'rendition-b' },
     { ...plan, playlist: plan.playlist.replace('end=100', 'end=200') },
@@ -48,6 +49,17 @@ test('legacy adoption checks every key and the saved manifest before admitting f
     adoptIQResume(work, manifest, plan)
     expect(resumeScratchDir(join(work, 'iq-video'), iqResumeIdentity(plan))).toBe(dir)
     expect(readFileSync(join(dir, 'resume.json'), 'utf8')).not.toContain(plan.key)
+    // Pinned identity produced by 0.1.18 for this fixture, before CDN aliases
+    // were excluded. Upgrading must keep the already downloaded fragments.
+    const legacy = 'a96d4f00894e6d5da916f9907e3559b1b36a2e11e5fd0a4aea225ee973da472d'
+    writeFileSync(join(dir, 'resume.json'), JSON.stringify({ version: 1, identity: legacy }))
+    const video = join(work, 'iq-video.ts')
+    writeFileSync(video, 'complete video')
+    markIQVideoComplete(video, legacy)
+    const cdnPlan = { ...plan, playlist: plan.playlist.replace('data.video.iq.com', 'akmcdnoversea.inter.iqiyi.com') }
+    adoptIQResume(work, manifest, cdnPlan)
+    expect(resumeScratchDir(join(work, 'iq-video'), iqResumeIdentity(cdnPlan))).toBe(dir)
+    expect(iqVideoComplete(video, iqResumeIdentity(cdnPlan))).toBe(true)
   } finally { rmSync(work, { recursive: true, force: true }) }
 })
 

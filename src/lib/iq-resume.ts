@@ -5,17 +5,21 @@ import { join } from 'node:path'
 type IQPlan = { playlist: string; key: string; rendition: string }
 
 /** Signed parameters expire; file paths, byte ranges and the timeline identify the media. */
-function playlistIdentity(playlist: string): string[] {
+function playlistIdentity(playlist: string, legacyHost = false): string[] {
   return playlist.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
     if (line.startsWith('#')) return line
     const url = new URL(line)
     const params = ['start', 'end', 'contentlength', 'bid', 'br', 'vcodec'].map(name => [name, url.searchParams.get(name)])
-    return JSON.stringify([url.host, url.pathname, params])
+    return JSON.stringify(legacyHost ? [url.host, url.pathname, params] : [url.pathname, params])
   })
 }
 
 export function iqResumeIdentity(plan: IQPlan): string {
   return createHash('sha256').update(JSON.stringify(['IQ_BBTS', plan.rendition, plan.key.toLowerCase(), playlistIdentity(plan.playlist)])).digest('hex')
+}
+
+function legacyIdentity(plan: IQPlan): string {
+  return createHash('sha256').update(JSON.stringify(['IQ_BBTS', plan.rendition, plan.key.toLowerCase(), playlistIdentity(plan.playlist, true)])).digest('hex')
 }
 
 /** Adopt a pre-fix cache only when its saved manifest AND every stored content key agree. */
@@ -24,14 +28,18 @@ export function adoptIQResume(work: string, manifest: string, plan: IQPlan): voi
   try {
     const previous = readFileSync(manifest, 'utf8')
     if (JSON.stringify(playlistIdentity(previous)) !== JSON.stringify(playlistIdentity(plan.playlist))) return
+    const previousIdentity = legacyIdentity({ ...plan, playlist: previous })
+    const video = join(work, 'iq-video.ts')
+    if (iqVideoComplete(video, previousIdentity)) markIQVideoComplete(video, iqResumeIdentity(plan))
     const root = join(work, 'iq-video')
     for (const name of readdirSync(root)) {
       if (!name.startsWith('re-')) continue
       const dir = join(root, name)
       try {
-        // Never replace an existing identity from another rendition/key.
-        readFileSync(join(dir, 'resume.json'))
-        continue
+        // Migrate the old host-bound identity only when its entire content
+        // fingerprint agrees. A refreshed official CDN can serve the same bytes.
+        const state = JSON.parse(readFileSync(join(dir, 'resume.json'), 'utf8'))
+        if (state.version !== 1 || state.identity !== previousIdentity) continue
       } catch { /* legacy cache */ }
       try {
         const streams = JSON.parse(readFileSync(join(dir, 'download', 'meta_selected.json'), 'utf8').replace(/^\uFEFF/, ''))
