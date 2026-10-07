@@ -3,6 +3,11 @@
 // CDN 与上游仍用 Node fetch 直连，从本机 IP 出网。
 import { net } from 'electron'
 
+/** Probe through the same system proxy used by the native media downloader. */
+export function fetchMediaProbe(url: string, init: RequestInit): Promise<Response> {
+  return net.fetch(url, init as Parameters<typeof net.fetch>[1])
+}
+
 const PROXY_KEYS: Record<string, true> = { http_proxy: true, https_proxy: true, all_proxy: true }
 
 export function isProxyEnvKey(key: string): boolean {

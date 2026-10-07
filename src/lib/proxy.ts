@@ -5,6 +5,11 @@
 
 import { isLocalGateway } from './gateway-route.ts'
 
+/** Local media transport; desktop replaces this with its system-proxy stack. */
+export function fetchMediaProbe(url: string, init: RequestInit): Promise<Response> {
+  return fetch(url, init)
+}
+
 const PROXY_KEYS: Record<string, true> = {
   http_proxy: true,
   https_proxy: true,

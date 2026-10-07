@@ -7,12 +7,14 @@ import { pipeline } from 'node:stream/promises'
 import type { Audio, Quality } from '../types.ts'
 import type { GwClient } from './client.ts'
 import type { FileConfig } from './config.ts'
+import { configPath } from './config.ts'
 import type { DlTask } from './jobs.ts'
 import { asString, isObj, sleep } from './util.ts'
 import { CdnDenied, downloadPlaylist, formatSpeed, headersFor } from './media.ts'
 import { ensureFFmpeg, ensureM3u8dl } from './tools.ts'
 import { tierHeight } from './name.ts'
 import { adoptIQResume, iqResumeIdentity, iqVideoComplete, markIQVideoComplete } from './iq-resume.ts'
+import { IQCDNSlowError, iqCDNSlowGuard, rememberIQCDN, selectIQCDN } from './iq-cdn.ts'
 
 export function iqOptions(data: Record<string, unknown>): { qualities: Quality[]; audios: Audio[] } {
   const formats = Array.isArray(data.formats) ? data.formats.filter(isObj) : []
@@ -97,19 +99,32 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   adoptIQResume(work,manifest,plan)
   const identity = iqResumeIdentity(plan)
   const videoStarted = Date.now()
+  const preferencePath = join(dirname(configPath()), 'iq-cdn-preference.json'), excluded = new Set<string>()
   for (let retry=0; !iqVideoComplete(video,identity); retry++) {
     signal?.throwIfAborted()
+    const route = await selectIQCDN(plan.playlist, isObj(data.video) ? data.video.cdnCandidates : undefined, {
+      preferencePath, headers: headersFor('https://www.iq.com/'), signal, excluded,
+      note: message => emit('CDN 优选',0.02,message),
+    })
+    plan = { ...plan, playlist: route.playlist }
     writeFileSync(manifest,plan.playlist,{mode:0o600})
     emit('视频下载',0.02,'校验片源后续传，保留已完成分片')
+    const routeAbort = new AbortController(), slow = iqCDNSlowGuard()
+    const downloadSignal = signal ? AbortSignal.any([signal,routeAbort.signal]) : routeAbort.signal
     try {
-      await downloadPlaylist({src:manifest,dest:video,ref:'https://www.iq.com/',key:plan.key,keyMethod:'IQ_BBTS',select:'video',threads:cfg.threads,workDir:work,workTag:'iq-video',resumeIdentity:identity,signal,cb:(n,total,info)=>emit(info?.phase==='decrypt'?'视频解密':info?.phase==='merge'?'视频合并':'视频下载',0.02+0.66*(total>1?n/total:n),formatSpeed(n,total,(Date.now()-videoStarted)/1000,info))})
+      await downloadPlaylist({src:manifest,dest:video,ref:'https://www.iq.com/',key:plan.key,keyMethod:'IQ_BBTS',select:'video',threads:cfg.threads,workDir:work,workTag:'iq-video',resumeIdentity:identity,signal:downloadSignal,cb:(n,total,info)=>{
+        emit(info?.phase==='decrypt'?'视频解密':info?.phase==='merge'?'视频合并':'视频下载',0.02+0.66*(total>1?n/total:n),formatSpeed(n,total,(Date.now()-videoStarted)/1000,info))
+        if (retry<2 && route.alternatives && slow(info?.phase,info?.transfer?.bytesPerSecond)) routeAbort.abort(new IQCDNSlowError())
+      }})
       markIQVideoComplete(video,identity)
+      if (route.hosts[0]) rememberIQCDN(preferencePath,route.hosts[0])
     } catch (error) {
       signal?.throwIfAborted()
-      const transient = error instanceof CdnDenied && [403,408,410,429,500,502,503,504].includes(error.status) ||
+      const transient = error instanceof IQCDNSlowError || error instanceof CdnDenied && [403,408,410,429,500,502,503,504].includes(error.status) ||
         error instanceof Error && /ResponseEnded|premature|timed?\s*out|connection.*(?:reset|closed)|unexpected.*end/i.test(error.message)
       if (!transient || retry >= 2) throw error
-      emit('重试',0.02,`CDN 中断，刷新链接并续传 ${retry+1}/2`)
+      route.hosts.forEach(host => excluded.add(host))
+      emit('重试',0.02,`CDN 响应异常或持续低速，重新优选并续传 ${retry+1}/2`)
       await sleep(2000*(retry+1),signal)
       data = await play()
       plan = iqPlan(data)
