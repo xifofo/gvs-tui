@@ -10,11 +10,13 @@ import type { FileConfig } from './config.ts'
 import { configPath } from './config.ts'
 import type { DlTask } from './jobs.ts'
 import { asString, isObj, sleep } from './util.ts'
-import { CdnDenied, downloadPlaylist, formatSpeed, headersFor } from './media.ts'
+import { CdnDenied, downloadPlaylist, formatSpeed, headersFor, transferSpeed } from './media.ts'
 import { ensureFFmpeg, ensureM3u8dl } from './tools.ts'
 import { tierHeight } from './name.ts'
 import { adoptIQResume, iqResumeIdentity, iqVideoComplete, markIQVideoComplete } from './iq-resume.ts'
 import { IQCDNSlowError, iqCDNSlowGuard, rememberIQCDN, selectIQCDN } from './iq-cdn.ts'
+import { downloadIQParts } from './iq-transfer.ts'
+import { fetchMediaProbe } from './proxy.ts'
 
 export function iqOptions(data: Record<string, unknown>): { qualities: Quality[]; audios: Audio[] } {
   const formats = Array.isArray(data.formats) ? data.formats.filter(isObj) : []
@@ -54,7 +56,7 @@ export function normalizeIQCookie(text: string): string {
 async function download(url: string, dest: string, signal?: AbortSignal): Promise<void> {
   const u = new URL(url)
   if (!['http:','https:'].includes(u.protocol) || u.username || u.password) throw new Error('IQ 媒体地址格式无效')
-  const response = await fetch(url, { headers: headersFor('https://www.iq.com/'), signal })
+  const response = await fetchMediaProbe(url, { headers: headersFor('https://www.iq.com/'), signal })
   if (!response.ok || !response.body) throw new Error(`IQ CDN HTTP ${response.status}`)
   const expected = Number(response.headers.get('content-length')) || 0
   let count = 0
@@ -142,12 +144,13 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
     if (audio.clear !== true) throw new Error('IQ 独立音轨没有明确标记明文，已停止')
     const parts = Array.isArray(audio.parts) ? audio.parts.filter(isObj) : []
     if (!parts.length) throw new Error('IQ 独立音轨分段为空')
-    const paths: string[] = []
-    for (const [pi,part] of parts.entries()) {
-      const path = join(work,`iq-audio-${index}-${pi}.part`)
-      await download(asString(part.url),path,signal)
-      paths.push(path)
-    }
+    const paths = parts.map((_,pi)=>join(work,`iq-audio-${index}-${pi}.part`))
+    const started=Date.now(), measure=transferSpeed()
+    await downloadIQParts(parts.map((part,pi)=>({url:asString(part.url),path:paths[pi]!})),{
+      identity:JSON.stringify([task.vid,plan.rendition,id]),threads:cfg.threads,headers:headersFor('https://www.iq.com/'),signal,
+      progress:(bytes,done,total)=>emit('音轨下载',0.70+0.12*(index+Math.min(1,Number(audio.size)>0?bytes/Number(audio.size):done/Math.max(1,total)))/requested.length,
+        formatSpeed(0,1,(Date.now()-started)/1000,{segments:{done,total},transfer:measure(bytes)})),
+    })
     const joined = join(work,`iq-audio-${index}.m4a`)
     function* audioChunks() {
       for (const [pi,path] of paths.entries()) {
