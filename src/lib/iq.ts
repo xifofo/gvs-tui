@@ -53,12 +53,15 @@ export function normalizeIQCookie(text: string): string {
   }).join('; ')
 }
 
-async function download(url: string, dest: string, signal?: AbortSignal): Promise<void> {
+export async function downloadIQSubtitle(url: string, dest: string, signal?: AbortSignal): Promise<void> {
   const u = new URL(url)
   if (!['http:','https:'].includes(u.protocol) || u.username || u.password) throw new Error('IQ 媒体地址格式无效')
-  const response = await fetchMediaProbe(url, { headers: headersFor('https://www.iq.com/'), signal })
+  const response = await fetch(url, { headers: headersFor('https://www.iq.com/'), signal })
   if (!response.ok || !response.body) throw new Error(`IQ CDN HTTP ${response.status}`)
-  const expected = Number(response.headers.get('content-length')) || 0
+  // fetch decodes HTTP gzip/br while Content-Length still describes the wire
+  // bytes. Stream errors detect truncation; compare length only for identity.
+  const encoding = response.headers.get('content-encoding')?.toLowerCase()
+  const expected = !encoding || encoding === 'identity' ? Number(response.headers.get('content-length')) || 0 : 0
   let count = 0
   const reader = response.body.getReader()
   try {
@@ -168,7 +171,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   emit('字幕下载',0.84,`${subs.length} 条源字幕`)
   for (const [index,sub] of subs.entries()) {
     const path = join(work,`iq-sub-${index}.${asString(sub.format)==='vtt'?'vtt':'srt'}`)
-    await download(asString(sub.url),path,signal)
+    await downloadIQSubtitle(asString(sub.url),path,signal)
     const bytes = readFileSync(path)
     if (bytes[0]===0x1f && bytes[1]===0x8b) writeFileSync(path,gunzipSync(bytes))
     subtitleFiles.push({path,language:asString(sub.lang)||'und',title:asString(sub.label)+(sub.ai===true?' (AI)':'')})
