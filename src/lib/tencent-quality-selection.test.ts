@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { selectedTencentQuality, tencentDownloadSelection, tencentSelectedPlayInput } from './tencent-quality-selection.ts'
+import { requiresTencentEncodingIdentity, selectedTencentQuality, tencentDownloadSelection, tencentSelectedPlayInput } from './tencent-quality-selection.ts'
 import type { Quality } from '../types.ts'
 
 const q: Quality = { id: 'suhd|hard|322157|2741517771455_硬', stream: 'suhd', caption: 'hard', formatId: '322157', persona: '2741517771455_硬', group: 'encode', label: '臻彩MAX · HEVC·A', title: 'suhd', width: 3840, height: 1636, size: 1128670539, codec: '4', drm: '' }
@@ -30,4 +30,15 @@ test('special personas and source hints do not add unsupported play parameters',
 
 test('legacy catalog without format IDs still retains promised HDR and frame rate', () => {
   expect(selectedTencentQuality({ id: 'maxplus', width: 3840, height: 2160, fps: 60, hdr: 'hdr' })).toMatchObject({ width: 3840, height: 2160, fps: 60, hdr: 'hdr' })
+})
+
+test('default encoding in new and restored queues uses normal download acceptance', () => {
+  for (const persona of ['default', 'default_硬', 'default_soft']) {
+    const saved = JSON.parse(JSON.stringify({ group: 'encode', persona, formatId: '322093', width: 3840, height: 2160 }))
+    expect(requiresTencentEncodingIdentity(saved)).toBe(false)
+  }
+  expect(requiresTencentEncodingIdentity({ group: 'encode', persona: '2741517771455_硬' })).toBe(true)
+  expect(requiresTencentEncodingIdentity({ group: 'encode', persona: 'h264_soft' })).toBe(true)
+  expect(requiresTencentEncodingIdentity({ group: 'encode' })).toBe(true)
+  expect(requiresTencentEncodingIdentity({ group: 'main' })).toBe(false)
 })

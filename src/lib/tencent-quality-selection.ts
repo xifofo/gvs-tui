@@ -11,6 +11,11 @@ export function tencentPersonaKey(value: string): string {
   return value.trim().replace(/_(?:软|硬|soft|hard)$/i, '')
 }
 
+/** The default encoding is an automatic choice, not a manually selected HEVC/H264 rendition. */
+export function requiresTencentEncodingIdentity(selection: TencentQualitySelection): boolean {
+  return selection.group === 'encode' && tencentPersonaKey(selection.persona || '').toLowerCase() !== 'default'
+}
+
 /** Never persist expiring URLs, cookies or decryption keys with the rendition. */
 export function selectedTencentQuality(q: Pick<Quality, 'id' | 'formatId' | 'persona' | 'group'> & Partial<Pick<Quality, 'width' | 'height' | 'fps' | 'hdr'>>): TencentQualitySelection | undefined {
   const parts = q.id.split('|')

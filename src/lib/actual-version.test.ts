@@ -135,3 +135,44 @@ test('missing URLs and malformed format entries stay unknown', () => {
   expect(picked.url).toBe('')
   expect(picked.version.status).toBe('unknown')
 })
+
+test('numeric Tencent definition is retained as a code without inventing a named quality or format ID', () => {
+  for (const defn of ['685', 685]) {
+    const record = tencentActualVersion({ defn: 'suhd', video: { url, defn, caption: '硬', width: 3840, height: 2160 },
+      formats: [{ id: '322093', name: 'suhd' }] }, url, 'default',
+    { stream: 'suhd', caption: 'hard', formatId: '322093', persona: 'default_硬' }, 'vid')
+    expect(record.actual).toEqual({ definitionCode: '685', caption: 'hard', width: 3840, height: 2160 })
+    expect(record.status).toBe('unknown')
+    expect(record.matchesSelection).toBe('unknown')
+    expect(record.evidence).toBe('video_metadata')
+  }
+})
+
+test('numeric video definition does not contradict a URL-bound format identity', () => {
+  const record = tencentActualVersion({ formats: [{ ...row, url }], video: { url, defn: '685', caption: '硬' } },
+    url, 'format', selected, 'vid')
+  expect(record.status).toBe('confirmed')
+  expect(record.matchesSelection).toBe('same')
+})
+
+test('uhd and suhd aliases require an identical actual format ID and consistent URL metadata', () => {
+  const choice = { stream: 'suhd', formatId: '322093', caption: 'hard' }
+  const r = { id: '322093', name: 'uhd', caption: '硬', width: 3840, height: 2160, url }
+  const record = tencentActualVersion({ formats: [r, { ...r, name: 'suhd' }],
+    video: { url, format_id: '322093', defn: 'uhd', caption: '硬' } }, url, 'format', choice, 'vid')
+  expect(record.status).toBe('confirmed')
+  expect(record.matchesSelection).toBe('same')
+  expect(tencentActualVersion({ video: { url, defn: 'uhd', caption: '硬' } }, url, 'default', choice, 'vid').matchesSelection).toBe('different')
+  expect(tencentActualVersion({ video: { url, format_id: '322084', defn: 'uhd', caption: '硬' } }, url, 'default', choice, 'vid').matchesSelection).toBe('different')
+  expect(tencentActualVersion({ video: { url, format_id: '322093', defn: 'suhd', caption: '硬' } }, url, 'default',
+    { ...choice, stream: 'maxplus' }, 'vid').matchesSelection).toBe('different')
+  expect(tencentActualVersion({ formats: [r, { ...r, name: 'suhd', width: 1920, height: 1080 }] }, url, 'format', choice, 'vid').evidence).toBe('ambiguous')
+})
+
+test('an explicit format ID can identify its catalog alias despite a numeric definition', () => {
+  const record = tencentActualVersion({ video: { url, format_id: '322093', defn: '685', caption: '硬' },
+    formats: [{ id: '322093', name: 'uhd' }, { id: '322093', name: 'suhd' }] }, url, 'default',
+  { stream: 'suhd', formatId: '322093', caption: 'hard' }, 'vid')
+  expect(record.actual).toMatchObject({ formatId: '322093', stream: 'uhd', definitionCode: '685' })
+  expect(record.matchesSelection).toBe('same')
+})

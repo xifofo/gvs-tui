@@ -3,6 +3,8 @@ import { human } from './util'
 /** Only stable, serializable identifiers belong here; never signed URLs or gateway payloads. */
 export type StreamVersion = {
   stream?: string; formatId?: string; persona?: string; caption?: string
+  /** Tencent's numeric definition code is not a named quality or a format ID. */
+  definitionCode?: string
   width?: number; height?: number; fps?: number; codec?: string; estimatedBytes?: number
 }
 export type ActualVersion = {
@@ -45,8 +47,10 @@ const caption = (v: unknown): string => {
 
 function version(raw: Raw, video = false): StreamVersion {
   const result: StreamVersion = {}
+  const defn = identifier(raw.defn || raw.name).toLowerCase()
   const fields = {
-    stream: identifier(raw.defn || raw.name),
+    stream: /^\d+$/.test(defn) ? '' : defn,
+    definitionCode: /^\d+$/.test(defn) ? defn : '',
     formatId: identifier(raw.format_id || raw.formatId || (!video ? raw.id : '')),
     persona: identifier(raw.persona), caption: caption(raw.caption), codec: identifier(raw.vencoding || raw.codec || raw.profile),
   }
@@ -57,7 +61,16 @@ function version(raw: Raw, video = false): StreamVersion {
 }
 
 function identity(v: StreamVersion): string {
-  return JSON.stringify([v.formatId || '', v.persona || '', v.stream || '', v.caption || ''])
+  // Some catalogs list uhd and suhd as aliases of the same physical format.
+  const stream = v.formatId && ['uhd', 'suhd'].includes(v.stream || '') ? 'uhd/suhd' : v.stream
+  return JSON.stringify([v.formatId || '', v.persona || '', stream || '', v.caption || '', v.definitionCode || '',
+    v.width || 0, v.height || 0, v.fps || 0, v.codec || '', v.estimatedBytes || 0])
+}
+
+function sameField(key: 'formatId' | 'persona' | 'stream' | 'caption', a: StreamVersion, b: StreamVersion): boolean {
+  if (a[key]?.toLowerCase() === b[key]?.toLowerCase()) return true
+  return key === 'stream' && !!a.formatId && a.formatId === b.formatId &&
+    ['uhd', 'suhd'].includes(a.stream || '') && ['uhd', 'suhd'].includes(b.stream || '')
 }
 
 function compare(selected: StreamVersion, actual: StreamVersion | null): ActualVersion['matchesSelection'] {
@@ -68,7 +81,7 @@ function compare(selected: StreamVersion, actual: StreamVersion | null): ActualV
     if (!selected[key]) continue
     if (!actual[key]) { missing = true; continue }
     compared = true
-    if (selected[key]!.toLowerCase() !== actual[key]!.toLowerCase()) return 'different'
+    if (!sameField(key, selected, actual)) return 'different'
   }
   return compared && !missing ? 'same' : 'unknown'
 }
@@ -94,11 +107,12 @@ export function tencentActualVersion(
     return true
   }
   if (url && !adopt(rows.filter(row => row.url === url || row.playlist_url === url), 'format_url')) {
-    if (videoMatches && (explicit.formatId || explicit.stream)) {
+    if (videoMatches && (explicit.formatId || explicit.stream || explicit.definitionCode)) {
       actual = explicit
       if (explicit.formatId && !explicit.stream) {
         const streams = [...new Set(rows.map(row => version(row)).filter(v => v.formatId === explicit.formatId).map(v => v.stream).filter(Boolean))]
         if (streams.length === 1) actual = { ...explicit, stream: streams[0] }
+        else if (streams.length === 2 && streams.every(s => ['uhd', 'suhd'].includes(s!))) actual = { ...explicit, stream: 'uhd' }
       }
       evidence = 'video_metadata'
     } else {
@@ -110,7 +124,7 @@ export function tencentActualVersion(
   }
   if (actual && videoMatches && (explicit.formatId || explicit.stream) &&
     (['formatId', 'persona', 'stream', 'caption'] as const).some(key =>
-      actual![key] && explicit[key] && actual![key]!.toLowerCase() !== explicit[key]!.toLowerCase())) {
+      actual![key] && explicit[key] && !sameField(key, actual!, explicit))) {
     actual = null
     evidence = 'ambiguous'
   }
