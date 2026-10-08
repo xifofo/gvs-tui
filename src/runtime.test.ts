@@ -358,8 +358,8 @@ test('Tencent batch selection retains distinct rendition IDs and personas in eve
   internal.pending = [{ provider: 'tencent', vid: 'one' }, { provider: 'tencent', vid: 'two' }]
   internal.applyOptions()
   expect(internal.pending.map((t: any) => t.tencentQuality)).toEqual([
-    { formatId: '322157', persona: '2741517771455_硬', group: 'encode' },
-    { formatId: '322157', persona: '2741517771455_硬', group: 'encode' },
+    { formatId: '322157', persona: '2741517771455_硬', group: 'encode', width: 3840, height: 1636 },
+    { formatId: '322157', persona: '2741517771455_硬', group: 'encode', width: 3840, height: 1636 },
   ])
   expect(internal.pending[0].group).toBe(internal.cfg.releaseGroup)
   expect(internal.pending[0].tencentQuality).not.toBe(internal.pending[1].tencentQuality)
@@ -585,10 +585,13 @@ test('content type from a search result survives a detail response without categ
 
 test('TMDB retry only searches TMDB and a late response cannot reopen a skipped screen', async () => {
   const r = await start()
-  r.handleKey('enter')
-  await Bun.sleep(70)
-  r.handleKey('enter')
   const internal = r as any
+  r.handleKey('enter')
+  for (let i = 0; i < 100 && !(r.snapshot.scene === 'detail' && r.snapshot.episodes?.length); i++) await Bun.sleep(10)
+  expect(r.snapshot.episodes!.length).toBeGreaterThan(0)
+  r.handleKey('enter')
+  for (let i = 0; i < 100 && internal.busy; i++) await Bun.sleep(10)
+  expect(internal.busy).toBe(false)
   let calls = 0
   let finish!: (value: unknown) => void
   // Isolate the async work result without mocking modules shared with other tests.
@@ -737,11 +740,15 @@ test('PageDown advances one visible grid page and resizing rewraps job details',
   const r = await start()
   r.resize(60, 18)
   r.handleKey('enter')
-  await Bun.sleep(70)
-  r.handleKey('pagedown')
+  // Wait for the async detail snapshot, instead of assuming a 70ms render deadline.
+  for (let i = 0; i < 100 && !(r.snapshot.scene === 'detail' && r.snapshot.episodes?.length); i++) await Bun.sleep(10)
+  expect(r.snapshot.episodes!.length).toBeGreaterThan(0)
   const layout = viewMetrics(60, 18)
   const perRow = gridWindow(r.snapshot.episodes!.length, 0, layout.pane.main, 1).perRow
-  expect(r.snapshot.cursor).toBe(Math.min(r.snapshot.episodes!.length - 1, layout.gridRows * perRow))
+  const expected = Math.min(r.snapshot.episodes!.length - 1, layout.gridRows * perRow)
+  r.handleKey('pagedown')
+  for (let i = 0; i < 100 && r.snapshot.cursor !== expected; i++) await Bun.sleep(10)
+  expect(r.snapshot.cursor).toBe(expected)
   const text = '很长的失败任务说明与保存位置'.repeat(30)
   ;(r as any).jobs = [{ id: 1, title: text, status: '失败', phase: '封装', pct: 0.99, err: text, log: '' }]
   r.handleKey('f3')

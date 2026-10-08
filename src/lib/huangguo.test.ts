@@ -42,6 +42,10 @@ test('download uses the gateway URL and its paired AES key', async () => {
   expect(await resolveHuangguoDownload(cli, AI)).toEqual({
     url: 'https://cdn.test/720/index.m3u8',
     key,
+    keyInfo: {
+      method: 'AES-128', keyLines: 0, distinctUris: 0,
+      mixedNone: false, missing: false, iv: '',
+    },
     headers: { Referer: 'https://huangguoai.com/', 'User-Agent': 'UA' },
   })
   expect(calls).toEqual([['huangguo', 'resolve', { id: AI }]])

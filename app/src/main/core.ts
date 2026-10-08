@@ -16,6 +16,7 @@ import QRCode from 'qrcode'
 import { GwClient, ReloginRequired, type KeyInfo } from '@tui/client.ts'
 import { selectAudioTracks } from '@tui/audio-selection.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
+import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from '@tui/vault-migrate.ts'
 import { fallbackSections } from '@tui/discovery.ts'
 import {
   JobHub,
@@ -284,6 +285,8 @@ export class Core {
   private ykLogin: YkLogin | null = null
   private ykAcct: YkAccount | null = null
   private ykSignMissing = false
+  /** 瘦客户端：抖音 Cookie 托管在网关号池（启动探测结果）。 */
+  private douyinReady = false
   private ykEnsure: Promise<void> | null = null
   private vipProbe: VipProbe | null = null
   private txAcct: TxAccount | null = null
@@ -483,6 +486,43 @@ export class Core {
     await this.startTunnel()
     this.emit.state()
     if (this.has('tencent')) void this.refreshTencent()
+    await this.migrateVaultOnce()
+    void this.probeProviderSessions()
+  }
+
+  /**
+   * 瘦客户端迁移：本地还存着源站 Cookie/签名时推给网关托管并清空。
+   * 网关不在线则保留字段，下次连接重试。
+   */
+  private async migrateVaultOnce(): Promise<void> {
+    if (!this.cli || !hasLocalCredentials(this.cfg)) return
+    try {
+      const result = await migrateLocalCredentials(this.cli, this.cfg)
+      if (result.migrated.length + result.clearedDead.length > 0) saveConfig(this.cfg)
+    } catch (e) {
+      runLog(`vault migrate skipped ${errText(e)}`)
+    }
+  }
+
+  /** 启动探测：网关侧持久化的会话直接显示登录态，不再是待登录。 */
+  private async probeProviderSessions(): Promise<void> {
+    if (!this.cli) return
+    const probes: Array<Promise<unknown>> = []
+    if (this.has('youku')) probes.push(this.ensureYouku())
+    if (this.has('douyin')) probes.push(this.probeDouyin())
+    if (this.has('iq')) probes.push(this.providerSession({ provider: 'iq', op: 'status' }).catch(() => null))
+    if (this.has('hamivideo')) probes.push(this.providerSession({ provider: 'hamivideo', op: 'status' }).catch(() => null))
+    await Promise.all(probes)
+    this.emit.state()
+  }
+
+  private async probeDouyin(): Promise<void> {
+    try {
+      const data = await this.invoke('douyin', 'login', { op: 'status' })
+      this.douyinReady = data.imported === true
+    } catch {
+      this.douyinReady = false
+    }
   }
 
   private async startTunnel(): Promise<void> {
@@ -584,7 +624,8 @@ export class Core {
   private accounts(): AccountView[] {
     return this.providers().map((p): AccountView => {
       if (p === 'youku') {
-        if (!this.cfg.youkuSign) return { provider: p, short: '未登录', summary: '未登录 · 扫码后可下载会员片源', tone: 'warn' }
+        if (!this.cfg.youkuSign && !this.ykLogin?.ok && !this.ykAcct)
+          return { provider: p, short: '未登录', summary: '未登录 · 扫码后可下载会员片源', tone: 'warn' }
         if (this.ykSignMissing || this.ykAcct?.needsScan)
           return { provider: p, short: '需扫码', summary: '登录态失效 · 需要重新扫码', tone: 'warn' }
         if (!this.ykAcct) return { provider: p, short: '检查中', summary: '正在检查登录态…', tone: 'muted' }
@@ -598,17 +639,16 @@ export class Core {
       }
       if (p === 'tencent') {
         if (this.txAcct?.loggedIn) return { provider: p, short: '已登录', summary: txAccountSummary(this.txAcct), tone: 'ok' }
-        if (this.cfg.tencentCookie) return { provider: p, short: 'Cookie', summary: 'Cookie 已设置', tone: 'ok' }
         return { provider: p, short: '未登录', summary: '未登录 · 扫码或粘贴 Cookie', tone: 'warn' }
       }
       if (p === 'douyin') {
-        return this.cfg.douyinCookie
-          ? { provider: p, short: 'Cookie', summary: 'Cookie 已设置', tone: 'ok' }
+        return this.douyinReady
+          ? { provider: p, short: '已托管', summary: 'Cookie 已托管网关号池（加密保存）', tone: 'ok' }
           : { provider: p, short: '未设置', summary: '搜索需要网页登录 Cookie（sessionid）', tone: 'warn' }
       }
       if (p === 'iq') {
         const account = this.providerAccounts.get('iq')
-        return { provider:p, short:account?.authenticated?'已登录':this.cfg.iqCookie?'会话已设':'待登录', summary:account?.summary || '到平台账号设置登录 IQ，自动获取 Web 和 TV 会话', tone:account?.authenticated?'ok':'muted' }
+        return { provider:p, short:account?.authenticated?'已登录':'待登录', summary:account?.summary || '到平台账号设置登录 IQ，自动获取 Web 和 TV 会话', tone:account?.authenticated?'ok':'muted' }
       }
       if (isManifestProvider(p)) {
         const account = this.providerAccounts.get(p + (p === 'hamivideo' ? ':' + (this.cfg.hamiClient || 'tv') : ''))
@@ -655,10 +695,26 @@ export class Core {
     if (patch.threads !== undefined) c.threads = clampThreads(patch.threads)
     if (patch.tencentObservations !== undefined) c.tencentObservations = patch.tencentObservations === true
     if (patch.hamiClient !== undefined) { if (!['tv','web'].includes(patch.hamiClient)) throw new Error('无效 Hami 会话类型'); c.hamiClient = patch.hamiClient }
-    if (patch.tencentCookie !== undefined) c.tencentCookie = patch.tencentCookie.trim()
-    if (patch.douyinCookie !== undefined) c.douyinCookie = patch.douyinCookie.trim()
-    if (patch.iqCookie !== undefined) c.iqCookie = patch.iqCookie.trim()
     if (patch.iqProfile !== undefined) c.iqProfile = patch.iqProfile.trim()
+    // 瘦客户端：Cookie 粘贴即推给网关托管，tui.json 不再保存副本。
+    const pushCred = async (kind: 'tencent' | 'douyin' | 'iq', value: string): Promise<void> => {
+      const v = value.trim()
+      if (!this.cli) throw new Error('网关未连接，凭证未保存')
+      const client = this.cli
+      try {
+        await pushLocalCredential(client, kind, v)
+        if (client !== this.cli || c !== this.cfg) throw new Error('网关连接已切换，请在当前连接重新导入凭证')
+        if (kind === 'douyin') this.douyinReady = true
+        runLog(`vault push ${kind} ok`)
+      } catch (e) {
+        runLog(`vault push ${kind} failed`)
+        throw e
+      }
+    }
+    // Await each import before clearing the corresponding legacy field or acknowledging success.
+    if (patch.tencentCookie !== undefined) { await pushCred('tencent', patch.tencentCookie); c.tencentCookie = ''; saveConfig(c) }
+    if (patch.douyinCookie !== undefined) { await pushCred('douyin', patch.douyinCookie); c.douyinCookie = ''; saveConfig(c) }
+    if (patch.iqCookie !== undefined) { await pushCred('iq', patch.iqCookie); c.iqCookie = ''; saveConfig(c) }
     if (patch.hongguoNfo !== undefined) c.hongguoNfo = patch.hongguoNfo
     if (patch.huangguoNfo !== undefined) c.huangguoNfo = patch.huangguoNfo
     if (patch.hongguoFmt !== undefined) c.hongguoFmt = patch.hongguoFmt
@@ -672,7 +728,8 @@ export class Core {
   // ---------------------------------------------------------------- 优酷登录态
 
   private queueEnsureYouku(): void {
-    if (!this.cli || !this.cfg.youkuSign || this.ykEnsure || !this.has('youku')) return
+    // 瘦客户端：无本地 yk_sign 也探测（网关按本 API key 解析绑定凭证）。
+    if (!this.cli || this.ykEnsure || !this.has('youku')) return
     this.ykEnsure = this.ensureYouku().finally(() => {
       this.ykEnsure = null
     })
@@ -705,7 +762,6 @@ export class Core {
   }
 
   async youkuRenew(): Promise<string> {
-    if (!this.cfg.youkuSign) throw new Error('还没有登录优酷')
     const cli = this.client()
     const res = await ykRefresh(cli, this.cfg.youkuSign)
     this.ykLogin = await ykLoginInfo(cli, this.cfg.youkuSign)
@@ -739,9 +795,10 @@ export class Core {
   async youkuQrPoll(): Promise<QRPoll> {
     if (this.qr?.kind !== 'youku') return { done: false, message: '二维码已失效，请刷新', tone: 'warn' }
     const poll = await pollYoukuQR(this.client(), this.qr.ticket, this.qr.loginToken)
-    if (poll.sign || (poll.loggedIn && this.cfg.youkuSign)) {
-      if (poll.sign) this.cfg.youkuSign = poll.sign
+    if (poll.sign || poll.loggedIn) {
+      this.cfg.youkuSign = ''
       saveConfig(this.cfg)
+      // 瘦客户端：签名由网关按本 API key 绑定，不再写入 tui.json。
       this.qr = null
       this.ykSignMissing = false
       this.ykAcct = null
@@ -827,7 +884,7 @@ export class Core {
     this.providerSessions.setScope(scope)
     const view = await this.providerSessions.command(command)
     if (scope !== this.cfg.host + ':' + this.cfg.key) throw new Error('账号连接已切换')
-    if (command.provider === 'iq' && (view.authenticated || command.op === 'logout')) { this.cfg.iqCookie = ''; saveConfig(this.cfg) }
+    // iqCookie 不再本地保存：IQ/Hami 会话由网关按 API key 加密持久化。
     this.providerAccounts.set(command.provider + (command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
     this.emit.state()
     return view
@@ -1095,6 +1152,7 @@ export class Core {
         season: movie ? 0 : seriesSeason(ep.season, req.detail.title),
         episode: movie ? 0 : ep.number || i + 1,
         collection: ep.collection,
+        duration: ep.duration,
         height: 0,
         quality: q.stream || q.id,
         caption: q.caption,

@@ -93,6 +93,12 @@ describe('tencentPlayProbeOk', () => {
 })
 
 describe('pickTencentDownloadURL', () => {
+  test('a caption match cannot choose the wrong quality or wrong format', () => {
+    const data = { video: { url: 'https://cdn.example/default.m3u8' }, formats: [
+      { id: '1', name: 'fhd', caption: 'hard', url: 'https://cdn.example/wrong.m3u8' },
+    ] }
+    expect(pickTencentDownloadURL(data, { stream: 'maxplus', caption: 'hard', formatId: '2' })).toBe(data.video.url)
+  })
   test('an unavailable HEVC rendition falls back to the returned default URL', () => {
     const url = 'https://cdn.example/default.m3u8'
     expect(pickTencentDownloadURL({ video: { url }, formats: [{ id: '322093', name: 'suhd', caption: '硬' }] },

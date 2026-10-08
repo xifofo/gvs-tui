@@ -47,13 +47,20 @@ mediaTest('Tencent runner centrally records final rendition and creates no JSON 
         } as unknown as GwClient
         const cfg = { outDir: root, tmpDir: join(root, 'tmp'), threads: 1, releaseGroup: 'TEST', tmdbKey: '' } as FileConfig
         const task: DlTask = { provider: 'tencent', title: scenario, series: scenario, vid: `vid-${scenario}`, season: 0,
-          episode: 0, kind: 'movie', height: 2160, quality: 'suhd', caption: 'hard',
+          episode: 0, kind: 'movie', height: 0, quality: 'suhd', caption: 'hard',
           tencentQuality: { formatId: '322157', persona: '2741517771455_硬', group: 'encode' },
           group: 'TEST', codec: 'H264', tmdbId: 0, nameDots: '', year: 2026, plot: '' }
         const { promise, resolve } = Promise.withResolvers<JobEvt>()
         const hub = new JobHub(e => { if (e.done) resolve(e) })
         hub.enqueue(cfg, cli, 1, task)
         const final = await promise
+        if (scenario !== 'same') {
+          expect(final.status).toBe('失败')
+          expect(final.err).toMatch(/实际版本|所选编码版本/)
+          expect(final.actualVersion).toBeUndefined()
+          await hub.cancelAll('pause')
+          continue
+        }
         expect(final.err).toBe('')
         expect(final.actualVersion).toBeDefined()
         const records = readFileSync(process.env.GVS_VERSION_RECORDS_PATH!, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
@@ -64,10 +71,9 @@ mediaTest('Tencent runner centrally records final rendition and creates no JSON 
         expect(record.media).toMatchObject({ status: 'probed', width: 64, height: 64, codec: 'h264' })
         expect(JSON.stringify(record)).not.toContain('SIGNED_SECRET')
         expect(JSON.stringify(record)).not.toContain(String(server.port))
-        expect(record.status).toBe(scenario === 'unknown' ? 'unknown' : 'confirmed')
-        expect(record.matchesSelection).toBe(scenario === 'same' ? 'same' : scenario === 'unknown' ? 'unknown' : 'different')
-        expect(record.refreshes).toBe(scenario === 'refresh' ? 1 : 0)
-        if (scenario === 'refresh') expect(record.actual.formatId).toBe('322093')
+        expect(record.status).toBe('confirmed')
+        expect(record.matchesSelection).toBe('same')
+        expect(record.refreshes).toBe(0)
         await hub.cancelAll('pause')
       }
     } finally { await server.stop(true) }

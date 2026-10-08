@@ -94,11 +94,14 @@ export async function startTencentDualQR(
   return { appPath, tvPath }
 }
 
-/** Keep a successful scan in the local config. Gateway files alone disappear on update. */
+/**
+ * Keep login metadata in the local config; the cookie itself now lives only
+ * in the gateway's encrypted session store (thin client). Mode/tvid still
+ * record which session the user picked.
+ */
 export function applyTencentLogin(cfg: FileConfig, mode: TencentMode, data: Record<string, unknown>): boolean {
   if (data.logged_in !== true) return false
-  const cookie = typeof data.cookie === 'string' ? data.cookie.trim() : ''
-  if (cookie) cfg.tencentCookie = cookie
+  cfg.tencentCookie = ''
   cfg.tencentMode = mode
   if (mode === 'tv') {
     const tvid = typeof data.tvid === 'string' ? data.tvid.trim() : ''

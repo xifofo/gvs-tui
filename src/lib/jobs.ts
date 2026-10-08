@@ -4,13 +4,13 @@ import { decryptYoukuTs } from './youku-ts.ts'
 import { tencentPlayInput } from './tencent-qr.ts'
 import { tencentAudioDownloadPlan, tencentAudioPlanNote, tencentPlayQualityInput } from './quality.ts'
 import { resolveHongguoDownload } from './hongguo.ts'
-import { resolveHuangguoDownload } from './huangguo.ts'
+import { huangguoKeyMode, resolveHuangguoDownload } from './huangguo.ts'
 import { mkdirSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname, extname, join } from 'node:path'
 import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
-import { audioTrackLabel, ffmpegDecryptCopy, ffmpegRemux, validateAudio } from './ffmpeg.ts'
+import { audioTrackLabel, ffmpegDecryptCopy, ffmpegRemux, validateAudio, validateVideoDecode } from './ffmpeg.ts'
 import { mkvmergeMux, mkvmergeRemux, type MuxAudio } from './mkvmerge.ts'
 import { ensureFFmpeg, ensureMkvmerge, ensureMP4Box } from './tools.ts'
 import { isDtsAudio, mp4boxMux, readMp4Tracks } from './mp4box.ts'
@@ -32,6 +32,8 @@ import { runLog } from './runlog.ts'
 import { prepareAudioLanguage } from './audio-language.ts'
 import type { TmdbDetails } from './tmdb.ts'
 import { actualVersionText, tencentActualVersion, type ActualVersion } from './actual-version.ts'
+import { verifyTencentCoverage, verifyTencentSpecs } from './tencent-output.ts'
+import { tencentChoiceSelection } from './tencent-quality-selection.ts'
 import { finishedVersionRecord, saveVersionRecord } from './gvs-record.ts'
 
 export type DlTask = {
@@ -42,6 +44,8 @@ export type DlTask = {
   url?: string
   season: number
   episode: number
+  /** Per-episode runtime, retained for retries; old queues may omit it. */
+  duration?: number
   height: number
   quality: string
   /** Tencent TV caption soft|hard */
@@ -529,13 +533,16 @@ async function dlHuangguo(
   const safe = t.vid.replace(/[^\w.-]+/g, '_')
   let picked = await resolveHuangguoDownload(cli, t.vid, t.quality)
   signal?.throwIfAborted()
+  // 声明加密却拿不到密钥：直接失败，绝不裸下密文（旧版会静默 clear 裸下 → 花屏）。
+  let keyMode = huangguoKeyMode(picked.key, picked.keyInfo)
+  if (keyMode.mode === 'error') throw new Error(keyMode.message)
   let hls = /\.(?:m3u8|mpd)(?:[?#]|$)/i.test(picked.url)
   const raw = join(work, `.${safe}.src${hls ? '.ts' : '.mp4'}`)
   const dec = join(work, `.${safe}.dec.mp4`)
   const pull = async () => {
     hls = /\.(?:m3u8|mpd)(?:[?#]|$)/i.test(picked.url)
     const ref = picked.headers.Referer || picked.headers.referer || referer(t.provider)
-    emit('下载', 0.08, '')
+    emit('下载', 0.08, keyMode.mode === 'native' ? '检测到密钥轮换/明文段，逐段取钥' : '')
     if (!hls) {
       await downloadProgress(picked.url, raw, ref, speedCB(emit, '下载', 0.08, 0.72), retryNote, threads, undefined, picked.headers, signal)
       return
@@ -545,9 +552,11 @@ async function dlHuangguo(
       dest: raw,
       ref,
       headers: picked.headers,
-      key: picked.key || undefined,
+      // custom：网关单 key 直压；native：不传 key，RE 按播放列表逐段取钥、
+      // 原生处理轮换和 METHOD=NONE（取钥 403 会大声失败，好过静默花屏）。
+      key: keyMode.mode === 'custom' ? keyMode.key : undefined,
       keyMethod: 'AES_128',
-      clear: !picked.key,
+      clear: keyMode.mode === 'clear',
       threads,
       select: 'muxed',
       transport: 're',
@@ -562,45 +571,78 @@ async function dlHuangguo(
       },
     })
   }
-  try {
-    await pull()
-  } catch (e) {
-    signal?.throwIfAborted()
-    // CDN 拒绝旧链接时重新取链，链接与 key 必须成对刷新。
-    if (!(e instanceof CdnDenied)) throw e
-    emit('重取', 0.08, `CDN ${e.status}，重新取链后下载`)
-    picked = await resolveHuangguoDownload(cli, t.vid, t.quality)
-    signal?.throwIfAborted()
-    // The HLS path restarts RE in a deterministic folder that downloadPlaylist
-    // empties first, so the stale file is replaced rather than appended to.
-    await pull()
-  }
-  // 直链 mp4 + 不换容器：解密（或搬移）直接写到成品路径，跳过 mp4→mp4 复写。
-  if (!hls && !mkvmerge) {
-    if (picked.key && ffmpeg) {
-      emit('解密', 0.78, '')
-      await writeFinal(out, (dest) => ffmpegDecryptCopy(ffmpeg, picked.key, raw, dest, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`), signal))
-      try { unlinkSync(raw) } catch { /* keep */ }
-    } else {
-      moveFileSync(raw, out)
+  /** 下载 → 解密 → 校验 → 封装。校验失败抛 HuangguoCorrupt，由外层换 native 重试。 */
+  const produce = async (): Promise<void> => {
+    try {
+      await pull()
+    } catch (e) {
+      signal?.throwIfAborted()
+      // CDN 拒绝旧链接时重新取链，链接与 key 必须成对刷新。
+      if (!(e instanceof CdnDenied)) throw e
+      emit('重取', 0.08, `CDN ${e.status}，重新取链后下载`)
+      picked = await resolveHuangguoDownload(cli, t.vid, t.quality)
+      signal?.throwIfAborted()
+      keyMode = huangguoKeyMode(picked.key, picked.keyInfo)
+      if (keyMode.mode === 'error') throw new Error(keyMode.message)
+      // The HLS path restarts RE in a deterministic folder that downloadPlaylist
+      // empties first, so the stale file is replaced rather than appended to.
+      await pull()
     }
-    return
+    // 直链 mp4 + 不换容器：解密（或搬移）直接写到成品路径，跳过 mp4→mp4 复写。
+    if (!hls && !mkvmerge) {
+      let final = raw
+      if (picked.key && ffmpeg) {
+        emit('解密', 0.78, '')
+        await ffmpegDecryptCopy(ffmpeg, picked.key, raw, dec, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`), signal)
+        final = dec
+        try { unlinkSync(raw) } catch { /* keep */ }
+      }
+      if (ffmpeg) await validateHuangguo(ffmpeg, final, signal)
+      moveFileSync(final, out)
+      return
+    }
+    let muxSource = raw
+    if (!hls && picked.key && ffmpeg) {
+      emit('解密', 0.78, '')
+      await ffmpegDecryptCopy(ffmpeg, picked.key, raw, dec, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`), signal)
+      muxSource = dec
+    }
+    if (ffmpeg) await validateHuangguo(ffmpeg, muxSource, signal)
+    emit('封装', 0.86, out)
+    const remux = (n: number, total: number) =>
+      emit('封装', 0.86 + 0.13 * (n / Math.max(1, total)), `封装 ${human(n)}/${human(total)}`)
+    await writeFinal(out, (dest) => mkvmerge && extname(out).toLowerCase() === '.mkv'
+      ? mkvmergeRemux(mkvmerge, muxSource, dest, remux, signal)
+      : ffmpegRemux(ffmpeg, muxSource, dest, remux, signal))
+    for (const leftover of [raw, dec]) {
+      try { unlinkSync(leftover) } catch { /* keep */ }
+    }
   }
-  let muxSource = raw
-  if (!hls && picked.key && ffmpeg) {
-    emit('解密', 0.78, '')
-    await ffmpegDecryptCopy(ffmpeg, picked.key, raw, dec, (n, total) => emit('解密', 0.78 + 0.07 * Math.min(1, n / total), `解密 ${human(n)}/${human(total)}`), signal)
-    muxSource = dec
+  try {
+    await produce()
+  } catch (e) {
+    // custom 模式解出的画面没过解码校验：多半是网关没看到的密钥轮换，
+    // 换 RE 原生逐段取钥重下一次。
+    if (e instanceof HuangguoCorrupt && keyMode.mode === 'custom') {
+      emit('重试', 0.86, '画面校验未过，改用逐段取钥重下')
+      keyMode = { mode: 'native' }
+      await produce()
+    } else throw e
   }
-  emit('封装', 0.86, out)
-  const remux = (n: number, total: number) =>
-    emit('封装', 0.86 + 0.13 * (n / Math.max(1, total)), `封装 ${human(n)}/${human(total)}`)
-  await writeFinal(out, (dest) => mkvmerge && extname(out).toLowerCase() === '.mkv'
-    ? mkvmergeRemux(mkvmerge, muxSource, dest, remux, signal)
-    : ffmpegRemux(ffmpeg, muxSource, dest, remux, signal))
-  for (const leftover of [raw, dec]) {
-    try { unlinkSync(leftover) } catch { /* keep */ }
+}
+
+/** 黄果成品解码校验未过：携带 ffmpeg 错误行，外层可换模式重试。 */
+class HuangguoCorrupt extends Error {
+  constructor(readonly errors: string[]) {
+    super(`画面解码校验失败（${errors.length} 处错误）：${errors[0] ?? ''}`)
+    this.name = 'HuangguoCorrupt'
   }
+}
+
+/** 全量解码校验：-loglevel error 下任何输出都算损坏（花屏/坏参考帧/错解密）。 */
+async function validateHuangguo(ffmpeg: string, file: string, signal?: AbortSignal): Promise<void> {
+  const errors = await validateVideoDecode(ffmpeg, file, signal)
+  if (errors.length) throw new HuangguoCorrupt(errors)
 }
 
 /** The picked URL plus the gateway's other CDN mirrors of the same stream. */
@@ -641,7 +683,13 @@ async function dlTencent(
   // Skip CDN mirrors that refuse this network (200 + HTML "Forbidden").
   let refreshes = 0
   const pick = async (data: Record<string, unknown>) => {
-    const picked = pickTencentDownload(data, { ...tencentDownloadSelection(t), persona: t.tencentQuality?.persona }, t.vid, refreshes)
+    const selection = tencentChoiceSelection(t)
+    const picked = pickTencentDownload(data, { ...tencentDownloadSelection(t), persona: selection.persona }, t.vid, refreshes)
+    const v = isObj(data.video) ? data.video : {}
+    runLog(`tencent stream selection requested=${t.quality.split('|')[0]} format=${selection.formatId || '-'} actual=${picked.version.actual?.formatId || '-'} match=${picked.version.matchesSelection} width=${Number(v.width ?? data.width) || 0} height=${Number(v.height ?? data.height) || 0} duration=${Number(v.duration ?? data.duration) || 0}`)
+    if (picked.version.matchesSelection === 'different') throw new Error('腾讯返回的实际版本与所选版本不同，已停止下载；请重新取流或选择可用版本')
+    if (selection.group === 'encode' && picked.version.matchesSelection !== 'same')
+      throw new Error('腾讯未返回所选编码版本的独立地址，已停止下载；请更新网关或重新选择可用版本')
     const cdn = picked.url && /\.m3u8/i.test(picked.url) ? await firstLivePlaylist(tencentMirrors(data, picked.url), referer('tencent'), signal) : picked.url
     if (cdn) onVersion?.(cdn === picked.url ? picked.version :
       tencentActualVersion(data, cdn, picked.version.addressSource, picked.version.selected, t.vid, refreshes))
@@ -664,6 +712,7 @@ async function dlTencent(
   const raw = join(work, `.${safe}.bin`)
   const temps = [raw]
   let done = false
+  const ffmpeg = await ensureFFmpeg()
   emit('下载', 0.1, '')
   const transferProgress = (): ProgressCB => {
     const display = speedCB(emit, '下载', 0.1, 0.55)
@@ -686,17 +735,22 @@ async function dlTencent(
       plan = tencentAudioDownloadPlan(played, t.audioTracks ?? [])
       await downloadProgress(cdn, raw, referer('tencent'), transferProgress(), retryNote, cfg.threads, cipher, undefined, signal)
     }
-    // 封装直接写 out：中止时删掉截断的成品，别留下看似完成的文件。
-    const muxToOut = async (mux: () => Promise<void>) => {
-      try { await mux() } catch (e) {
-        if (signal?.aborted) { try { unlinkSync(out) } catch { /* 还没开始写 */ } }
-        throw e
-      }
-    }
+    const expected = t.duration || Number(played.duration) || 0
+    const videoSeconds = await verifyTencentCoverage(ffmpeg, raw, expected, signal)
+    const specs = await verifyTencentSpecs(ffmpeg, raw, t.tencentQuality ?? {}, t.height, signal)
+    runLog(`tencent video verified width=${specs.width} height=${specs.height} fps=${specs.fps} hdr=${specs.hdr} video_seconds=${videoSeconds.toFixed(3)} expected_seconds=${expected}`)
+    // A long audio track must not make a truncated video look complete.
+    const muxToOut = async (mux: (dest: string) => Promise<void>) => writeFinal(out, async dest => {
+      await mux(dest)
+      emit('验收', 0.98, '检查视频与音轨完整性')
+      await verifyTencentCoverage(ffmpeg, dest, expected, signal)
+      signal?.throwIfAborted()
+      try { unlinkSync(`${dest}.timing.json`) } catch { /* no report */ }
+    })
     if (!plan.files.length) {
       // The video stream carries its own default audio track.
       emit('封装', 0.86, out)
-      await muxToOut(() => mkvmergeRemux(mkvmerge, raw, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal, audioLanguageFallback))
+      await muxToOut(dest => mkvmergeRemux(mkvmerge, raw, dest, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal, audioLanguageFallback))
       done = true
       return note
     }
@@ -714,14 +768,13 @@ async function dlTencent(
       await downloadProgress(audioURL, dest, referer('tencent'), speedCB(emit, '音轨', base, span), retryNote, cfg.threads, audioCipher, undefined, signal)
       mux.push({ path: dest, title: audio.label, lang: audio.lang, isDefault: audio.isDefault })
     }
-    const ffmpeg = await ensureFFmpeg()
     for (const input of mux) {
       const probed = await audioTrackLabel(ffmpeg, input.path)
       input.title = muxTrackTitle(input.lang ?? '', probed)
     }
     emit('封装', 0.86, out)
     const repairs: string[] = []
-    await muxToOut(() => mkvmergeMux(mkvmerge, raw, mux, out, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal, message => {
+    await muxToOut(dest => mkvmergeMux(mkvmerge, raw, mux, dest, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal, message => {
       repairs.push(message)
       runLog(`tencent audio repair vid=${t.vid} ${message}`)
     }, audioLanguageFallback))

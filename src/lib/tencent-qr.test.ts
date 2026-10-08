@@ -46,8 +46,9 @@ test('Tencent profiles route independently and never send pasted cookie', async 
   expect(tencentPlayInput(cfg)).toEqual({})
 })
 
-test('successful Tencent scan is stored on the local config', () => {
+test('successful Tencent scan keeps only mode/tvid locally; cookie stays on the gateway', () => {
   const cfg = defaultConfig()
+  cfg.tencentCookie = 'stale-local-cookie'
   const ok = applyTencentLogin(cfg, 'tv', {
     logged_in: true,
     cookie: 'vuserid=1; vusession=abc',
@@ -55,10 +56,11 @@ test('successful Tencent scan is stored on the local config', () => {
   })
   expect(ok).toBe(true)
   expect(cfg.tencentMode).toBe('tv')
-  expect(cfg.tencentCookie).toBe('vuserid=1; vusession=abc')
+  // 瘦客户端：扫码 Cookie 由网关加密托管，本地不再保存副本。
+  expect(cfg.tencentCookie).toBe('')
   expect(cfg.tencentTVDevice).toBe('TVDEV')
   expect(applyTencentLogin(cfg, 'app', { logged_in: false, cookie: 'nope' })).toBe(false)
-  expect(cfg.tencentCookie).toBe('vuserid=1; vusession=abc')
+  expect(cfg.tencentMode).toBe('tv')
 })
 
 test('TV login input defaults tv_fp_profile=virtual_ott_4k when device empty', () => {

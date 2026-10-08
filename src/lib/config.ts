@@ -15,6 +15,7 @@ export type FileConfig = {
   tmdbLang: string
   /** Optional HTTP(S) proxy used only for TMDB requests. */
   tmdbProxy?: string
+  /** @deprecated yk_sign 由网关按 API key 绑定；字段仅作启动迁移读取，成功推送后清空。 */
   youkuSign: string
   tencentMode?: "cookie" | "web" | "app" | "tv"
   /** Bind TV operations and record real client metrics locally on the gateway. */
@@ -24,10 +25,11 @@ export type FileConfig = {
   tencentTVDevice?: string
   tencentTVQUA?: string
   tencentTVVersion?: string
+  /** @deprecated 瘦客户端：凭证由网关加密托管；字段仅作启动迁移读取，成功推送后清空。 */
   tencentCookie: string
-  /** 抖音网页登录 Cookie（含 sessionid），搜索需要；随请求以 Dy-Cookie 头发给网关 */
+  /** @deprecated 抖音网页 Cookie 改由网关号池托管；随请求的 Dy-Cookie 头仍支持外部脚本。 */
   douyinCookie?: string
-  /** Own IQ overseas Cookie; only sent in authorized gateway calls. */
+  /** @deprecated IQ Cookie 改由网关按 API key 持久化。 */
   iqCookie?: string
   /** Advanced source deviceId + certificate digest; server certificate normally supplies it. */
   iqProfile?: string

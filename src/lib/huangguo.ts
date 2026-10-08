@@ -9,9 +9,60 @@ export const huangguoResolveInput = (id: string) => ({ id })
 export type HuangguoPick = {
   url: string
   key: string
+  keyInfo: HuangguoKeyInfo | null
   headers: Record<string, string>
   quality: string
   why: string
+}
+
+/** 网关上报的播放列表加密概况（全部 #EXT-X-KEY 行）。 */
+export type HuangguoKeyInfo = {
+  method: string
+  keyLines: number
+  distinctUris: number
+  mixedNone: boolean
+  missing: boolean
+  iv: string
+}
+
+export function parseHuangguoKey(data: Record<string, unknown>): HuangguoKeyInfo | null {
+  const raw = isObj(data.key) ? data.key : null
+  if (!raw) return null
+  return {
+    method: asString(raw.method),
+    keyLines: anyInt(raw.keyLines) || 0,
+    distinctUris: anyInt(raw.distinctUris) || 0,
+    mixedNone: raw.mixedNone === true,
+    missing: raw.missing === true,
+    iv: asString(raw.iv),
+  }
+}
+
+export type HuangguoKeyMode =
+  | { mode: 'clear' }
+  | { mode: 'custom'; key: string }
+  | { mode: 'native' }
+  | { mode: 'error'; message: string }
+
+/**
+ * 决定下载解密方式：
+ * - clear:  播放列表没有 AES 密钥行 —— 合法明文流
+ * - custom: 单 key、无轮换、无明文段 —— --custom-hls-key 路径
+ * - native: 密钥轮换或明文段混杂 —— 不传 custom key，RE 按播放列表逐段
+ *           原生取钥（轮换/METHOD=NONE 都按 spec 处理；取钥失败大声报错）
+ * - error:  声明加密但拿不到 key —— 绝不裸下密文
+ */
+export function huangguoKeyMode(key: string, info: HuangguoKeyInfo | null): HuangguoKeyMode {
+  // Older gateways sometimes supply only hex. Preserve that usable key.
+  if (!info || !info.method) return key ? { mode: 'custom', key } : { mode: 'native' }
+  if (info.method.toUpperCase() === 'NONE') return { mode: 'clear' }
+  if (info.method.toUpperCase() !== 'AES-128') return { mode: 'error', message: '黄果返回了不支持的加密方式，已停止下载' }
+  if (info.missing || !key) {
+    return { mode: 'error', message: '黄果声明 AES 加密但网关未取到解密密钥；已停止下载以避免花屏，请稍后重试或换源' }
+  }
+  // Multiple key declarations can change IV even when their URI is identical.
+  if (info.keyLines > 1 || info.distinctUris > 1 || info.mixedNone) return { mode: 'native' }
+  return { mode: 'custom', key }
 }
 
 function headerMap(value: unknown): Record<string, string> {
@@ -54,6 +105,7 @@ export function pickHuangguo(
 ): HuangguoPick {
   const why = asString(data.error)
   const key = isObj(data.key) ? aesKey(data.key.hex) : ''
+  const keyInfo = parseHuangguoKey(data)
   const videos = videoEntries(data)
   const wantQ = want.toLowerCase().trim()
   if (wantQ) {
@@ -64,6 +116,7 @@ export function pickHuangguo(
       return {
         url: asString(chosen.url),
         key,
+        keyInfo,
         headers: headerMap(chosen.headers),
         quality: qualityLabel(chosen),
         why,
@@ -72,10 +125,11 @@ export function pickHuangguo(
     throw new Error('所选黄果画质已不可用，请重新选择')
   }
   const chosen = videos[0]
-  if (!chosen) return { url: '', key, headers: {}, quality: '', why }
+  if (!chosen) return { url: '', key, keyInfo, headers: {}, quality: '', why }
   return {
     url: asString(chosen.url),
     key,
+    keyInfo,
     headers: headerMap(chosen.headers),
     quality: qualityLabel(chosen),
     why,
@@ -96,7 +150,7 @@ export async function resolveHuangguoDownload(
       picked.why ? `黄果: ${picked.why}` : `黄果没有返回播放地址 id=${id}`,
     )
   }
-  return { url: picked.url, key: picked.key, headers: picked.headers }
+  return { url: picked.url, key: picked.key, keyInfo: picked.keyInfo, headers: picked.headers }
 }
 
 /**

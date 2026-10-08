@@ -14,6 +14,7 @@ import { moveFileSync } from './file-move.ts'
 import { assertCencMp4Output, isMpegTsFile } from './media-output.ts'
 import { removeScratch, resumeScratchDir, scratchDir, scratchDirIn } from './scratch.ts'
 import { tencentActualVersion, type ActualVersion } from './actual-version.ts'
+import { tencentCaption } from './tencent-quality-selection.ts'
 
 /** A CDN refused us (403/410 …) — usually the signed URL expired mid-flight. */
 export class CdnDenied extends Error {
@@ -198,6 +199,12 @@ export function pickTencentDownload(
       const defn = asString(raw.defn).toLowerCase()
       const cap = asString(raw.caption).toLowerCase()
       const id = asString(raw.id)
+      // A caption match alone must never select a different requested format.
+      if (wantId && id !== wantId) continue
+      if (stream && name !== stream && defn !== stream) continue
+      if (wantCap && cap && tencentCaption(cap) !== tencentCaption(wantCap)) continue
+      const personas = [asString(raw.persona), ...(Array.isArray(raw.personas) ? raw.personas.map(asString) : [])]
+      if (opts.persona && personas.some(Boolean) && !personas.includes(opts.persona)) continue
       if (wantId && id && id === wantId) score += 10
       if (stream && (name === stream || defn === stream)) score += 5
       if (wantCap && cap === wantCap) score += 3

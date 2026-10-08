@@ -64,10 +64,13 @@ test('an interrupted parallel download resumes from its completed .partN chunks'
     // caller's reason rather than a CDN error.
     const ctrl = new AbortController()
     const watcher = setInterval(() => {
-      try { if (statSync(`${dest}.part0`).size === HALF) { clearInterval(watcher); ctrl.abort('pause') } } catch { /* not there yet */ }
+      try { if (statSync(`${dest}.part0`).size === HALF && statSync(`${dest}.part1`).size > 0) { clearInterval(watcher); ctrl.abort('pause') } } catch { /* not there yet */ }
     }, 5)
-    await expect(downloadProgress(cdn.url, dest, '', undefined, undefined, 2, undefined, undefined, ctrl.signal))
-      .rejects.toBe('pause')
+    const deadline = setTimeout(() => ctrl.abort('fixture did not write both chunks'), 2500)
+    try {
+      await expect(downloadProgress(cdn.url, dest, '', undefined, undefined, 2, undefined, undefined, ctrl.signal))
+        .rejects.toBe('pause')
+    } finally { clearInterval(watcher); clearTimeout(deadline) }
 
     expect(readFileSync(`${dest}.part0`).length).toBe(HALF)
     expect(JSON.parse(readFileSync(`${dest}.parts.json`, 'utf8')))

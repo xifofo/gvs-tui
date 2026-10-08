@@ -422,7 +422,7 @@ describe('tencentPlayQualityInput', () => {
   })
 
   test('retains format and caption from a composite id', () => {
-    expect(tencentPlayQualityInput({ quality: 'fhd|soft|3|l3_soft' })).toEqual({ defn: 'fhd', caption: 'soft' })
+    expect(tencentPlayQualityInput({ quality: 'fhd|soft|3|l3_soft' })).toEqual({ defn: 'fhd', caption: 'soft', format_id: '3' })
   })
 })
 

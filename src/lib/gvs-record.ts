@@ -32,6 +32,10 @@ const ratio = (v: unknown): number => {
   const [a, b] = String(v || '').split('/').map(Number)
   return a && b ? a / b : 0
 }
+const trackDuration = (v: unknown): number => {
+  const m = /^(\d+):(\d+):(\d+(?:\.\d+)?)$/.exec(String(v || ''))
+  return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0
+}
 export function mediaSpecsFromProbe(payload: string): MediaSpecs {
   try {
     const data = JSON.parse(payload)
@@ -40,7 +44,7 @@ export function mediaSpecsFromProbe(payload: string): MediaSpecs {
     const result: MediaSpecs = { status: 'probed', codec: String(v.codec_name || 'unknown') }
     const fields = {
       width: positive(v.width), height: positive(v.height), fps: ratio(v.avg_frame_rate) || ratio(v.r_frame_rate),
-      durationSeconds: positive(v.duration) || positive(data.format?.duration),
+      durationSeconds: positive(v.duration) || trackDuration(v.tags?.DURATION || v.tags?.['DURATION-eng']),
       videoBitrate: positive(v.bit_rate) || positive(v.tags?.BPS) || positive(v.tags?.['BPS-eng']),
     }
     for (const [key, value] of Object.entries(fields)) if (value) (result as Record<string, unknown>)[key] = value

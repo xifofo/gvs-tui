@@ -26,6 +26,7 @@ import {
   type FileConfig,
 } from './lib/config.ts'
 import { GwClient, ReloginRequired, type KeyInfo } from './lib/client.ts'
+import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from './lib/vault-migrate.ts'
 import { selectAudioTracks } from './lib/audio-selection.ts'
 import { normalizeHttpProxy } from './lib/proxy.ts'
 import {
@@ -626,7 +627,7 @@ export class Runtime {
       case '优酷扫码':
         return '仅支持扫码登录（不再提供 Cookie 导入）'
       case '优酷登录':
-        if (!this.cfg.youkuSign) return '未登录 · 回车扫码'
+        if (!this.cfg.youkuSign && !this.ykLogin?.ok) return this.ykLogin ? '登录态不可用 · 回车扫码' : '未登录 · 回车扫码'
         if (this.signMissing) return '本机签名已不在网关凭证库 · 回车重新扫码'
         return this.ykAcct
           ? accountSummary(this.ykAcct, this.vipProbe ?? undefined)
@@ -797,7 +798,8 @@ export class Runtime {
    * 真正掉登录只有 `refresh` 说 `needs_relogin`，或者 `play` 报 ReloginRequired。
    */
   private async ensureYouku(): Promise<void> {
-    if (!this.cli || !this.cfg.youkuSign) return
+    // 瘦客户端：无本地 yk_sign 也探测 —— 网关按本 API key 解析绑定凭证。
+    if (!this.cli) return
     try {
       this.ykLogin = await ykLoginInfo(this.cli, this.cfg.youkuSign)
     } catch {
@@ -834,7 +836,7 @@ export class Runtime {
 
   /** 合并启动、隧道恢复和登录成功触发的重复账户检查。 */
   private queueEnsureYouku(): void {
-    if (!this.cli || !this.cfg.youkuSign || this.youkuEnsure) return
+    if (!this.cli || this.youkuEnsure) return
     this.youkuEnsure = this.ensureYouku().finally(() => {
       this.youkuEnsure = null
     })
@@ -842,7 +844,7 @@ export class Runtime {
 
   /** 查账号与会员状态（会打几个上游接口，只在启动和手动刷新时调）。 */
   private async checkYoukuAccount(): Promise<void> {
-    if (!this.cli || !this.cfg.youkuSign) return
+    if (!this.cli) return
     this.ykAcct = await ykAccount(this.cli, this.cfg.youkuSign)
     // 签名不在库里 → 账号接口很可能答的是网关自己的全局会话，不能当本机登录态。
     if (this.signMissing) this.ykAcct.needsScan = true
@@ -856,7 +858,7 @@ export class Runtime {
   }
   /** 查网关侧优酷登录态；失败不影响其它流程。 */
   private async checkYoukuLogin(): Promise<void> {
-    if (!this.cli || !this.cfg.youkuSign) return
+    if (!this.cli) return
     this.ykLogin = await ykLoginInfo(this.cli, this.cfg.youkuSign)
     this.emit()
   }
@@ -866,7 +868,7 @@ export class Runtime {
    * 只有它明确说 needs_relogin 时才真的要扫码。
    */
   private async renewYoukuLogin(): Promise<boolean> {
-    if (!this.cli || !this.cfg.youkuSign) return false
+    if (!this.cli) return false
     try {
       const res = await this.work(() =>
         ykRefresh(this.cli!, this.cfg.youkuSign),
@@ -898,6 +900,7 @@ export class Runtime {
     if (this.scene === 'home') {
       await this.refreshKey()
       if (this.scene === 'home') {
+        await this.migrateVaultOnce()
         this.scene = 'workspace'
         const p = this.providers().find((p) => p !== 'douyin')
         if (p) {
@@ -906,6 +909,28 @@ export class Runtime {
         } else this.say('当前 Key 没有可浏览的平台', 'warn')
         this.emit()
       }
+    }
+  }
+
+  /**
+   * 瘦客户端迁移：本地还存着源站 Cookie/签名时，推给网关托管（网关侧加密
+   * 落盘）并清空本地字段。网关不在线则保留，下次启动重试。
+   */
+  private async migrateVaultOnce(): Promise<void> {
+    if (this.simulated || !this.cli || !hasLocalCredentials(this.cfg)) return
+    try {
+      const result = await migrateLocalCredentials(this.cli, this.cfg)
+      const moved = result.migrated.length + result.clearedDead.length
+      if (moved > 0) {
+        this.persistConfig()
+        const detail = [
+          result.migrated.length ? `已托管 ${result.migrated.join('、')}` : '',
+          result.clearedDead.length ? `失效清除 ${result.clearedDead.join('、')}` : '',
+        ].filter(Boolean).join('；')
+        this.say(`本地凭证已迁移到网关（${detail}）`, 'ok')
+      }
+    } catch {
+      // 网关离线等情况：字段保留，下次启动再试
     }
   }
 
@@ -1736,7 +1761,7 @@ export class Runtime {
       return
     }
     if (f === '优酷登录') {
-      if (!this.cfg.youkuSign) {
+      if (!this.cfg.youkuSign && !this.ykLogin?.ok) {
         void this.openSetting('优酷扫码')
         return
       }
@@ -1919,7 +1944,7 @@ export class Runtime {
     try {
       const view = await this.providerSessions.command(command)
       if (scope !== this.cfg.host + ':' + this.cfg.key || generation !== this.providerLoginGeneration) return
-      if (command.provider === 'iq' && (view.authenticated || command.op === 'logout')) { this.cfg.iqCookie = ''; this.persistConfig() }
+      // iqCookie 不再本地保存：IQ/Hami 会话由网关按 API key 加密持久化。
       if (command.op === 'web_verify' && view.authenticated) { this.cfg.hamiClient = 'web'; this.persistConfig() }
       if (command.provider === 'hamivideo' && command.op === 'import' && view.state === 'imported') { this.cfg.hamiClient = 'tv'; this.persistConfig() }
       if (command.provider === 'mewatch' && view.state === 'pending' && view.url) {
@@ -2026,20 +2051,45 @@ export class Runtime {
       case '腾讯 TV QUA': this.cfg.tencentTVQUA = v; break
       case '腾讯 TV 版本': this.cfg.tencentTVVersion = v; break
       case '腾讯 Cookie':
-        this.cfg.tencentCookie = v
+        // 瘦客户端：粘贴即推给网关托管，不再写入 tui.json
+        if (!await this.pushCredential('tencent', v)) return
         this.cfg.tencentMode = 'cookie'
+        this.cfg.tencentCookie = ''
         break
       case '抖音 Cookie':
-        this.cfg.douyinCookie = v.trim()
+        if (!await this.pushCredential('douyin', v.trim())) return
+        this.cfg.douyinCookie = ''
         break
-      case 'IQ Cookie': this.cfg.iqCookie = v; break
+      case 'IQ Cookie':
+        if (!await this.pushCredential('iq', v)) return
+        this.cfg.iqCookie = ''
+        break
       case 'IQ 设备资料': this.cfg.iqProfile = v; break
     }
     this.persistConfig()
-    this.say(`${this.editField} 已保存`, 'ok')
+    this.say(`${this.editField} 已${this.editField.endsWith('Cookie') ? '推送到网关托管' : '保存'}`, 'ok')
     this.scene = 'settings'
     this.emit()
     if (this.editField === '腾讯 Cookie') void this.refreshTencentAccount(false)
+  }
+
+  /** 把粘贴的源站凭证立即推给网关（登录/导入动作），本地不留副本。 */
+  private async pushCredential(kind: 'tencent' | 'douyin' | 'iq', value: string): Promise<boolean> {
+    if (this.simulated || !this.cli) { this.say('网关未连接，凭证未保存；请先连接网关再粘贴', 'warn'); this.emit(); return false }
+    const labels = { tencent: '腾讯 Cookie', douyin: '抖音 Cookie', iq: 'IQ Cookie' } as const
+    const client = this.cli
+    const scope = this.cfg.host + ':' + this.cfg.key
+    try {
+      await pushLocalCredential(client, kind, value)
+      if (client !== this.cli || scope !== this.cfg.host + ':' + this.cfg.key) throw new Error('网关连接已切换，请重新导入凭证')
+      this.say(`${labels[kind]}已由网关加密托管`, 'ok')
+      this.emit()
+      return true
+    } catch (e) {
+      this.say(`${labels[kind]}推送失败：${e instanceof Error ? e.message : e}`, 'err')
+      this.emit()
+      return false
+    }
   }
 
   private isMovie(): boolean {
@@ -2077,6 +2127,7 @@ export class Runtime {
       season: movie ? 0 : seriesSeason(ep.season, this.detailTitle),
       episode: movie ? 0 : ep.number || i + 1,
       collection: ep.collection,
+      duration: ep.duration,
       height: 0,
       quality: '',
       group: this.cfg.releaseGroup,
@@ -2144,7 +2195,7 @@ export class Runtime {
       this.adoptOptions(opts, tasks.length)
     } catch (e) {
       if (generation !== this.requestGeneration) return
-      if (e instanceof ReloginRequired && this.cfg.youkuSign) {
+      if (e instanceof ReloginRequired) {
         // ① 先续期：网关能用 stoken/ptoken 自己续，续成功就重试原请求，
         //    用户完全不用重新扫码（"重启就失效"多半就是缺了这一步）。
         this.say('优酷登录态失效，尝试自动续期…', 'warn')
@@ -2883,9 +2934,11 @@ export class Runtime {
       const poll = await pollYoukuQR(this.cli, this.qrTicket, this.qrLoginToken)
       this.qrPolls++
       if (poll.sign) {
-        this.cfg.youkuSign = poll.sign
+        this.cfg.youkuSign = ''
         this.persistConfig()
-        this.say('已保存 Yk-Sign', 'ok')
+        // 瘦客户端：yk_sign 由网关按本 API key 绑定（youku_creds owner），
+        // 不再写入 tui.json；旧版本残留的本地 sign 交给启动迁移清理。
+        this.say('优酷扫码成功，签名已托管到网关', 'ok')
         this.scene = 'settings'
         this.stopQR()
         this.emit()
@@ -2893,7 +2946,9 @@ export class Runtime {
         this.queueEnsureYouku()
         return
       }
-      if (poll.loggedIn && this.cfg.youkuSign) {
+      if (poll.loggedIn) {
+        this.cfg.youkuSign = ''
+        this.persistConfig()
         this.say('优酷已登录', 'ok')
         this.scene = 'settings'
         this.stopQR()

@@ -17,7 +17,7 @@ bun install --frozen-lockfile
 bun run start
 ```
 
-`start` 自动编译当前源码后启动，直接使用仓库的 `bin/`，避免拉到新代码却仍运行旧 dist。第一次填自己的网关 Base URL、API Key 并登录平台。配置在用户目录 `gvs/tui.json`，不会提交到 Git。更新时执行：
+`start` 自动编译当前源码后启动，直接使用仓库的 `bin/`，避免拉到新代码却仍运行旧 dist。第一次填自己的网关 Base URL、API Key 并登录平台。配置在用户目录 `gvs/tui.json`，不会提交到 Git。源站 Cookie / yk_sign 由网关加密托管，本文件只保存网关地址、key 与下载偏好。更新时执行：
 
 平台按 Key 权限显示：优酷 `1`、腾讯 `2`、红果 `3`、黄果 `4`、抖音 `5`（黄果是聚合源：AI 站 / 视频站 / 旧 API）。
 

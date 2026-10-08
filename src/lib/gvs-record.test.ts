@@ -30,13 +30,18 @@ test('fingerprint survives rename, detects content changes and agrees with the P
 
 test('probe specs use video bitrate or video BPS tag, never total container bitrate', () => {
   const payload = { streams: [{ codec_type: 'video', codec_name: 'hevc', width: 3840, height: 1636,
-    avg_frame_rate: '24000/1001', tags: { BPS: '7881000' }, color_transfer: 'smpte2084' }], format: { bit_rate: '10000000', duration: '5280' } }
+    avg_frame_rate: '24000/1001', tags: { BPS: '7881000', DURATION: '01:28:00.000' }, color_transfer: 'smpte2084' }], format: { bit_rate: '10000000', duration: '5280' } }
   expect(mediaSpecsFromProbe(JSON.stringify(payload))).toMatchObject({ status: 'probed', width: 3840, height: 1636,
     videoBitrate: 7881000, durationSeconds: 5280, dynamicRange: 'HDR' })
   delete (payload.streams[0] as { tags?: unknown }).tags
   expect(mediaSpecsFromProbe(JSON.stringify(payload)).videoBitrate).toBeUndefined()
   expect(mediaSpecsFromProbe('{bad')).toEqual({ status: 'unavailable' })
   expect(mediaSpecsFromProbe('{"streams":[]}')).toEqual({ status: 'unavailable' })
+})
+
+test('container duration cannot substitute for missing video duration', () => {
+  const result = mediaSpecsFromProbe(JSON.stringify({ streams: [{ codec_type: 'video', codec_name: 'hevc' }], format: { duration: '2765' } }))
+  expect(result.durationSeconds).toBeUndefined()
 })
 
 test('central archive retains multiple completions without writing alongside the video', async () => {

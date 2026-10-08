@@ -27,7 +27,7 @@ src/lib/          网关客户端 / ffmpeg / 命名
 
 Vue **不要**自己 `fetch` 网关。新交互改 `runtime.ts` 的 snapshot / 按键。
 
-配置：用户目录 `gvs/tui.json`（Windows 一般是 `%APPDATA%\gvs\tui.json`）。
+配置：用户目录 `gvs/tui.json`（Windows 一般是 `%APPDATA%\gvs\tui.json`）。瘦客户端模式下文件里只有网关 key 与非敏感设置，源站 Cookie / yk_sign 全部由网关加密托管（见第 9 节）。
 
 ---
 
@@ -50,7 +50,7 @@ Authorization: Bearer sk_live_<prefix>.<secret>
 | `Yk-Sign: yk_live_...` | 优酷 VIP 取流 / 账号相关 |
 | `Tx-Cookie: ...` | 腾讯会员取流 |
 
-扫码/Cookie 登录成功后，客户端把 `yk_sign` 存进 `tui.json` 的 `youkuSign`。腾讯网页 Cookie 存 `tencentCookie`。
+扫码/Cookie 登录成功后，凭证保存在网关侧：优酷 `yk_sign` 绑定到当前 API Key（`youku_creds`，加密落盘），腾讯 Cookie 写入网关会话存储。客户端不再保存副本；旧版本 `tui.json` 里的凭证会在下一次连接时自动推送到网关并清空。上面的请求头仍然支持（外部脚本可显式覆盖），但客户端本身不再发送。
 
 ---
 
@@ -217,7 +217,9 @@ DRM：`drm.content_key_hex`。本机 ffmpeg `-decryption_key`。IV 由网关解�
 | `detail` | `cid` |
 | `play` | `vid`，`defn=fhd\|shd\|hd\|sd`（缺省 fhd） |
 
-会员带 `Tx-Cookie`。出参 `video.url`。当前客户端**拒绝 m3u8**（报「HLS 下一期」）。画质列表是写死的四档，没有探测。Referer：`https://v.qq.com/`。
+旧配置尚未迁移成功时可兼容发送 `Tx-Cookie`；新登录由网关保存。客户端下载 `video.url` 或所选目录条目的独立地址，支持 HLS 和独立音轨。精确编码选择传 `format_id` / `rendition_persona`，没有可确认的对应版本时停止。Referer：`https://v.qq.com/`。
+
+腾讯完成验收读取本地媒体包的真实时间范围，逐条比较视频与音轨，并在分集时长已知时核对视频覆盖；容器总时长不能代替视频时长。还会检查所选分辨率、帧率和 HDR。封装先写隐藏临时文件，验收通过后才生成正式成品，失败保留源文件供重试和诊断。
 
 `drm.enc`：0 无加密 / 1 ChaCha20 / 2 Widevine（网关不给 WV 密钥）。当前下载管线只当直链文件 remux。
 
@@ -432,6 +434,10 @@ bun run scripts/check-detect.ts     # TUI 会怎么说（账号行 + 画质页�
 
 ## 9. 本机配置 `gvs/tui.json`
 
+瘦客户端：新登录、扫码、粘贴 Cookie 进入网关会话存储，不写新的本地凭证副本。旧 `youkuSign` / `tencentCookie` / `douyinCookie` / `iqCookie` 只在网关确认导入或绑定成功、持久化成功后清空；旧网关不支持迁移、API Key 无效、网络或存储失败都保留原值，兼容请求头在迁移完成前仍可使用。粘贴导入等待网关确认后才提示成功。
+
+`PROVIDER_SECRET_KEY` 未设置时网关在数据目录首次生成 `secret.key`；已有密钥读取失败或格式异常会阻止启动，不自动覆盖。备份数据时同时保留该密钥。IQ/Hami 恢复先验证和解密各副本，再选择最新的有效副本，避免坏文件覆盖有效数据库副本。
+
 ```json
 {
   "host": "https://你的网关",
@@ -442,12 +448,9 @@ bun run scripts/check-detect.ts     # TUI 会怎么说（账号行 + 画质页�
   "tmdbLang": "zh-CN",
   "tmdbProxy": "",
   "gatewayProxy": "",
-  "youkuSign": "",
-  "tencentCookie": "",
   "hongguoMerge": true,
   "hongguoNfo": true,
-  "hongguoFmt": "mkv",
-  "ffmpeg": "ffmpeg"
+  "hongguoFmt": "mkv"
 }
 ```
 
@@ -459,9 +462,9 @@ TMDB 由客户端请求（优先 `api.tmdb.org`，网络失败后尝试 `api.the
 
 平台详情的 `kind` / `media_type` / `type` / `category` 等明确类型字段用于初始分类；无类型字段时保留搜索行上的类型。单条正片不代表一定是电影，详情页 `M` 可手动切换，TMDB 选择也可纠正类型。
 
-`youkuSign` 过期时网关会在 0ms 内回 `invalid Yk-Sign`（`needs_relogin`）：取画质/下载会直接失败，
-而不是降级。TUI 遇到这个会**自动清掉本地死签名并重试一次**，仍失败就提示去「设置 → 优酷扫码」。
-手工修也可以：把 `youkuSign` 置空，或重新扫码。
+优酷签名失效时网关会在 0ms 内回 `invalid Yk-Sign`（`needs_relogin`）：取画质/下载会直接失败，
+而不是降级。客户端会**先让网关自动续期并重试一次**（stoken/ptoken 续期，不用重新扫码），
+仍失败就提示去「设置 → 优酷扫码」。签名由网关按 API Key 绑定，本地没有可清的字段。
 
 命名例：`NameDots.S01E02.单集标题.1080p.YK.WEB-DL.H265-ADWeb.mkv`。单集标题取自平台详情，在季集编号之后、年份之前；空标题或重复节目名时省略，电影不追加。确认页和下载共用 `jobNaming` / `filename`。红果/抖音短剧放在剧名目录下。
 
