@@ -59,10 +59,12 @@ test('explicit default video format ID records the different version without blo
   expect(actualVersionText(picked.version)).toContain('与所选版本不同')
 })
 
-test('generic video id and a single catalog row are not proof of format identity', () => {
+test('generic video id cannot prove a format ID; URL-bound stream metadata remains partial', () => {
   const result = tencentActualVersion({ video: { url, id: 'video-id', defn: 'suhd' }, formats: [row] }, url, 'default', selected, 'vid')
   expect(result.status).toBe('unknown')
-  expect(result.actual).toBeNull()
+  expect(result.actual?.stream).toBe('suhd')
+  expect(result.actual?.formatId).toBeUndefined()
+  expect(result.evidence).toBe('video_metadata')
 })
 
 test('multiple conflicting formats sharing one URL remain ambiguous', () => {

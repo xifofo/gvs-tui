@@ -1,10 +1,10 @@
 type SelectableAudio = { id: string; label?: string; codec?: string; isDefault?: boolean; embedded?: boolean }
 
-/** The app's audio tier preference: Dolby, DTS, AAC, then unrecognized formats. */
+/** The app's audio preference: DTS, Dolby, AAC, then unrecognized formats. */
 function audioTier(a: SelectableAudio): number {
   const text = `${a.id} ${a.codec ?? ''} ${a.label ?? ''}`.toLowerCase()
-  if (/atmos|cmfa4|dolby|杜比|全景声|e-?ac-?3|\bac-?3\b/.test(text)) return 0
-  if (/dts|cmfa3/.test(text)) return 1
+  if (/dts|cmfa3/.test(text)) return 0
+  if (/atmos|cmfa4|dolby|杜比|全景声|e-?ac-?3|\bac-?3\b/.test(text)) return 1
   if (/aac|cmfa1/.test(text)) return 2
   return 3
 }

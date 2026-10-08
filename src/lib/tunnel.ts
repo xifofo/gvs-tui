@@ -20,6 +20,15 @@ type HeaderWS = {
   new (url: string, opts?: { headers?: Record<string, string>; proxy?: string }): WebSocket
 }
 
+export type TunnelFetch = (url: string, init: RequestInit) => Promise<Response>
+type TunnelFetchRoute = (url: URL) => TunnelFetch | undefined | Promise<TunnelFetch | undefined>
+let fetchRoute: TunnelFetchRoute | undefined
+
+/** Desktop can select a system-proxy transport before the direct/fake-IP path. */
+export function setTunnelFetchRoute(route: TunnelFetchRoute | undefined): void {
+  fetchRoute = route
+}
+
 const LIMIT_RE = /429|TUNNEL_LIMITED|CONCURRENCY_LIMITED/
 const OCCUPIED = '隧道已被同一个 Key 的另一处占用（每 Key 只允许一条），稍后自动重试'
 const KEEPALIVE_MS = 20_000
@@ -462,6 +471,8 @@ function splitWsFrames(buf: Buffer): { frames: { op: number, payload: Buffer }[]
 async function local(f: TunFrame): Promise<TunFrame> {
   try {
     const url = new URL(f.url ?? '')
+    const routedFetch = await fetchRoute?.(url)
+    if (routedFetch) return await localFetch(f, routedFetch)
     const route = await tunnelRoute(url.hostname)
     if (route.fakeIp) return await localDial(f, url, route.tcp)
     return await localFetch(f)
@@ -470,7 +481,7 @@ async function local(f: TunFrame): Promise<TunFrame> {
   }
 }
 
-export async function localFetch(f: TunFrame): Promise<TunFrame> {
+export async function localFetch(f: TunFrame, fetcher: TunnelFetch = fetch): Promise<TunFrame> {
   const raw = f.body ? Buffer.from(f.body, 'base64') : undefined
   const headers = new Headers()
   if (f.header) {
@@ -484,7 +495,7 @@ export async function localFetch(f: TunFrame): Promise<TunFrame> {
   const timer = setTimeout(() => ac.abort(), 40_000)
   let res: Response
   try {
-    res = await fetch(f.url ?? '', {
+    res = await fetcher(f.url ?? '', {
       method,
       redirect: 'manual',
       headers,
@@ -734,4 +745,3 @@ function readHttp101(sock: net.Socket, signal: AbortSignal): Promise<Buffer> {
   sock.once('close', () => finish(() => reject(new Error('tunnel http 连接被关闭'))))
   return promise
 }
-

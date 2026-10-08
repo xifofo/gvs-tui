@@ -5,7 +5,7 @@ import { viewMetrics } from './lib/ui-layout'
 import { gridWindow } from './lib/grid'
 import { GwClient } from './lib/client'
 import { wrapLines, displayWidth } from './lib/text'
-import { filename, folder } from './lib/name'
+import { completedFilename, filename, folder } from './lib/name'
 import { jobNaming } from './lib/jobs'
 import { join } from 'node:path'
 const runtimes: Runtime[] = []
@@ -17,6 +17,138 @@ const start = async () => {
 }
 afterEach(() => {
   runtimes.splice(0).forEach((r) => r.close())
+})
+
+test('TUI episode-title toggle applies to new IQ tasks and previews while existing tasks keep their choice', async () => {
+  const r = await start()
+  const x = r as any
+  x.detailProv = 'iq'
+  x.detailTitle = '海外节目'
+  x.detailInfo = { kind: 'show', year: 2026 }
+  x.eps = [{ vid: 'one', title: '雨夜重逢', season: 2, number: 3, languages: [] }]
+  r.handleKey('f4')
+  x.setIdx = x.settingFields().indexOf('文件名单集标题')
+  x.emit()
+  expect(r.snapshot.settings?.find(s => s.label === '文件名单集标题')?.value).toStartWith('开')
+  expect(x.taskFromEp(0).includeEpisodeTitle).toBe(true)
+  r.handleKey('enter')
+  expect(r.snapshot.settings?.find(s => s.label === '文件名单集标题')?.value).toStartWith('关')
+  const off = x.taskFromEp(0)
+  expect(off.includeEpisodeTitle).toBe(false)
+  x.pending = [off]
+  x.scene = 'confirm'
+  x.emit()
+  expect(r.snapshot.confirmation?.name).toContain('海外节目.S02E03.2026.')
+  expect(r.snapshot.confirmation?.name).not.toContain('雨夜重逢')
+  r.handleKey('f4')
+  x.setIdx = x.settingFields().indexOf('文件名单集标题')
+  r.handleKey('space')
+  expect(x.cfg.includeEpisodeTitle).toBe(true)
+  const on = x.taskFromEp(0)
+  expect(completedFilename(jobNaming(on, x.cfg), { status: 'unavailable' })).toContain('.S02E03.雨夜重逢.2026.')
+  const restored = JSON.parse(JSON.stringify(off))
+  expect(jobNaming(restored, x.cfg).episodeTitle).toBeUndefined()
+})
+
+test('IQ-only scope exposes TMDB settings and matching corrects a movie title, year, folder and filename', async () => {
+  const r = await start()
+  const x = r as any
+  x.keyInfo = { all: false, scope: ['iq'] }
+  x.cli.invoke = async () => ({ title: '平台片名', year: 2026,
+    episodes: [{ vid: 'iq-movie', title: '平台片名', number: 1 }] })
+  x.detailProv = 'tencent'
+  x.scene = 'search'
+  x.query = 'https://www.iq.com/album/test-movie'
+  r.handleKey('enter')
+  await Bun.sleep(1)
+  expect(x.detailProv).toBe('iq')
+  expect(x.detailId).toBe(x.query)
+  expect(r.snapshot.detail?.kind).toBe('show')
+  r.handleKey('m')
+  expect(r.snapshot.detail?.kind).toBe('movie')
+  r.handleKey('m')
+  expect(r.snapshot.detail?.kind).toBe('show')
+  r.handleKey('f4')
+  expect(r.snapshot.settings?.some(s => s.label === 'TMDB Key')).toBe(true)
+  expect(r.snapshot.settings?.some(s => s.label === 'TMDB 代理')).toBe(true)
+  r.handleKey('esc')
+  r.handleKey('enter')
+  const hit = { id: 900001, name: '正式片名', title: 'Original Movie', year: 2025, overview: '', kind: 'movie' as const }
+  x.cfg.tmdbKey = 'local-test-key'
+  x.simulated = false
+  x.work = async () => [hit]
+  x.cli.invoke = () => { throw new Error('TMDB selection must not call gateway play') }
+  try {
+    r.handleKey('enter')
+    await Bun.sleep(1)
+    expect(r.snapshot.scene).toBe('tmdb')
+    expect(r.snapshot.tmdbState).toBe('ready')
+    expect(r.snapshot.tmdbHits).toEqual([hit])
+    r.handleKey('enter')
+    expect(r.snapshot.scene).toBe('confirm')
+    expect(x.pending[0]).toMatchObject({ provider: 'iq', kind: 'movie', series: '正式片名', year: 2025, tmdbId: 900001,
+      season: 0, episode: 0 })
+    expect(r.snapshot.confirmation?.name).toStartWith('正式片名.2025.')
+    expect(r.snapshot.confirmation?.name).toContain('.IQ.WEB-DL.')
+    expect(r.snapshot.confirmation?.name).not.toContain('S01E01')
+    expect(r.snapshot.confirmation?.directory).toEndWith('正式片名 (2025) {tmdb-900001}')
+    expect(r.snapshot.jobs).toHaveLength(0)
+  } finally { x.simulated = true }
+})
+
+test('IQ series TMDB matching keeps the platform season and episode numbers across a batch', async () => {
+  const r = await start()
+  const x = r as any
+  x.cli.invoke = async () => ({ title: '平台剧名 第2季', year: 2026,
+    episodes: [{ vid: 'iq-one', title: '雨夜重逢', number: 1 }, { vid: 'iq-two', title: '携手同行', number: 2 }] })
+  await x.detail('iq', 'series')
+  r.handleKey('a')
+  r.handleKey('enter')
+  x.cfg.tmdbKey = 'local-test-key'
+  x.simulated = false
+  x.work = async () => [{ id: 900002, name: '正式剧名', title: 'Original Series', year: 2023, overview: '', kind: 'show' }]
+  try {
+    r.handleKey('enter')
+    await Bun.sleep(1)
+    expect(r.snapshot.scene).toBe('tmdb')
+    r.handleKey('enter')
+    expect(x.pending.map((t: any) => [t.series, t.year, t.tmdbId, t.season, t.episode])).toEqual([
+      ['正式剧名', 2023, 900002, 2, 1], ['正式剧名', 2023, 900002, 2, 2],
+    ])
+    expect(r.snapshot.confirmation?.name).toContain('正式剧名.S02E01.雨夜重逢.2023.')
+    expect(r.snapshot.confirmation?.directory).toEndWith('正式剧名 (2023) {tmdb-900002}/Season 02')
+    const restored = JSON.parse(JSON.stringify(x.pending[1]))
+    expect(completedFilename(jobNaming(restored, x.cfg), { status: 'unavailable' })).toContain('正式剧名.S02E02.携手同行.2023.')
+  } finally { x.simulated = true }
+})
+
+test('IQ without a TMDB key proceeds normally and a lookup failure remains skippable', async () => {
+  const r = await start()
+  const x = r as any
+  x.cli.invoke = async () => ({ title: '平台片名', year: 2026, episodes: [{ vid: 'iq-one', title: '第1集', number: 1 }] })
+  await x.detail('iq', 'album')
+  r.handleKey('enter')
+  x.simulated = false
+  x.work = () => { throw new Error('TMDB lookup should require a key') }
+  try {
+    r.handleKey('enter')
+    await Bun.sleep(1)
+    expect(r.snapshot.scene).toBe('confirm')
+    expect(x.pending[0].tmdbId).toBe(0)
+    x.scene = 'quality'
+    x.cfg.tmdbKey = 'local-test-key'
+    x.work = async () => { throw new Error('TMDB 连接失败') }
+    r.handleKey('enter')
+    await Bun.sleep(1)
+    expect(r.snapshot.scene).toBe('tmdb')
+    expect(r.snapshot.tmdbState).toBe('error')
+    expect(r.snapshot.status).toContain('TMDB 连接失败')
+    r.handleKey('s')
+    expect(r.snapshot.scene).toBe('confirm')
+    expect(x.pending[0]).toMatchObject({ series: '平台片名', year: 2026, tmdbId: 0 })
+    expect(r.snapshot.confirmation?.directory).not.toContain('{tmdb-')
+    expect(r.snapshot.jobs).toHaveLength(0)
+  } finally { x.simulated = true }
 })
 
 test('tunnel recovery replaces its warning for both fast and slow reconnects', async () => {
@@ -569,6 +701,23 @@ test('manual type switch works without TMDB and returning to TV restores the rea
   expect(r.snapshot.confirmation?.name).toContain('S01E05')
   expect(internal.pending[0].episode).toBe(5)
   expect(internal.pending[0].edition).toBe('')
+})
+
+test('switching a movie back to a series preserves an explicit special season zero', async () => {
+  const r = await start()
+  const internal = r as any
+  internal.detailProv = 'tencent'
+  internal.cli.invoke = async () => ({ title: '心动的信号', episodes: [{ vid: 'special', title: '雨夜重逢', number: 298, season: 0 }] })
+  await internal.detail('tencent', 'show')
+  r.handleKey('m')
+  r.handleKey('enter')
+  r.handleKey('enter')
+  internal.scene = 'tmdb'
+  internal.tmdbHits = [{ id: 123, name: '心动的信号', title: '', year: 2018, kind: 'show' }]
+  r.handleKey('enter')
+  expect(internal.pending[0].season).toBe(0)
+  expect(r.snapshot.confirmation?.name).toContain('.S00E298.雨夜重逢.')
+  expect(r.snapshot.confirmation?.directory).toEndWith('Season 00')
 })
 
 test('content type from a search result survives a detail response without category', async () => {

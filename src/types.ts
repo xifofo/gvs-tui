@@ -95,7 +95,7 @@ export type OptionTab = 'quality' | 'audio'
 export type Snapshot = {
   scene: string
   workspace?: import('./lib/discovery').DiscoveryView
-  confirmation?: { title: string; episodes: string; quality: string; audio: string; directory: string; name: string; kind?: 'movie' | 'show' | 'short'; year?: number }
+  confirmation?: { title: string; episodes: string; quality: string; audio: string; directory: string; name: string; note?: string; kind?: 'movie' | 'show' | 'short'; year?: number }
   contentOffset?: number
   detailExpanded?: boolean
   settingsExpanded?: boolean

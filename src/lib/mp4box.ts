@@ -22,6 +22,7 @@ type Edit = { duration: number; mediaTime: number }
 export type Mp4Track = {
   id: number; type: string; codec: string; scale: number; movieScale: number
   edits: Edit[]; language: string; name: string; duration: number
+  enabled?: boolean
 }
 export type Mp4TrackScan = Mp4Track & {
   samples: number; bytes: number; firstMs: number; timelineHash: string; payloadHash?: string
@@ -51,9 +52,11 @@ export function parseMp4Tracks(xml: string): Mp4Track[] {
     }
     const track = { id: Number(attr(header, 'TrackID')), type: attr(handler, 'hdlrType'), codec: attr(description, 'Type'),
       scale: Number(attr(media, 'TimeScale')), movieScale, edits, language: attr(media, 'LanguageCode'), name: attr(handler, 'Name'), duration: Number(attr(media, 'Duration')) }
+    const flags = attr(header, 'Flags')
+    const enabled = flags ? (Number.parseInt(flags, flags.startsWith('0x') ? 16 : 10) & 1) !== 0 : undefined
     if (!track.id || !(track.scale > 0) || !track.codec || !track.type) throw new Error('MP4 轨道信息不完整')
     if (track.codec === 'enca' || track.codec === 'encv') throw new Error('MP4 轨道仍处于加密状态')
-    return track
+    return { ...track, ...(enabled !== undefined ? { enabled } : {}) }
   })
 }
 

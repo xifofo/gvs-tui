@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import type { AudioView, EnqueueRequest, NamingPreview, TmdbHit } from '@shared/api'
+import { supportsTmdb } from '@shared/api'
 import { resolveDefaultAudioId } from '@shared/audio-selection'
 import { defaultTmdbHit } from '@shared/tmdb-selection'
 import Icon from '../components/Icon.vue'
@@ -22,6 +23,7 @@ const starting = ref(false)
 const manualKind = ref(false)
 let tmdbSeq = 0
 const isMovie = computed(() => d.value?.kind === 'movie')
+const canMatchTmdb = computed(() => supportsTmdb(d.value?.provider))
 
 const quality = computed(() => probe.value?.qualities[qIndex.value] ?? null)
 const audios = computed<AudioView[]>(() => {
@@ -116,7 +118,7 @@ function toggleAudio(a: AudioView) {
 
 async function loadTmdb() {
   const v = d.value
-  if (!v || !store.state?.settings.tmdbKey || (v.provider !== 'youku' && v.provider !== 'tencent')) return
+  if (!v || !store.state?.settings.tmdbKey || !canMatchTmdb.value) return
   const seq = ++tmdbSeq
   tmdbLoading.value = true
   tmdbError.value = ''
@@ -171,8 +173,8 @@ const request = computed<EnqueueRequest | null>(() => {
 
 let namingSeq = 0
 watch(
-  request,
-  async (r) => {
+  [request, () => store.state?.settings.includeEpisodeTitle],
+  async ([r]) => {
     const seq = ++namingSeq
     if (!r) return (naming.value = null)
     try {
@@ -318,7 +320,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
               </div>
             </div>
           </div>
-          <div class="muted small">自动以已选音轨的最高档为默认，也可手动指定；整批下载沿用此选择。</div>
+          <div class="muted small">已选音轨默认优先 DTS，其次杜比 / 全景声，再选 AAC；也可手动指定，整批下载沿用此选择。</div>
           <div v-if="hasDts" class="muted small">选了 DTS 音轨，会用 MP4Box 封装成 MP4</div>
         </fieldset>
         <fieldset class="fs">
@@ -339,7 +341,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
       <aside class="card hard out">
         <h2 class="h2s">输出</h2>
 
-        <div v-if="d?.provider === 'youku' || d?.provider === 'tencent'" class="blk">
+        <div v-if="canMatchTmdb" class="blk">
           <span class="lab">内容类型</span>
           <div class="kind-options" role="group" aria-label="内容类型">
             <button type="button" class="btn sm" :class="{ primary: isMovie }" :aria-pressed="isMovie" @click="changeKind('movie')">电影</button>
@@ -347,7 +349,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
           </div>
         </div>
 
-        <div v-if="store.state?.settings.tmdbKey && (d?.provider === 'youku' || d?.provider === 'tencent')" class="blk">
+        <div v-if="store.state?.settings.tmdbKey && canMatchTmdb" class="blk">
           <span class="lab">TMDB 匹配</span>
           <div v-if="tmdbLoading" class="dim small row"><span class="spin" />正在查 TMDB…</div>
           <div v-else-if="tmdbError" class="warn-box">TMDB：{{ tmdbError }} <button type="button" class="linkish" @click="loadTmdb">重试</button></div>
@@ -370,6 +372,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
         <div v-if="naming" class="blk">
           <span class="lab">文件名预览</span>
           <div class="name mono">{{ sep(naming.folder) }}/<br /><span>{{ naming.file }}</span></div>
+          <span v-if="naming.note" class="small muted">{{ naming.note }}</span>
         </div>
 
         <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="go('settings')">

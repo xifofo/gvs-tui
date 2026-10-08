@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { JobHub, type DlTask, type JobEvt } from './jobs.ts'
 import { fileFingerprint } from './gvs-record.ts'
 import type { FileConfig } from './config.ts'
@@ -31,14 +31,14 @@ mediaTest('Tencent runner centrally records final rendition and creates no JSON 
       } })
     } })
     try {
-      for (const scenario of ['same', 'different', 'unknown', 'refresh'] as const) {
+      for (const scenario of ['same', 'measured', 'different', 'unknown', 'refresh'] as const) {
         let calls = 0
         const cli = {
           extra: () => ({}), observeTencentTransfer: () => {},
           invoke: async () => {
             calls += 1
             const url = `${server.url}${scenario === 'refresh' && calls === 1 ? 'expired.mp4' : 'video.mp4'}?token=SIGNED_SECRET`
-            if (scenario === 'same' || (scenario === 'refresh' && calls === 1)) return { formats: [
+            if (scenario === 'same' || scenario === 'measured' || (scenario === 'refresh' && calls === 1)) return { formats: [
               { url, id: '322157', name: 'suhd', caption: 'hard', persona: '2741517771455_硬' },
             ] }
             return { video: { url, ...(scenario === 'unknown' ? {} : { format_id: '322093', defn: 'suhd' }) },
@@ -49,12 +49,13 @@ mediaTest('Tencent runner centrally records final rendition and creates no JSON 
         const task: DlTask = { provider: 'tencent', title: scenario, series: scenario, vid: `vid-${scenario}`, season: 0,
           episode: 0, kind: 'movie', height: 0, quality: 'suhd', caption: 'hard',
           tencentQuality: { formatId: '322157', persona: '2741517771455_硬', group: 'encode' },
+          ...(scenario === 'measured' ? { namingVersion: 1 } : {}),
           group: 'TEST', codec: 'H264', tmdbId: 0, nameDots: '', year: 2026, plot: '' }
         const { promise, resolve } = Promise.withResolvers<JobEvt>()
         const hub = new JobHub(e => { if (e.done) resolve(e) })
         hub.enqueue(cfg, cli, 1, task)
         const final = await promise
-        if (scenario !== 'same') {
+        if (scenario !== 'same' && scenario !== 'measured') {
           expect(final.status).toBe('失败')
           expect(final.err).toMatch(/实际版本|所选编码版本/)
           expect(final.actualVersion).toBeUndefined()
@@ -62,6 +63,11 @@ mediaTest('Tencent runner centrally records final rendition and creates no JSON 
           continue
         }
         expect(final.err).toBe('')
+        if (scenario === 'measured') {
+          expect(basename(final.log)).toBe('measured.2026.360p.TX.WEB-DL.AVC.AAC.1.0-TEST.mkv')
+          expect(readdirSync(dirname(final.log))).toEqual([basename(final.log)])
+          expect(task.namingEvidence?.stream).toBe('suhd')
+        }
         expect(final.actualVersion).toBeDefined()
         const records = readFileSync(process.env.GVS_VERSION_RECORDS_PATH!, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
         const record = records.find(entry => entry.output === final.log)?.actualVersion

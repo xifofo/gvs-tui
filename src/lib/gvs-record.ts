@@ -2,8 +2,10 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, closeSync, mkdirSync, openSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, extname, join } from 'node:path'
 import type { ActualVersion, GVSActualRecord, MediaSpecs } from './actual-version.ts'
+import { readMp4Tracks } from './mp4box.ts'
+import { lookMP4Box, tuiBinDir } from './tools.ts'
 
 /** Bounded content sampling survives rename/move and detects many accidental record/file mismatches. */
 export function fileFingerprint(path: string): GVSActualRecord['file'] {
@@ -36,7 +38,43 @@ const trackDuration = (v: unknown): number => {
   const m = /^(\d+):(\d+):(\d+(?:\.\d+)?)$/.exec(String(v || ''))
   return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0
 }
-export function mediaSpecsFromProbe(payload: string): MediaSpecs {
+
+export type ProbeAudioOptions = {
+  /** Position among the audio tracks that were actually muxed, after any soft skips. */
+  muxAudio?: { index: number; count: number }
+  /** MP4 tkhd enable flags, independent of FFmpeg's inferred default disposition. */
+  enabledAudioTrackIds?: number[]
+}
+
+function defaultAudio(streams: Array<Record<string, any>>, options: ProbeAudioOptions): NonNullable<MediaSpecs['audio']> {
+  const tracks = streams.filter(s => s.codec_type === 'audio')
+  if (!tracks.length) return { status: 'none' }
+  if (options.enabledAudioTrackIds?.length === 0) return { status: 'ambiguous' }
+  let index = -1, evidence: NonNullable<MediaSpecs['audio']>['evidence']
+  if (options.enabledAudioTrackIds !== undefined) {
+    const enabled = tracks.map((s, i) => options.enabledAudioTrackIds!.includes(Number(s.id)) ? i : -1).filter(i => i >= 0)
+    if (enabled.length === 1 && options.enabledAudioTrackIds.length === 1) { index = enabled[0]!; evidence = 'mp4_enabled' }
+  } else {
+    const defaults = tracks.map((s, i) => s.disposition?.default === 1 || s.disposition?.default === true ? i : -1).filter(i => i >= 0)
+    if (defaults.length === 1) { index = defaults[0]!; evidence = 'container' }
+  }
+  const mux = options.muxAudio
+  if (index < 0 && mux && mux.count === tracks.length && Number.isSafeInteger(mux.index) && mux.index >= 0 && mux.index < tracks.length) {
+    index = mux.index; evidence = 'mux_order'
+  }
+  if (index < 0 && tracks.length === 1 && (options.enabledAudioTrackIds === undefined || options.enabledAudioTrackIds.length === 1)) {
+    index = 0; evidence = 'single_track'
+  }
+  if (index < 0) return { status: 'ambiguous' }
+  const audio = tracks[index]!
+  const codec = typeof audio.codec_name === 'string' && audio.codec_name !== 'unknown' ? audio.codec_name : undefined
+  const channels = positive(audio.channels)
+  return { status: 'confirmed', index, evidence, ...(positive(audio.id) ? { trackId: Number(audio.id) } : {}),
+    ...(codec ? { codec } : {}), ...(channels ? { channels } : {}),
+    ...(/atmos|\bjoc\b/i.test(String(audio.profile || '')) ? { atmos: true } : {}) }
+}
+
+export function mediaSpecsFromProbe(payload: string, options: ProbeAudioOptions = {}): MediaSpecs {
   try {
     const data = JSON.parse(payload)
     const v = data.streams?.find((s: Record<string, unknown>) => s.codec_type === 'video' && !(s.disposition as Record<string, unknown>)?.attached_pic)
@@ -52,34 +90,47 @@ export function mediaSpecsFromProbe(payload: string): MediaSpecs {
     else if (v.color_transfer === 'smpte2084') result.dynamicRange = 'HDR'
     else if (v.color_transfer === 'arib-std-b67') result.dynamicRange = 'HLG'
     else if (['bt709', 'smpte170m', 'smpte240m', 'bt2020-10', 'bt2020-12', 'iec61966-2-1'].includes(v.color_transfer)) result.dynamicRange = 'SDR'
+    result.audio = defaultAudio(data.streams, options)
     return result
   } catch { return { status: 'unavailable' } }
 }
 
 /** Optional host ffprobe; no tool download and no decoding of the full video. */
-export function probeFinishedMedia(path: string, signal?: AbortSignal): Promise<MediaSpecs> {
+export async function probeFinishedMedia(path: string, signal?: AbortSignal, options: ProbeAudioOptions = {}): Promise<MediaSpecs> {
   const executable = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
-  const candidate = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':')
+  const candidate = [tuiBinDir(), ...(process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':')]
     .map(dir => join(dir, executable)).find(p => { try { return statSync(p).isFile() } catch { return false } })
   if (!candidate) return Promise.resolve({ status: 'unavailable' })
-  return new Promise(resolve => {
+  const payload = await new Promise<string>(resolve => {
     const child = spawn(candidate, ['-v', 'error', '-probesize', '8M', '-analyzeduration', '8000000',
       '-show_streams', '-show_format', '-of', 'json', path], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], signal })
     let output = '', settled = false
-    const finish = (specs: MediaSpecs) => { if (!settled) { settled = true; clearTimeout(timer); resolve(specs) } }
-    const timer = setTimeout(() => { child.kill(); finish({ status: 'unavailable' }) }, 15000)
+    const finish = (payload: string) => { if (!settled) { settled = true; clearTimeout(timer); resolve(payload) } }
+    const timer = setTimeout(() => { child.kill(); finish('') }, 15000)
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
       output += chunk
-      if (output.length > 524288) { child.kill(); finish({ status: 'unavailable' }) }
+      if (output.length > 524288) { child.kill(); finish('') }
     })
-    child.once('error', () => finish({ status: 'unavailable' }))
-    child.once('close', code => finish(code === 0 ? mediaSpecsFromProbe(output) : { status: 'unavailable' }))
+    child.once('error', () => finish(''))
+    child.once('close', code => finish(code === 0 ? output : ''))
   })
+  signal?.throwIfAborted()
+  const mp4box = payload && extname(path).toLowerCase() === '.mp4' ? lookMP4Box() : ''
+  if (mp4box) {
+    try {
+      const timeout = AbortSignal.timeout(15000)
+      const tracks = (await readMp4Tracks(mp4box, path, signal ? AbortSignal.any([signal, timeout]) : timeout)).filter(t => t.type === 'soun')
+      if (tracks.length && tracks.every(t => t.enabled !== undefined)) {
+        options = { ...options, enabledAudioTrackIds: tracks.filter(t => t.enabled).map(t => t.id) }
+      }
+    } catch { signal?.throwIfAborted() /* Fall back to the actual mux mapping or container metadata. */ }
+  }
+  return mediaSpecsFromProbe(payload, options)
 }
 
-export async function finishedVersionRecord(path: string, actual: ActualVersion, signal?: AbortSignal): Promise<GVSActualRecord> {
-  const media = await probeFinishedMedia(path, signal)
+export async function finishedVersionRecord(path: string, actual: ActualVersion, signal?: AbortSignal, probed?: MediaSpecs): Promise<GVSActualRecord> {
+  const media = probed || await probeFinishedMedia(path, signal)
   signal?.throwIfAborted()
   return { ...actual, file: fileFingerprint(path), media }
 }

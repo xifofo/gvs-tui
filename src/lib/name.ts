@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import type { MediaSpecs } from './actual-version.ts'
 
 export type MediaKind = 'show' | 'movie' | 'short'
 
@@ -28,6 +29,7 @@ export function sourceTag(provider: string): string {
   switch (provider) {
     case 'youku': return 'YK'
     case 'tencent': return 'TX'
+    case 'iq': return 'IQ'
     case 'hongguo': return 'HG'
     case 'huangguo': return 'HGO'
     case 'douyin': return 'DY'
@@ -93,7 +95,7 @@ export function folder(n: Naming, outDir: string): string {
   if (n.year > 0) base = `${base} (${n.year})`
   if (n.tmdbId > 0) base = `${base} {tmdb-${n.tmdbId}}`
   let dir = join(outDir, sanitizePath(base))
-  if (n.kind === 'show' && n.season > 0) dir = join(dir, `Season ${String(n.season).padStart(2, '0')}`)
+  if (n.kind === 'show' && n.season >= 0) dir = join(dir, `Season ${String(n.season).padStart(2, '0')}`)
   if (n.source === 'TX' && n.collection && n.collection !== '正片') dir = join(dir, sanitizePath(n.collection))
   return dir
 }
@@ -166,4 +168,48 @@ export function filename(n: Naming): string {
     else parts.splice(subtitleIndex, 1)
   }
   return sanitizePath(parts.join('.')) + suffix
+}
+
+/** New Youku/Tencent/IQ outputs use measured specs; the legacy filename remains the failure fallback. */
+export function completedFilename(n: Naming, media: MediaSpecs, marker?: 'HQ' | 'MAXPLUS'): string {
+  const parts = [dots(n.title || n.nameDots)]
+  const subtitle = episodeTitle(n.episodeTitle || '', n.title, n.nameDots)
+  let subtitleIndex = -1
+  if (n.kind === 'show') {
+    const season = Number.isSafeInteger(n.season) && n.season >= 0 ? n.season : 1
+    parts.push(`S${String(season).padStart(2, '0')}E${String(Math.max(n.episode, 1)).padStart(2, '0')}`)
+    if (subtitle) { subtitleIndex = parts.length; parts.push(dots(subtitle)) }
+  }
+  if (n.year > 0) parts.push(String(n.year))
+  if (n.kind === 'movie' && n.edition) parts.push(dots(n.edition))
+  const height = tierHeight(media.width || 0, media.height || 0)
+  if (height) parts.push(`${height}p`)
+  if (n.source) parts.push(n.source === 'YK' ? 'YOUKU' : n.source)
+  parts.push('WEB-DL')
+  if (marker) parts.push(marker)
+  if (media.dynamicRange === 'DV') parts.push('DV')
+  else if (media.dynamicRange === 'HDR' || media.dynamicRange === 'HLG') parts.push('HDR')
+  const fps = Math.round(media.fps || 0)
+  if (fps === 50 || fps === 60) parts.push(`${fps}fps`)
+  const codec = (media.codec || '').toLowerCase()
+  const videoCodec = ({ h264: 'AVC', h265: 'HEVC', hevc: 'HEVC', av1: 'AV1', vp9: 'VP9' } as Record<string, string>)[codec]
+    || (codec && codec !== 'unknown' ? codec.toUpperCase() : '')
+  if (videoCodec) parts.push(videoCodec)
+  if (media.audio?.status === 'confirmed' && media.audio.codec && media.audio.channels) {
+    const a = media.audio
+    const audioCodec = ({ aac: 'AAC', ac3: 'AC3', eac3: 'DDP', dts: 'DTS', dca: 'DTS', truehd: 'TrueHD', mlp: 'TrueHD', flac: 'FLAC' } as Record<string, string>)[a.codec!.toLowerCase()] || a.codec!.toUpperCase()
+    const channels = ({ 1: '1.0', 2: '2.0', 6: '5.1', 8: '7.1' } as Record<number, string>)[a.channels!] || `${a.channels}.0`
+    parts.push(`${audioCodec}.${channels}${a.atmos ? '.Atmos' : ''}`)
+  }
+  const suffix = `${n.group.trim() ? `-${sanitizePath(n.group.trim())}` : ''}.${n.container || 'mkv'}`
+  // Reserve space for sidecars and retain the season/episode and technical suffix.
+  for (const index of [subtitleIndex, 0]) {
+    if (index < 0) continue
+    const excess = Buffer.byteLength(parts.join('.') + suffix, 'utf8') - 240
+    if (excess <= 0) break
+    parts[index] = fitUtf8(parts[index]!, Math.max(index === 0 ? 4 : 0, Buffer.byteLength(parts[index]!, 'utf8') - excess))
+  }
+  const result = sanitizePath(parts.filter(Boolean).join('.')) + suffix
+  if (Buffer.byteLength(result, 'utf8') > 240) throw new Error('文件名过长')
+  return result
 }

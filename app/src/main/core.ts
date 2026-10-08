@@ -23,6 +23,7 @@ import {
   bindYoukuAudioTracksToTask,
   discardJobWork,
   jobWorkDir,
+  jobNaming,
   nextJobID,
   seedJobID,
   tmpRoot,
@@ -31,8 +32,8 @@ import {
 } from '@tui/jobs.ts'
 import { extractTencentLinks, extractYoukuVideoId, extractIQLink } from '@tui/link.ts'
 import { youkuSpokenLangKey } from '@tui/media.ts'
-import { filename, folder, sourceTag, tierHeight, dots, type Naming } from '@tui/name.ts'
-import { isDtsAudio } from '@tui/mp4box.ts'
+import { completedFilename, filename, folder, tierHeight, dots } from '@tui/name.ts'
+import { usesMeasuredNaming } from '@tui/completed-naming.ts'
 import { moviePlayables, probeOptions, qualityChoiceLabel, youkuEditionsFromDetail, youkuMoviePick } from '@tui/quality.ts'
 import { selectedTencentQuality } from '@tui/tencent-quality-selection.ts'
 import { runLog } from '@tui/runlog.ts'
@@ -275,6 +276,11 @@ export class Core {
   private cfg: FileConfig = loadConfig()
   private readonly providerSessions = new ProviderSessions((p,a,input) => this.invoke(p,a,input))
   private readonly providerAccounts = new Map<string, ProviderSessionView>()
+  private vaultMigrationReady = false
+  private providerStartupChecked = false
+  private iqStartupChecked = false
+  private iqStatusCheck: 'idle' | 'checking' | 'checked' | 'failed' = 'idle'
+  private connectionRevision = 0
   private cli: GwClient | null = null
   private keyInfo: KeyInfo | null = null
   private keyError = ''
@@ -469,60 +475,93 @@ export class Core {
   }
 
   private async connect(): Promise<void> {
+    const revision = ++this.connectionRevision
+    this.vaultMigrationReady = false
+    this.providerStartupChecked = false
+    this.tunnelAbort?.abort()
+    this.tunnelAbort = null
+    this.tunnelOk = false
+    this.tunnelErr = ''
+    this.providerSessions.setScope(this.cfg.host + String.fromCharCode(0) + this.cfg.key)
+    this.iqStartupChecked = false
+    this.iqStatusCheck = 'idle'
     this.connecting = true
     this.keyError = ''
     this.emit.state()
-    this.cli = new GwClient(this.cfg.host, this.cfg.key, () => this.cfg, 'electron_process')
+    const cli = new GwClient(this.cfg.host, this.cfg.key, () => this.cfg, 'electron_process')
+    this.cli = cli
     try {
-      this.keyInfo = await this.cli.keyInfo()
+      const info = await cli.keyInfo()
+      if (revision !== this.connectionRevision) return
+      this.keyInfo = info
     } catch (e) {
+      if (revision !== this.connectionRevision) return
       this.keyInfo = null
       this.keyError = errText(e)
       this.connecting = false
       this.emit.state()
       throw e
     }
-    this.connecting = false
     await this.startTunnel()
+    if (revision !== this.connectionRevision) return
     this.emit.state()
-    if (this.has('tencent')) void this.refreshTencent()
     await this.migrateVaultOnce()
-    void this.probeProviderSessions()
+    if (revision !== this.connectionRevision) return
+    this.vaultMigrationReady = true
+    this.connecting = false
+    this.probeProviderSessions()
+    this.emit.state()
   }
 
-  /**
-   * 瘦客户端迁移：本地还存着源站 Cookie/签名时推给网关托管并清空。
-   * 网关不在线则保留字段，下次连接重试。
-   */
+  /** Only clear local credentials after the gateway confirms import on this connection. */
   private async migrateVaultOnce(): Promise<void> {
-    if (!this.cli || !hasLocalCredentials(this.cfg)) return
+    const cli = this.cli
+    const revision = this.connectionRevision
+    if (!cli || !hasLocalCredentials(this.cfg)) return
+    const snapshot = { ...this.cfg }
+    const before = { ...snapshot }
     try {
-      const result = await migrateLocalCredentials(this.cli, this.cfg)
-      if (result.migrated.length + result.clearedDead.length > 0) saveConfig(this.cfg)
+      const result = await migrateLocalCredentials(cli, snapshot)
+      if (revision !== this.connectionRevision || cli !== this.cli) return
+      let changed = false
+      for (const field of [...result.migrated, ...result.clearedDead]) {
+        const key = field as 'tencentCookie' | 'youkuSign' | 'douyinCookie' | 'iqCookie'
+        if (this.cfg[key] === before[key]) { this.cfg[key] = ''; changed = true }
+      }
+      if (changed) saveConfig(this.cfg)
     } catch (e) {
       runLog(`vault migrate skipped ${errText(e)}`)
     }
   }
 
-  /** 启动探测：网关侧持久化的会话直接显示登录态，不再是待登录。 */
-  private async probeProviderSessions(): Promise<void> {
-    if (!this.cli) return
-    const probes: Array<Promise<unknown>> = []
-    if (this.has('youku')) probes.push(this.ensureYouku())
-    if (this.has('douyin')) probes.push(this.probeDouyin())
-    if (this.has('iq')) probes.push(this.providerSession({ provider: 'iq', op: 'status' }).catch(() => null))
-    if (this.has('hamivideo')) probes.push(this.providerSession({ provider: 'hamivideo', op: 'status' }).catch(() => null))
-    await Promise.all(probes)
-    this.emit.state()
+  /** Probe saved gateway sessions once migration and the required tunnel are ready. */
+  private probeProviderSessions(): void {
+    if (!this.cli || !this.vaultMigrationReady || this.providerStartupChecked || (this.tunnelAbort && !this.tunnelOk)) return
+    this.providerStartupChecked = true
+    this.queueEnsureYouku()
+    if (this.has('tencent')) void this.refreshTencent()
+    if (this.has('douyin')) void this.probeDouyin()
+    this.checkIQOnConnect()
+    if (this.has('hamivideo')) void this.providerSession({ provider: 'hamivideo', op: 'status' }).catch(() => {})
   }
 
   private async probeDouyin(): Promise<void> {
+    const revision = this.connectionRevision
+    let ready = false
     try {
       const data = await this.invoke('douyin', 'login', { op: 'status' })
-      this.douyinReady = data.imported === true
-    } catch {
-      this.douyinReady = false
-    }
+      ready = data.imported === true
+    } catch { /* Retain an unknown/unset state when the query fails. */ }
+    if (revision !== this.connectionRevision) return
+    this.douyinReady = ready
+    this.emit.state()
+  }
+
+  private checkIQOnConnect(): void {
+    if (!this.vaultMigrationReady || !this.has('iq') || this.iqStartupChecked) return
+    this.iqStartupChecked = true
+    // The gateway owns the Web/TV credentials. Only read its saved session here.
+    void this.providerSession({ provider: 'iq', op: 'status' }).catch(() => {})
   }
 
   private async startTunnel(): Promise<void> {
@@ -544,7 +583,10 @@ export class Core {
         const was = this.tunnelOk
         this.tunnelOk = ok
         this.tunnelErr = ok ? '' : err
-        if (ok && !was) this.queueEnsureYouku()
+        if (ok) {
+          this.probeProviderSessions()
+          if (!was && this.vaultMigrationReady) this.queueEnsureYouku()
+        }
         this.emit.state()
       },
       abort.signal,
@@ -605,6 +647,7 @@ export class Core {
       outDir: c.outDir,
       tmpDir: c.tmpDir ?? '',
       releaseGroup: c.releaseGroup,
+      includeEpisodeTitle: c.includeEpisodeTitle !== false,
       tmdbKey: c.tmdbKey,
       tmdbLang: c.tmdbLang,
       threads: c.threads,
@@ -648,7 +691,12 @@ export class Core {
       }
       if (p === 'iq') {
         const account = this.providerAccounts.get('iq')
-        return { provider:p, short:account?.authenticated?'已登录':'待登录', summary:account?.summary || '到平台账号设置登录 IQ，自动获取 Web 和 TV 会话', tone:account?.authenticated?'ok':'muted' }
+        if (this.iqStatusCheck === 'checking') return { provider:p, short:'检查中', summary:'正在检查网关保存的 IQ 会话…', tone:'muted' }
+        if (this.iqStatusCheck === 'failed') return { provider:p, short:'待检查', summary:'暂时无法检查 IQ 会话，请在平台账号页重新查询状态', tone:'warn' }
+        if (!account) return { provider:p, short:'待检查', summary:'等待连接后检查网关保存的 IQ 会话', tone:'muted' }
+        const risk = account.state === 'risk_verification_required'
+        const short = account.authenticated ? '已登录' : risk ? '需验证' : account.webAuthenticated ? 'Web 已登录' : '未登录'
+        return { provider:p, short, summary:account.summary, tone:account.authenticated?'ok':'warn' }
       }
       if (isManifestProvider(p)) {
         const account = this.providerAccounts.get(p + (p === 'hamivideo' ? ':' + (this.cfg.hamiClient || 'tv') : ''))
@@ -674,6 +722,8 @@ export class Core {
     } catch (e) {
       this.cfg.host = prev.host
       this.cfg.key = prev.key
+      this.connectionRevision++
+      this.providerSessions.setScope(this.cfg.host + String.fromCharCode(0) + this.cfg.key)
       throw new Error(`连接失败：${errText(e)}`)
     }
     saveConfig(this.cfg)
@@ -690,6 +740,7 @@ export class Core {
     if (patch.outDir !== undefined) c.outDir = normalizeOutDir(patch.outDir) || c.outDir
     if (patch.tmpDir !== undefined) c.tmpDir = normalizeTmpDir(patch.tmpDir)
     if (patch.releaseGroup !== undefined) c.releaseGroup = patch.releaseGroup.trim()
+    if (patch.includeEpisodeTitle !== undefined) c.includeEpisodeTitle = patch.includeEpisodeTitle === true
     if (patch.tmdbKey !== undefined) c.tmdbKey = patch.tmdbKey.trim()
     if (patch.tmdbLang !== undefined) c.tmdbLang = patch.tmdbLang.trim() || 'zh-CN'
     if (patch.threads !== undefined) c.threads = clampThreads(patch.threads)
@@ -880,11 +931,22 @@ export class Core {
 
   async providerSession(command: SessionCommand): Promise<ProviderSessionView> {
     if (!this.has(command.provider)) throw new Error('当前 Key 没有该平台权限')
-    const scope = this.cfg.host + ':' + this.cfg.key
+    const scope = this.cfg.host + String.fromCharCode(0) + this.cfg.key
+    const revision = this.connectionRevision
     this.providerSessions.setScope(scope)
-    const view = await this.providerSessions.command(command)
-    if (scope !== this.cfg.host + ':' + this.cfg.key) throw new Error('账号连接已切换')
-    // iqCookie 不再本地保存：IQ/Hami 会话由网关按 API key 加密持久化。
+    const iqStatus = command.provider === 'iq' && command.op === 'status'
+    if (iqStatus) { this.iqStatusCheck = 'checking'; this.emit.state() }
+    let view: ProviderSessionView
+    try {
+      view = await this.providerSessions.command(command)
+    } catch (e) {
+      if (iqStatus && revision === this.connectionRevision && scope === this.cfg.host + String.fromCharCode(0) + this.cfg.key) { this.iqStatusCheck = 'failed'; this.emit.state() }
+      throw e
+    }
+    if (revision !== this.connectionRevision || scope !== this.cfg.host + String.fromCharCode(0) + this.cfg.key) throw new Error('账号连接已切换')
+    if (command.provider === 'iq') {
+      this.iqStatusCheck = 'checked'
+    }
     this.providerAccounts.set(command.provider + (command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
     this.emit.state()
     return view
@@ -1146,6 +1208,8 @@ export class Core {
     const tasks = req.episodes.map((ep, i): DlTask => {
       const t: DlTask = {
         provider: req.detail.provider,
+        namingVersion: ['youku', 'tencent', 'iq'].includes(req.detail.provider) ? 1 : undefined,
+        includeEpisodeTitle: this.cfg.includeEpisodeTitle !== false,
         title: ep.title,
         series: movie ? req.detail.title : parseSeriesTitle(req.detail.title).title,
         vid: ep.vid,
@@ -1190,31 +1254,10 @@ export class Core {
     const { tasks } = this.buildTasks(req)
     const t = tasks[0]
     if (!t) return { folder: '', file: '' }
-    const n: Naming = {
-      kind: t.kind ?? (t.provider === 'hongguo' || t.provider === 'huangguo' ? 'short' : 'show'),
-      title: t.series || t.title,
-      nameDots: t.nameDots,
-      year: t.year,
-      season: t.season,
-      episode: t.episode,
-      height: t.height,
-      codec: t.codec || 'H264',
-      edition: t.edition,
-      collection: t.collection,
-      source: sourceTag(t.provider),
-      group: t.group.trim() || this.cfg.releaseGroup,
-      tmdbId: t.tmdbId,
-      // 与 jobs.ts runTask 一致：DTS 音轨走 MP4Box 输出 mp4
-      container:
-        t.provider === 'douyin' || (t.provider === 'youku' && t.audioTracks?.some(isDtsAudio))
-          ? 'mp4'
-          : t.provider === 'hongguo' && this.cfg.hongguoFmt
-            ? this.cfg.hongguoFmt
-            : t.provider === 'huangguo' && this.cfg.huangguoFmt
-              ? this.cfg.huangguoFmt
-              : 'mkv',
-    }
-    return { folder: folder(n, this.cfg.outDir), file: filename(n) }
+    const n = jobNaming(t, this.cfg)
+    return { folder: folder(n, this.cfg.outDir), file: usesMeasuredNaming(t)
+      ? completedFilename(n, { status: 'unavailable', height: t.height, codec: t.codec }) : filename(n),
+      ...(usesMeasuredNaming(t) ? { note: '封装后按实际规格、默认音轨及已确认档位补全文件名。' } : {}) }
   }
 
   enqueue(req: EnqueueRequest): number {

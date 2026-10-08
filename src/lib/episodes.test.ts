@@ -14,6 +14,17 @@ test('season-specific details fill missing episode seasons without replacing exp
   expect(parseEpisodes({ title: '某剧', episodes: [{ vid: 'plain' }] })[0]?.season).toBeUndefined()
 })
 
+test('explicit platform season zero survives parsing and large episode numbers without TMDB remapping', () => {
+  const eps = parseEpisodes({ title: '心动的信号 第7季', episode_groups: [], episodes: [
+    { vid: 'extra', season_number: 0, number: 298, title: '花絮特辑' },
+    { vid: 'main', seasonNumber: 7, number: 1 },
+    { vid: 'inferred', number: 2 },
+    { vid: 'invalid', season: '', number: 3 },
+  ] })
+  expect(eps.map(e => [e.season, e.number])).toEqual([[0, 298], [7, 1], [7, 2], [7, 3]])
+  expect(parseEpisodes({ season: 0, episodes: [{ vid: 'zero' }] })[0]!.season).toBe(0)
+})
+
 describe('official episode collections', () => {
   test('preserves interviews and trailers, defaults to main and deduplicates VID', () => {
     const eps = parseEpisodes({ episode_groups: [{ id: '正片' }, { id: '专访' }], episodes: [

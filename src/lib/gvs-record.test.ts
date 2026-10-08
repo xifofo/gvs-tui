@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { tencentActualVersion } from './actual-version.ts'
 import { fileFingerprint, finishedVersionRecord, mediaSpecsFromProbe, probeFinishedMedia, saveVersionRecord } from './gvs-record.ts'
+import { readMp4Tracks } from './mp4box.ts'
 
 test('fingerprint survives rename, detects content changes and agrees with the Python reader', () => {
   const root = mkdtempSync(join(tmpdir(), 'gvs-record-'))
@@ -73,3 +74,73 @@ test('missing ffprobe is nonfatal and no download is attempted', async () => {
     expect(await probeFinishedMedia('/nonexistent/video.mkv')).toEqual({ status: 'unavailable' })
   } finally { process.env.PATH = previous }
 })
+
+test('default audio selection follows container/mux evidence instead of highest codec', () => {
+  const video = { codec_type: 'video', codec_name: 'hevc', width: 3840, height: 2160 }
+  const aac = { codec_type: 'audio', id: '0x2', codec_name: 'aac', channels: 2, disposition: { default: 1 } }
+  const dts = { codec_type: 'audio', id: '0x3', codec_name: 'dts', channels: 6, disposition: { default: 0 } }
+  const payload = (a: unknown, b: unknown) => JSON.stringify({ streams: [video, a, b] })
+  expect(mediaSpecsFromProbe(payload(aac, dts)).audio).toMatchObject({ status: 'confirmed', codec: 'aac', channels: 2, evidence: 'container' })
+  expect(mediaSpecsFromProbe(payload({ ...aac, disposition: { default: 0 } }, { ...dts, disposition: { default: 1 } })).audio)
+    .toMatchObject({ status: 'confirmed', codec: 'dts', channels: 6 })
+  expect(mediaSpecsFromProbe(payload(aac, dts), { enabledAudioTrackIds: [3] }).audio)
+    .toMatchObject({ codec: 'dts', channels: 6, evidence: 'mp4_enabled' })
+  const noDefaults = payload({ ...aac, disposition: {} }, dts)
+  expect(mediaSpecsFromProbe(noDefaults).audio?.status).toBe('ambiguous')
+  expect(mediaSpecsFromProbe(noDefaults, { muxAudio: { index: 1, count: 2 } }).audio)
+    .toMatchObject({ codec: 'dts', evidence: 'mux_order' })
+  expect(mediaSpecsFromProbe(noDefaults, { muxAudio: { index: 1, count: 3 } }).audio?.status).toBe('ambiguous')
+  expect(mediaSpecsFromProbe(noDefaults, { muxAudio: { index: 1, count: 2 }, enabledAudioTrackIds: [] }).audio?.status).toBe('ambiguous')
+  expect(mediaSpecsFromProbe(payload(aac, { ...dts, disposition: { default: 1 } })).audio?.status).toBe('ambiguous')
+})
+
+test('cover art is ignored and unreadable/absent audio never fabricates AAC or stereo', () => {
+  const video = { codec_type: 'video', codec_name: 'hevc', width: 3840, height: 1600 }
+  const cover = { codec_type: 'video', codec_name: 'mjpeg', width: 200, height: 200, disposition: { attached_pic: 1 } }
+  const result = mediaSpecsFromProbe(JSON.stringify({ streams: [cover, video,
+    { codec_type: 'audio', disposition: { default: 1 } }] }))
+  expect(result.width).toBe(3840)
+  expect(result.codec).toBe('hevc')
+  expect(result.audio).toMatchObject({ status: 'confirmed' })
+  expect(result.audio?.codec).toBeUndefined()
+  expect(result.audio?.channels).toBeUndefined()
+  expect(mediaSpecsFromProbe(JSON.stringify({ streams: [video] })).audio?.status).toBe('none')
+})
+
+const realMediaTest = ['ffmpeg', 'ffprobe', 'MP4Box'].every(bin => spawnSync(bin, ['-version'],
+  { stdio: 'ignore', timeout: 8000 }).status === 0) ? test : test.skip
+
+realMediaTest('real MKV/MP4 defaults change measured audio from AAC to DDP and MP4 enable flags win', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gvs-default-audio-'))
+  const ff = (args: string[]) => execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-y', ...args], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 })
+  try {
+    const mkv = join(root, 'default-aac.mkv'), other = join(root, 'default-ddp.mkv'), mp4 = join(root, 'default-ddp.mp4')
+    ff(['-f', 'lavfi', '-i', 'testsrc2=size=64x48:rate=25', '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+      '-f', 'lavfi', '-i', 'anullsrc=channel_layout=5.1:sample_rate=48000', '-map', '0:v', '-map', '1:a', '-map', '2:a',
+      '-t', '0.3', '-c:v', 'mpeg4', '-c:a:0', 'aac', '-c:a:1', 'eac3', '-disposition:a:0', 'default', '-disposition:a:1', '0', mkv])
+    expect((await probeFinishedMedia(mkv)).audio).toMatchObject({ codec: 'aac', channels: 2, evidence: 'container' })
+    ff(['-i', mkv, '-map', '0', '-c', 'copy', '-disposition:a:0', '0', '-disposition:a:1', 'default', other])
+    expect((await probeFinishedMedia(other)).audio).toMatchObject({ codec: 'eac3', channels: 6 })
+    ff(['-i', other, '-map', '0', '-c', 'copy', mp4])
+    const before = (await readMp4Tracks('MP4Box', mp4)).filter(t => t.type === 'soun')
+    expect(before).toHaveLength(2)
+    execFileSync('MP4Box', ['-enable', String(before[0]!.id), '-disable', String(before[1]!.id), mp4], { stdio: 'ignore', timeout: 30000 })
+    const probed = await probeFinishedMedia(mp4, undefined, { muxAudio: { index: 1, count: 2 } })
+    expect(probed.audio).toMatchObject({ codec: 'aac', channels: 2, evidence: 'mp4_enabled' })
+    execFileSync('MP4Box', ['-disable', String(before[0]!.id), '-enable', String(before[1]!.id), mp4], { stdio: 'ignore', timeout: 30000 })
+    expect((await probeFinishedMedia(mp4)).audio).toMatchObject({ codec: 'eac3', channels: 6, evidence: 'mp4_enabled' })
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}, 60000)
+
+realMediaTest('real DTS 5.1 default is read instead of the retained AAC track', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gvs-default-dts-'))
+  try {
+    const file = join(root, 'default-dts.mkv')
+    execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=64x48:rate=25',
+      '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+      '-f', 'lavfi', '-i', 'anullsrc=channel_layout=5.1:sample_rate=48000', '-map', '0:v', '-map', '1:a', '-map', '2:a',
+      '-t', '0.3', '-c:v', 'mpeg4', '-c:a:0', 'aac', '-c:a:1', 'dca', '-strict', '-2',
+      '-disposition:a:0', '0', '-disposition:a:1', 'default', file], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 })
+    expect((await probeFinishedMedia(file)).audio).toMatchObject({ codec: 'dts', channels: 6, index: 1, evidence: 'container' })
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}, 60000)

@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@opentui/core": "^0.5.11",
+    "opencc-js": "1.4.2",
     "qrcode": "^1.5.4",
     "vue": "^3.5.40",
     "vue-termui": "^0.3.0"

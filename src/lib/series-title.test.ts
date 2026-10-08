@@ -16,6 +16,7 @@ test('does not strip sequel/episode numbers or season words inside titles', () =
 })
 
 test('explicit episode seasons take precedence over inferred seasons and S01 fallback', () => {
+  expect(seriesSeason(0, '某综艺 第7季')).toBe(0)
   expect(seriesSeason(undefined, '大王饶命 第2季')).toBe(2)
   expect(seriesSeason(3, '大王饶命 第2季')).toBe(3)
   expect(seriesSeason(undefined, '大王饶命')).toBe(1)

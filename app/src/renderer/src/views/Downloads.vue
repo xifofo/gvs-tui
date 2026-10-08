@@ -4,6 +4,7 @@ import TencentDiagnostics from '../components/TencentDiagnostics.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import type { JobView } from '@shared/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import DownloadPagination from '../components/DownloadPagination.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
@@ -11,6 +12,7 @@ import { ago, errText, gvs, store, toast } from '../store'
 
 const diagnosticsJob = ref<number | undefined>()
 const showDiagnostics = ref(false)
+const page = ref<HTMLElement | null>(null)
 type Filter = 'all' | 'active' | 'paused' | 'failed' | 'done'
 const filter = computed({ get: () => store.dlFilter as Filter, set: (v: Filter) => (store.dlFilter = v) })
 
@@ -48,6 +50,22 @@ const groups = computed(() => {
 })
 const jobsOf = (g: { jobs: JobView[] }) => g.jobs.filter(match)
 const shown = computed(() => groups.value.filter((g) => g.jobs.some(match)))
+const currentPage = ref(1)
+const pageSize = ref(10)
+const totalPages = computed(() => Math.max(1, Math.ceil(shown.value.length / pageSize.value)))
+const pagedGroups = computed(() => shown.value.slice((currentPage.value - 1) * pageSize.value, currentPage.value * pageSize.value))
+
+watch([filter, pageSize], () => { currentPage.value = 1 })
+watch(totalPages, (total) => { currentPage.value = Math.min(currentPage.value, total) })
+watch(
+  () => groups.value.map((g) => g.id),
+  (current, previous) => {
+    const known = new Set(previous)
+    if (current.some((id) => !known.has(id))) currentPage.value = 1
+  },
+)
+watch([filter, pageSize, currentPage], () => page.value?.scrollTo({ top: 0, behavior: 'instant' }), { flush: 'post' })
+
 const hasJobs = computed(() => store.jobs.length > 0)
 /** 折叠态按分组 id 记；整组完成的默认折叠，其余默认展开 */
 const folds = reactive<Record<string, boolean>>({})
@@ -73,6 +91,20 @@ const subTitle = (j: JobView) => (j.state === 'done' ? j.output : sub(j))
 const isFolded = (g: { id: string; jobs: JobView[] }) =>
   folds[g.id] ?? (filter.value === 'all' && g.jobs.every((j) => j.state === 'done'))
 const toggleFold = (g: { id: string; jobs: JobView[] }) => (folds[g.id] = !isFolded(g))
+
+/** 整组完成并自动收起后回到页首，避免停在缩短后的列表中间。 */
+watch(
+  () => pagedGroups.value.map((g) => ({ id: g.id, done: g.jobs.every((j) => j.state === 'done'), folded: isFolded(g) })),
+  (current, previous) => {
+    const before = new Map(previous.map((g) => [g.id, g]))
+    const autoFolded = current.some((g) => {
+      const old = before.get(g.id)
+      return old && !old.done && !old.folded && g.done && g.folded && folds[g.id] === undefined
+    })
+    if (autoFolded) page.value?.scrollTo({ top: 0, behavior: 'instant' })
+  },
+  { flush: 'post' },
+)
 
 /** 按下的按钮先禁用，等主进程推新状态回来 */
 const busy = reactive(new Set<number>())
@@ -106,103 +138,111 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
 </script>
 
 <template>
-  <div class="page">
-    <div class="head">
-      <h1 class="h1">下载</h1>
-      <div class="stats">
-        <div class="stat"><b class="run">{{ counts.active }}</b><span>进行中</span></div>
-        <div class="stat"><b>{{ counts.paused }}</b><span>已暂停</span></div>
-        <div class="stat"><b class="bad">{{ counts.failed }}</b><span>失败</span></div>
-        <div class="stat"><b class="good">{{ counts.done }}</b><span>已完成</span></div>
-      </div>
-      <div class="acts">
-        <button type="button" class="btn" :disabled="!counts.active" @click="call(() => gvs('pauseAll'))"><Icon name="pause" :size="15" />全部暂停</button>
-        <button type="button" class="btn" :disabled="!counts.paused" @click="call(() => gvs('resumeAll'))"><Icon name="play" :size="15" />全部继续</button>
-        <button type="button" class="btn" :disabled="!counts.done" @click="call(() => gvs('clearFinished'))"><Icon name="trash" :size="16" />清除已完成</button>
-        <button type="button" class="btn" @click="call(() => gvs('openPath', ''))"><Icon name="folder" :size="16" />打开下载目录</button>
-      </div>
-    </div>
-
-    <div v-if="hasJobs" class="filters">
-      <button v-for="t in TABS" :key="t.key" type="button" class="pill" :class="{ on: filter === t.key }" :disabled="!counts[t.key] && t.key !== 'all'" @click="filter = t.key">
-        {{ t.label }}<span class="count">{{ counts[t.key] }}</span>
-      </button>
-    </div>
-
-    <div v-if="!shown.length" class="empty card">
-      <Icon name="download" :size="28" />
-      <span>{{ TABS.find((t) => t.key === filter)!.empty }}</span>
-    </div>
-
-    <section v-for="g in shown" :key="g.id" class="card grp">
-      <div class="gh">
-        <Poster :url="g.poster" :provider="g.provider" style="width: 34px; height: 48px; padding: 0" />
-        <div class="gt">
-          <div class="gtt"><PlatformLogo :provider="g.provider" :size="16" /><span class="gname">{{ g.title }}</span></div>
-          <span class="muted small">{{ g.jobs.length }} 个任务 · {{ g.quality }}</span>
+  <div class="downloads">
+    <div ref="page" class="page downloads-content">
+      <div class="head">
+        <h1 class="h1">下载</h1>
+        <div class="stats">
+          <div class="stat"><b class="run">{{ counts.active }}</b><span>进行中</span></div>
+          <div class="stat"><b>{{ counts.paused }}</b><span>已暂停</span></div>
+          <div class="stat"><b class="bad">{{ counts.failed }}</b><span>失败</span></div>
+          <div class="stat"><b class="good">{{ counts.done }}</b><span>已完成</span></div>
         </div>
-        <div class="gbar">
-          <div class="progress" :class="groupBar(g.jobs)"><div :style="{ width: groupPct(g.jobs) + '%' }" /></div>
-          <span class="mono small dim">{{ doneCount(g.jobs) }} / {{ g.jobs.length }} 完成</span>
-        </div>
-        <div class="ga">
-          <button
-            v-if="activeIds(g).length"
-            type="button" class="btn sm" :disabled="anyBusy(activeIds(g))"
-            @click="call(() => runEach((id) => gvs('pauseJob', id), activeIds(g)), activeIds(g))"
-          >暂停组</button>
-          <button
-            v-else-if="pausedIds(g).length"
-            type="button" class="btn sm outline" :disabled="anyBusy(pausedIds(g))"
-            @click="call(() => runEach((id) => gvs('resumeJob', id), pausedIds(g)), pausedIds(g))"
-          ><Icon name="play" :size="14" />继续组</button>
-          <button type="button" class="btn sm icon" aria-label="删除整组" title="删除整组" @click="pendingConfirm = { kind: 'group', job: null, group: { title: g.title, ids: idsOf(g.jobs) } }"><Icon name="trash" :size="15" /></button>
-          <button type="button" class="btn sm icon fold" :aria-expanded="!isFolded(g)" :aria-label="isFolded(g) ? '展开' : '折叠'" @click="toggleFold(g)"><Icon name="chevron" :size="16" /></button>
+        <div class="acts">
+          <button type="button" class="btn" :disabled="!counts.active" @click="call(() => gvs('pauseAll'))"><Icon name="pause" :size="15" />全部暂停</button>
+          <button type="button" class="btn" :disabled="!counts.paused" @click="call(() => gvs('resumeAll'))"><Icon name="play" :size="15" />全部继续</button>
+          <button type="button" class="btn" :disabled="!counts.done" @click="call(() => gvs('clearFinished'))"><Icon name="trash" :size="16" />清除已完成</button>
+          <button type="button" class="btn" @click="call(() => gvs('openPath', ''))"><Icon name="folder" :size="16" />打开下载目录</button>
         </div>
       </div>
 
-      <div v-if="!isFolded(g)" class="jobs">
-        <div v-for="j in jobsOf(g)" :key="j.id" class="job">
-          <span class="mono lbl">{{ j.label }}</span>
-          <div class="st">
-            <div class="status-line">
-              <span class="stt" :class="j.state">{{ groupStatus(j) }}</span>
-              <span v-if="j.state === 'done'" class="muted completed-at">· {{ ago(j.finishedAt) || '刚刚' }}</span>
+      <div v-if="hasJobs" class="filters">
+        <button v-for="t in TABS" :key="t.key" type="button" class="pill" :class="{ on: filter === t.key }" :disabled="!counts[t.key] && t.key !== 'all'" @click="filter = t.key">
+          {{ t.label }}<span class="count">{{ counts[t.key] }}</span>
+        </button>
+      </div>
+
+      <div v-if="!shown.length" class="empty card">
+        <Icon name="download" :size="28" />
+        <span>{{ TABS.find((t) => t.key === filter)!.empty }}</span>
+      </div>
+
+      <section v-for="g in pagedGroups" :key="g.id" class="card grp">
+        <div class="gh">
+          <Poster :url="g.poster" :provider="g.provider" style="width: 34px; height: 48px; padding: 0" />
+          <div class="gt">
+            <div class="gtt"><PlatformLogo :provider="g.provider" :size="16" /><span class="gname">{{ g.title }}</span></div>
+            <span class="muted small">{{ g.jobs.length }} 个任务 · {{ g.quality }}</span>
+          </div>
+          <div class="gbar">
+            <div class="progress" :class="groupBar(g.jobs)"><div :style="{ width: groupPct(g.jobs) + '%' }" /></div>
+            <span class="mono small dim">{{ doneCount(g.jobs) }} / {{ g.jobs.length }} 完成</span>
+          </div>
+          <div class="ga">
+            <button
+              v-if="activeIds(g).length"
+              type="button" class="btn sm" :disabled="anyBusy(activeIds(g))"
+              @click="call(() => runEach((id) => gvs('pauseJob', id), activeIds(g)), activeIds(g))"
+            >暂停组</button>
+            <button
+              v-else-if="pausedIds(g).length"
+              type="button" class="btn sm outline" :disabled="anyBusy(pausedIds(g))"
+              @click="call(() => runEach((id) => gvs('resumeJob', id), pausedIds(g)), pausedIds(g))"
+            ><Icon name="play" :size="14" />继续组</button>
+            <button type="button" class="btn sm icon" aria-label="删除整组" title="删除整组" @click="pendingConfirm = { kind: 'group', job: null, group: { title: g.title, ids: idsOf(g.jobs) } }"><Icon name="trash" :size="15" /></button>
+            <button type="button" class="btn sm icon fold" :aria-expanded="!isFolded(g)" :aria-label="isFolded(g) ? '展开' : '折叠'" @click="toggleFold(g)"><Icon name="chevron" :size="16" /></button>
+          </div>
+        </div>
+
+        <div v-if="!isFolded(g)" class="jobs">
+          <div v-for="j in jobsOf(g)" :key="j.id" class="job">
+            <span class="mono lbl">{{ j.label }}</span>
+            <div class="st">
+              <div class="status-line">
+                <span class="stt" :class="j.state">{{ groupStatus(j) }}</span>
+                <span v-if="j.state === 'done'" class="muted completed-at">· {{ ago(j.finishedAt) || '刚刚' }}</span>
+              </div>
+              <span v-if="sub(j)" class="muted sub" :title="subTitle(j)">{{ sub(j) }}</span>
+              <span v-if="j.actualVersion && actualVersionSummary(j.actualVersion)" class="muted sub" :title="actualVersionDetail(j.actualVersion)">{{ actualVersionSummary(j.actualVersion) }}</span>
+              <span v-if="j.state === 'done' && j.note" class="sub job-note" :title="j.note">{{ j.note }}</span>
             </div>
-            <span v-if="sub(j)" class="muted sub" :title="subTitle(j)">{{ sub(j) }}</span>
-            <span v-if="j.actualVersion && actualVersionSummary(j.actualVersion)" class="muted sub" :title="actualVersionDetail(j.actualVersion)">{{ actualVersionSummary(j.actualVersion) }}</span>
-          </div>
-          <div class="bar">
-            <div class="progress" :class="barClass(j)"><div :style="{ width: pct(j) + '%' }" /></div>
-            <span class="mono small dim pc">{{ pct(j) }}%</span>
-          </div>
-          <div class="ja">
-            <button v-if="j.provider === 'tencent'" class="btn sm" @click="diagnosticsJob = j.id; showDiagnostics = true">腾讯诊断</button>
-            <template v-if="j.state === 'failed'">
-              <button type="button" class="btn sm" :disabled="busy.has(j.id)" @click="call(() => gvs('retryJob', j.id), [j.id])">
-                <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="retry" :size="15" />重试
+            <div class="bar">
+              <div class="progress" :class="barClass(j)"><div :style="{ width: pct(j) + '%' }" /></div>
+              <span class="mono small dim pc">{{ pct(j) }}%</span>
+            </div>
+            <div class="ja">
+              <button v-if="j.provider === 'tencent'" class="btn sm" @click="diagnosticsJob = j.id; showDiagnostics = true">腾讯诊断</button>
+              <template v-if="j.state === 'failed'">
+                <button type="button" class="btn sm" :disabled="busy.has(j.id)" @click="call(() => gvs('retryJob', j.id), [j.id])">
+                  <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="retry" :size="15" />重试
+                </button>
+              </template>
+              <template v-else-if="j.state === 'paused'">
+                <button type="button" class="btn sm outline" :disabled="busy.has(j.id)" @click="call(() => gvs('resumeJob', j.id), [j.id])">
+                  <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="play" :size="14" />继续
+                </button>
+              </template>
+              <template v-else-if="j.state === 'done'">
+                <button v-if="j.output" type="button" class="btn sm icon" aria-label="打开所在文件夹" title="打开所在文件夹" @click="call(() => gvs('showItem', j.output))"><Icon name="folder" :size="16" /></button>
+              </template>
+              <template v-else>
+                <button type="button" class="btn sm icon" aria-label="暂停" title="暂停" :disabled="busy.has(j.id)" @click="call(() => gvs('pauseJob', j.id), [j.id])">
+                  <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="pause" :size="15" />
+                </button>
+              </template>
+              <button type="button" class="btn sm icon del" :aria-label="`删除 ${j.label}`" title="删除" :disabled="busy.has(j.id)" @click="pendingConfirm = { kind: 'job', job: j, group: null }">
+                <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="x" :size="15" />
               </button>
-            </template>
-            <template v-else-if="j.state === 'paused'">
-              <button type="button" class="btn sm outline" :disabled="busy.has(j.id)" @click="call(() => gvs('resumeJob', j.id), [j.id])">
-                <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="play" :size="14" />继续
-              </button>
-            </template>
-            <template v-else-if="j.state === 'done'">
-              <button v-if="j.output" type="button" class="btn sm icon" aria-label="打开所在文件夹" title="打开所在文件夹" @click="call(() => gvs('showItem', j.output))"><Icon name="folder" :size="16" /></button>
-            </template>
-            <template v-else>
-              <button type="button" class="btn sm icon" aria-label="暂停" title="暂停" :disabled="busy.has(j.id)" @click="call(() => gvs('pauseJob', j.id), [j.id])">
-                <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="pause" :size="15" />
-              </button>
-            </template>
-            <button type="button" class="btn sm icon del" :aria-label="`删除 ${j.label}`" title="删除" :disabled="busy.has(j.id)" @click="pendingConfirm = { kind: 'job', job: j, group: null }">
-              <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="x" :size="15" />
-            </button>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+    </div>
+
+    <footer v-if="hasJobs" class="downloads-footer">
+      <DownloadPagination v-model:page="currentPage" v-model:page-size="pageSize" :total-pages="totalPages" :group-count="shown.length" />
+    </footer>
 
     <TencentDiagnostics v-if="showDiagnostics" :job-id="diagnosticsJob" @close="showDiagnostics = false" />
     <ConfirmDialog
@@ -229,6 +269,9 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
 </template>
 
 <style scoped>
+.downloads { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.downloads-content { flex: 1; min-height: 0; height: auto; }
+.downloads-footer { flex-shrink: 0; padding: 12px 32px; border-top: 1px solid var(--line); background: var(--paper); }
 .head { display: flex; align-items: flex-end; gap: 32px; flex-wrap: wrap; }
 .stats { display: flex; gap: 28px; }
 .stat { display: flex; flex-direction: column; gap: 2px; }
@@ -267,6 +310,7 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
 .stt.paused { color: var(--ink-3); }
 .stt.queued { color: var(--ink-3); font-weight: 500; }
 .sub { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-note { color: var(--orange-text); }
 .bar { display: flex; align-items: center; gap: 10px; }
 .progress.pause > div { background: var(--ink-3); }
 .pc { width: 38px; text-align: right; }

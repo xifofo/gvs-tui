@@ -9,3 +9,5 @@ export const PROVIDER_LABELS: Record<string, string> = {
 export const supportsSearch = (provider: string): boolean => provider !== 'hamivideo'
 export const supportsBrowse = (provider: string): boolean => provider !== 'hamivideo'
 export const isManifestProvider = (provider: string): boolean => provider === 'mewatch' || provider === 'hamivideo'
+/** Providers with the shared movie/series type and optional TMDB naming workflow. */
+export const supportsTmdb = (provider: string | undefined): boolean => provider === 'youku' || provider === 'tencent' || provider === 'iq'

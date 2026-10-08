@@ -29,5 +29,5 @@ export function parseSeriesTitle(value: string): SeriesTitle {
 
 /** Explicit episode metadata wins; titles fill gaps before the historical S01 default. */
 export function seriesSeason(season: number | undefined, title: string): number {
-  return season && Number.isSafeInteger(season) && season > 0 ? season : parseSeriesTitle(title).season ?? 1
+  return season !== undefined && Number.isSafeInteger(season) && season >= 0 ? season : parseSeriesTitle(title).season ?? 1
 }

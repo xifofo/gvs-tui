@@ -16,6 +16,7 @@
   "dependencies": {
     "electron-updater": "^6",
     "https-proxy-agent": "^7",
+    "opencc-js": "1.4.2",
     "qrcode": "^1.5",
     "ws": "^8"
   },

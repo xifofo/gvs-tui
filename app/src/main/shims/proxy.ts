@@ -1,6 +1,6 @@
 // 桌面端替身：tui/src/lib/proxy.ts
 // 网关 / TMDB 走 Chromium 网络栈（net.fetch），自动跟随系统代理（Clash 等）；
-// CDN 与上游仍用 Node fetch 直连，从本机 IP 出网。
+// CDN 与默认上游用 Node fetch 直连；IQ 认证域名的系统代理例外在 env.ts 注册。
 import { net } from 'electron'
 
 /** Probe through the same system proxy used by the native media downloader. */

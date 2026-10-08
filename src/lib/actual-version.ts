@@ -19,6 +19,12 @@ export type ActualVersion = {
 export type MediaSpecs = {
   status: 'probed' | 'unavailable'; width?: number; height?: number; codec?: string
   fps?: number; durationSeconds?: number; videoBitrate?: number; dynamicRange?: string
+  /** Only the default audio retained in the completed container, never the highest codec in the catalog. */
+  audio?: {
+    status: 'confirmed' | 'ambiguous' | 'none'; index?: number; trackId?: number
+    codec?: string; channels?: number; atmos?: boolean
+    evidence?: 'container' | 'mp4_enabled' | 'mux_order' | 'single_track'
+  }
 }
 export type GVSActualRecord = ActualVersion & {
   file: { size: number; fingerprint: { algorithm: 'sha256-samples-v1'; value: string } }
@@ -88,8 +94,12 @@ export function tencentActualVersion(
     return true
   }
   if (url && !adopt(rows.filter(row => row.url === url || row.playlist_url === url), 'format_url')) {
-    if (videoMatches && explicit.formatId) {
+    if (videoMatches && (explicit.formatId || explicit.stream)) {
       actual = explicit
+      if (explicit.formatId && !explicit.stream) {
+        const streams = [...new Set(rows.map(row => version(row)).filter(v => v.formatId === explicit.formatId).map(v => v.stream).filter(Boolean))]
+        if (streams.length === 1) actual = { ...explicit, stream: streams[0] }
+      }
       evidence = 'video_metadata'
     } else {
       // A catalog filename must occur as a complete URL path component; numeric substrings are insufficient.
@@ -98,7 +108,7 @@ export function tencentActualVersion(
       adopt(rows.filter(row => typeof row.fname === 'string' && row.fname && components.includes(row.fname)), 'format_filename')
     }
   }
-  if (actual && videoMatches && explicit.formatId &&
+  if (actual && videoMatches && (explicit.formatId || explicit.stream) &&
     (['formatId', 'persona', 'stream', 'caption'] as const).some(key =>
       actual![key] && explicit[key] && actual![key]!.toLowerCase() !== explicit[key]!.toLowerCase())) {
     actual = null

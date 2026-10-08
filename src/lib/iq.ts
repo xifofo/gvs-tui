@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -17,6 +17,9 @@ import { adoptIQResume, iqResumeIdentity, iqVideoComplete, markIQVideoComplete }
 import { IQCDNSlowError, iqCDNSlowGuard, rememberIQCDN, selectIQCDN } from './iq-cdn.ts'
 import { downloadIQParts } from './iq-transfer.ts'
 import { fetchMediaProbe } from './proxy.ts'
+import { usesMeasuredNaming } from './completed-naming.ts'
+import { muxIQ } from './iq-mux.ts'
+import { selectIQSubtitles, type IQSubtitleFile } from './iq-subtitles.ts'
 
 export function iqOptions(data: Record<string, unknown>): { qualities: Quality[]; audios: Audio[] } {
   const formats = Array.isArray(data.formats) ? data.formats.filter(isObj) : []
@@ -82,17 +85,7 @@ export async function downloadIQSubtitle(url: string, dest: string, signal?: Abo
   if (expected && count !== expected) throw new Error('IQ 下载字节数不完整')
 }
 
-function ffmpeg(bin: string, args: string[], signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, ['-hide_banner','-loglevel','error','-nostats',...args], { windowsHide: true, stdio: ['ignore','pipe','pipe'], signal })
-    let error = ''
-    child.stderr.on('data', data => { error += data.toString(); if (error.length > 4096) error = error.slice(-4096) })
-    child.once('error', reject)
-    child.once('close', code => code === 0 && !error.trim() ? resolve() : reject(new Error(`IQ 封装或音轨验收失败 (${code}): ${error.slice(-250)}`)))
-  })
-}
-
-export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal): Promise<void> {
+export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal): Promise<string> {
   const re = await ensureM3u8dl()
   const version = spawnSync(re,['--version'],{encoding:'utf8',windowsHide:true,timeout:10000})
   if (version.status !== 0 || !/gvs-iq\./i.test(version.stdout+version.stderr)) throw new Error('IQ 需要 GVS 自维护 RE，请更新内置工具或运行 build-managed-re')
@@ -139,7 +132,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   const available = Array.isArray(data.audios) ? data.audios.filter(isObj) : []
   const requested = task.audioTracks?.length ? task.audioTracks.map(t => t.id) : available.filter(a => a.default === true).map(a => asString(a.id))
   if (!requested.length) throw new Error('IQ 没有返回默认独立音轨，请重新探测')
-  const audioFiles: Array<{path:string;language:string;title:string}> = []
+  const audioFiles: Array<{path:string;language:string;title:string;isDefault:boolean}> = []
   for (const [index,id] of requested.entries()) {
     signal?.throwIfAborted()
     emit('音轨下载',0.70+0.12*index/requested.length,`独立音轨 ${index+1}/${requested.length}`)
@@ -164,29 +157,28 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
       }
     }
     await pipeline(Readable.from(audioChunks()),createWriteStream(joined),{ signal })
-    audioFiles.push({path:joined,language:asString(audio.language)||'und',title:asString(audio.title)||'原声'})
+    const isDefault = task.audioTracks?.length ? task.audioTracks.find(t => t.id === id)?.isDefault === true
+      : available.find(a => asString(a.id) === id)?.default === true
+    audioFiles.push({path:joined,language:asString(audio.language)||'und',title:asString(audio.title)||'原声',isDefault})
   }
-  const subs = Array.isArray(data.subtitles) ? data.subtitles.filter(isObj) : []
-  const subtitleFiles: Array<{path:string;language:string;title:string}> = []
-  emit('字幕下载',0.84,`${subs.length} 条源字幕`)
+  const availableSubs = (Array.isArray(data.subtitles) ? data.subtitles.filter(isObj) : []).map(sub => ({
+    url: asString(sub.url), format: asString(sub.format).toLowerCase(), language: asString(sub.lang) || 'und',
+    title: asString(sub.label), ai: sub.ai === true,
+  }))
+  const subs = selectIQSubtitles(availableSubs)
+  const subtitleFiles: IQSubtitleFile[] = []
+  emit('字幕下载',0.84,`${subs.length} 条字幕；优先正常简繁，缺失时 OpenCC 补齐`)
   for (const [index,sub] of subs.entries()) {
-    const path = join(work,`iq-sub-${index}.${asString(sub.format)==='vtt'?'vtt':'srt'}`)
-    await downloadIQSubtitle(asString(sub.url),path,signal)
+    const path = join(work,`iq-sub-${index}.${sub.format==='vtt'?'vtt':'srt'}`)
+    await downloadIQSubtitle(sub.url,path,signal)
     const bytes = readFileSync(path)
     if (bytes[0]===0x1f && bytes[1]===0x8b) writeFileSync(path,gunzipSync(bytes))
-    subtitleFiles.push({path,language:asString(sub.lang)||'und',title:asString(sub.label)+(sub.ai===true?' (AI)':'')})
+    subtitleFiles.push({path,language:sub.language,title:sub.title,ai:sub.ai})
   }
   emit('封装',0.9,'保留原始视频、独立音轨和字幕')
-  mkdirSync(dirname(dest),{recursive:true})
-  const args=['-i',video,...audioFiles.flatMap(a=>['-i',a.path]),...subtitleFiles.flatMap(s=>['-i',s.path]),'-map','0:v:0']
-  for (let i=0;i<audioFiles.length;i++) args.push('-map',`${i+1}:a:0`)
-  for (let i=0;i<subtitleFiles.length;i++) args.push('-map',`${1+audioFiles.length+i}:s:0`)
-  args.push('-c','copy','-metadata:s:v:0','language=zho')
-  audioFiles.forEach((a,i)=>args.push(`-metadata:s:a:${i}`,`language=${a.language}`,`-metadata:s:a:${i}`,`title=${a.title}`,`-disposition:a:${i}`,i===0?'default':'0'))
-  subtitleFiles.forEach((s,i)=>args.push(`-metadata:s:s:${i}`,`language=${s.language}`,`-metadata:s:s:${i}`,`title=${s.title}`,`-disposition:s:${i}`,'0'))
-  args.push('-n',dest)
-  const executable=await ensureFFmpeg()
-  await ffmpeg(executable,args,signal)
-  emit('音轨验收',0.97,'检查所有合流音轨')
-  await ffmpeg(executable,['-i',dest,'-map','0:a','-f','null','-'],signal)
+  const measured = usesMeasuredNaming(task)
+  const muxAudio = await muxIQ(await ensureFFmpeg(), {video,audios:audioFiles,subtitles:subtitleFiles,
+    dest,reservedOutput:measured,signal,emit})
+  if (measured) task.namingEvidence = { muxAudio: { index: muxAudio.index, count: muxAudio.count } }
+  return muxAudio.note || ''
 }

@@ -3,7 +3,7 @@ import { ProviderSessions, type SessionCommand } from './lib/provider-session.ts
 import { manifestDetail } from './lib/manifest-detail.ts'
 import { providerLink } from './lib/manifest-provider.ts'
 import { readTencentDiagnostics, tencentDiagnosticPath } from './lib/tencent-diagnostics.ts'
-import { PROVIDER_IDS, supportsSearch, isManifestProvider } from './lib/providers.ts'
+import { PROVIDER_IDS, supportsSearch, supportsTmdb, isManifestProvider } from './lib/providers.ts'
 import { needsTunnel } from './lib/tunnel-policy.ts'
 import { parseEpisodes as parseEps, episodeCollections } from './lib/episodes.ts'
 import { parseSeriesTitle, seriesSeason } from './lib/series-title.ts'
@@ -28,6 +28,7 @@ import {
 import { GwClient, ReloginRequired, type KeyInfo } from './lib/client.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from './lib/vault-migrate.ts'
 import { selectAudioTracks } from './lib/audio-selection.ts'
+import { usesMeasuredNaming } from './lib/completed-naming.ts'
 import { normalizeHttpProxy } from './lib/proxy.ts'
 import {
   JobHub,
@@ -69,7 +70,7 @@ import {
   runLogStartup,
   setRunLogDisabled,
 } from './lib/runlog.ts'
-import { filename, folder, dots, tierHeight } from './lib/name.ts'
+import { completedFilename, filename, folder, dots, tierHeight } from './lib/name.ts'
 import { confirmationLines, episodeRanges, settingGroup, settingInfoLines, viewMetrics, HELP_LINES } from './lib/ui-layout.ts'
 import { JOB_PAGE_SIZE } from './lib/view.ts'
 import { anyInt, asBool, asString, firstStr, isObj } from './lib/util.ts'
@@ -555,7 +556,8 @@ export class Runtime {
     const f = ['隧道', '网关', '网关代理', 'Key', '下载目录', '下载线程']
     if (this.has('youku') || this.has('tencent') || this.has('hongguo') || this.has('huangguo'))
       f.push('发布组')
-    if (this.has('youku') || this.has('tencent')) f.push('TMDB Key', 'TMDB 代理')
+    f.push('文件名单集标题')
+    if (this.providers().some(supportsTmdb)) f.push('TMDB Key', 'TMDB 代理')
     if (this.has('youku')) f.push('优酷扫码', '优酷登录')
     if (this.has('tencent')) f.push('腾讯双扫码', '腾讯 Cookie', '腾讯登录')
     if (this.has('tencent')) {
@@ -618,6 +620,8 @@ export class Runtime {
         return `${this.cfg.threads} 路并发`
       case '发布组':
         return this.cfg.releaseGroup || '未设'
+      case '文件名单集标题':
+        return this.cfg.includeEpisodeTitle === false ? '关 · 新任务省略单集标题' : '开 · 新任务包含单集标题'
       case 'TMDB Key':
         return this.cfg.tmdbKey ? '已配置' : '未配置'
       case 'TMDB 代理':
@@ -1201,7 +1205,9 @@ export class Runtime {
       audio: this.audios.filter(a => a.selected)
         .map(a => [a.lang !== '—' ? a.lang : '', a.label].filter(Boolean).join(' ')).join(' / ') || '平台默认',
       directory: naming && first?.provider !== 'douyin' ? folder(naming, this.cfg.outDir) : this.cfg.outDir,
-      name: naming ? filename(naming) : '',
+      name: naming && first ? usesMeasuredNaming(first)
+        ? completedFilename(naming, { status: 'unavailable', height: first.height, codec: first.codec }) : filename(naming) : '',
+      note: first && usesMeasuredNaming(first) ? '封装后按实际规格、默认音轨及已确认档位补全文件名。' : '',
     }
   }
   private switchPlatform(slot: number): void {
@@ -1464,7 +1470,7 @@ export class Runtime {
       this.back()
       return
     }
-    if (k.toLowerCase() === 'm' && (this.detailProv === 'youku' || this.detailProv === 'tencent')) {
+    if (k.toLowerCase() === 'm' && supportsTmdb(this.detailProv)) {
       this.setTitleKind(this.isMovie() ? 'show' : 'movie')
       this.say(`类型已设为${this.isMovie() ? '电影' : '剧集'} · M 切换，确认页可检查命名`, 'ok')
       return
@@ -1718,6 +1724,13 @@ export class Runtime {
   }
 
   private async openSetting(f: string): Promise<void> {
+    if (f === '文件名单集标题') {
+      this.cfg.includeEpisodeTitle = this.cfg.includeEpisodeTitle === false
+      this.persistConfig()
+      this.say(`新任务文件名${this.cfg.includeEpisodeTitle ? '包含' : '省略'}单集标题`, 'ok')
+      this.emit()
+      return
+    }
     if (f === 'IQ 账号密码登录') {
       this.iqLoginUsername = ''; this.iqLoginAreaCode = ''; this.editField = 'IQ 登录账号'; this.editValue = ''; this.scene = 'edit'
       this.say('输入本人 IQ 邮箱或手机号，下一步输入密码'); this.emit(); return
@@ -2099,13 +2112,16 @@ export class Runtime {
   private setTitleKind(kind: TitleKind): void {
     if (this.detailInfo) this.detailInfo.kind = kind
     for (const task of this.pending) {
+      const previousKind = task.kind
       task.kind = kind
       if (kind === 'movie') {
         task.season = 0
         task.episode = 0
         task.edition = movieEdition(task.title, this.detailTitle)
       } else {
-        task.season = seriesSeason(this.eps.find(ep => ep.vid === task.vid)?.season || task.season, this.detailTitle)
+        // A movie task's synthetic zero is not an explicit special-season number.
+        task.season = seriesSeason(this.eps.find(ep => ep.vid === task.vid)?.season
+          ?? (previousKind === 'movie' ? undefined : task.season), this.detailTitle)
         task.episode = this.eps.find(ep => ep.vid === task.vid)?.number || task.episode || 1
         task.edition = ''
       }
@@ -2121,6 +2137,8 @@ export class Runtime {
     const movie = this.isMovie()
     return {
       provider: this.detailProv,
+      namingVersion: ['youku', 'tencent', 'iq'].includes(this.detailProv) ? 1 : undefined,
+      includeEpisodeTitle: this.cfg.includeEpisodeTitle !== false,
       title: ep.title,
       series: movie ? this.detailTitle : parseSeriesTitle(this.detailTitle).title,
       vid: ep.vid,
@@ -2371,7 +2389,7 @@ export class Runtime {
     }
     if (
       !this.simulated &&
-      (this.detailProv === 'youku' || this.detailProv === 'tencent') &&
+      supportsTmdb(this.detailProv) &&
       this.cfg.tmdbKey.trim()
     ) {
       this.searching = false
@@ -2774,6 +2792,8 @@ export class Runtime {
         isManifestProvider(provider) ? manifestDetail((p,a,i) => this.cli!.invoke(p,a,i), provider, trimmed) : this.cli!.invoke(provider, 'detail', input),
       )
       if (generation !== this.requestGeneration) return
+      this.detailProv = provider
+      this.detailId = trimmed
       this.detailTitle = asString(data.title)
       this.episodeCatalog = parseEps(data)
       this.episodeGroup = this.episodeCatalog.find(e => e.vid === focusVid)?.collection ?? episodeCollections(this.episodeCatalog)[0] ?? ''

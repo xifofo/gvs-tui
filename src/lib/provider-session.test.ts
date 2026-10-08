@@ -16,6 +16,72 @@ describe('shared client provider sessions', () => {
     const s = new ProviderSessions(async () => ({state:'web_ready', authenticated:true, webAuthenticated:true,tvAuthenticated:false}))
     expect((await s.command({provider:'iq',op:'status'})).authenticated).toBe(false)
   })
+  test('concurrent IQ status checks share one read-only gateway request', async () => {
+    const calls: Record<string, unknown>[] = []
+    let done!: (data: Record<string, unknown>) => void
+    const s = new ProviderSessions(async (_p, _a, input) => {
+      calls.push(input)
+      return new Promise(resolve => { done = resolve })
+    })
+    const startup = s.command({ provider: 'iq', op: 'status' })
+    const accountPage = s.command({ provider: 'iq', op: 'status' })
+    expect(startup).toBe(accountPage)
+    expect(calls).toEqual([{ op: 'status' }])
+    done({ state: 'tv_ready', webAuthenticated: true, tvAuthenticated: true })
+    expect((await startup).authenticated).toBe(true)
+    expect((await accountPage).authenticated).toBe(true)
+  })
+  test('IQ risk status stays visible without initiating login or TV exchange', async () => {
+    const calls: Record<string, unknown>[] = []
+    const s = new ProviderSessions(async (_p, _a, input) => {
+      calls.push(input)
+      return { state: 'risk_verification_required', webAuthenticated: false, tvAuthenticated: false, summary: '源站提示环境风险', cookie: 'PRIVATE_COOKIE' }
+    })
+    const view = await s.command({ provider: 'iq', op: 'status' })
+    expect(view.state).toBe('risk_verification_required')
+    expect(view.authenticated).toBe(false)
+    expect(view.summary).toBe('源站提示环境风险')
+    expect(JSON.stringify(view)).not.toContain('PRIVATE_')
+    expect(calls).toEqual([{ op: 'status' }])
+  })
+  test('failed status checks release the request without automatically retrying', async () => {
+    let calls = 0
+    const s = new ProviderSessions(async () => {
+      if (++calls === 1) throw new Error('gateway unavailable')
+      return { state: 'signed_out', webAuthenticated: false, tvAuthenticated: false }
+    })
+    await expect(s.command({ provider: 'iq', op: 'status' })).rejects.toThrow('gateway unavailable')
+    expect(calls).toBe(1)
+    expect((await s.command({ provider: 'iq', op: 'status' })).state).toBe('signed_out')
+    expect(calls).toBe(2)
+  })
+  test('switching gateway discards old status and cannot unlock the new request', async () => {
+    const pending: Array<(data: Record<string, unknown>) => void> = []
+    const s = new ProviderSessions(async () => new Promise(resolve => { pending.push(resolve) }))
+    s.setScope('gateway-one')
+    const first = s.command({ provider: 'iq', op: 'status' })
+    const rejected = first.then(() => '', error => (error as Error).message)
+    s.setScope('gateway-two')
+    const second = s.command({ provider: 'iq', op: 'status' })
+    expect(pending).toHaveLength(2)
+    pending[0]!({ state: 'tv_ready', webAuthenticated: true, tvAuthenticated: true })
+    expect(await rejected).toContain('连接已切换')
+    await expect(s.command({ provider: 'iq', op: 'logout' })).rejects.toThrow('进行中')
+    expect(s.command({ provider: 'iq', op: 'status' })).toBe(second)
+    pending[1]!({ state: 'signed_out', webAuthenticated: false, tvAuthenticated: false })
+    expect((await second).authenticated).toBe(false)
+  })
+  test('switching away and back still discards the original gateway response', async () => {
+    let done!: (data: Record<string, unknown>) => void
+    const s = new ProviderSessions(async () => new Promise(resolve => { done = resolve }))
+    s.setScope('gateway-one')
+    const first = s.command({ provider: 'iq', op: 'status' })
+    const rejected = first.then(() => '', error => (error as Error).message)
+    s.setScope('gateway-two')
+    s.setScope('gateway-one')
+    done({ state: 'tv_ready', webAuthenticated: true, tvAuthenticated: true })
+    expect(await rejected).toContain('连接已切换')
+  })
   test('mewatch respects poll interval and exposes no opaque tokens', async () => {
     let time=1000; const calls: unknown[]=[]
     const s = new ProviderSessions(async (_p,_a,input) => {calls.push(input);return input.op === 'start' ? {status:'pending',userCode:'ABCD',verificationUri:'https://example.test/activate',expiresIn:600,interval:5,device_code:'PRIVATE'} : {status:'authorized',access_token:'PRIVATE'}},() => time)
