@@ -231,7 +231,7 @@ test('Tencent resume chunks are isolated by rendition and subtitle choice', () =
   expect(jobWorkDir(cfg, JSON.parse(JSON.stringify(base)))).toBe(paths[0]!)
 })
 
-test('Tencent runner sends exact encoding and refuses an unconfirmed default before downloading', async () => {
+test('Tencent runner keeps exact selectors and reaches transfer when rendition metadata is missing', async () => {
   const outDir = tempDir('gvs-tencent-selection')
   const calls: Array<Record<string, unknown>> = []
   const cli = {
@@ -260,9 +260,9 @@ test('Tencent runner sends exact encoding and refuses an unconfirmed default bef
     expect(calls).toEqual([{ vid: 'test', defn: 'suhd', caption: 'hard', format_id: '322157', rendition_persona: '2741517771455_硬', session_type: 'tv' }])
     const final = events.find(e => e.done)!
     expect(final.status).toBe('失败')
-    expect(final.err).toContain('未返回所选编码版本')
-    expect(events.some(e => e.status === '下载')).toBe(false)
-    expect(urls).toEqual([])
+    expect(final.err).toBe('fixture: download reached')
+    expect(events.some(e => e.status === '下载')).toBe(true)
+    expect(urls).toEqual(['https://cdn.invalid/default.mp4'])
   } finally { download.mockRestore(); rmSync(outDir, { recursive: true, force: true }) }
 })
 

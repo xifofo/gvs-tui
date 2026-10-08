@@ -33,7 +33,7 @@ import { prepareAudioLanguage } from './audio-language.ts'
 import type { TmdbDetails } from './tmdb.ts'
 import { actualVersionText, tencentActualVersion, type ActualVersion } from './actual-version.ts'
 import { verifyTencentCoverage, verifyTencentSpecs } from './tencent-output.ts'
-import { requiresTencentEncodingIdentity, tencentChoiceSelection } from './tencent-quality-selection.ts'
+import { tencentChoiceSelection } from './tencent-quality-selection.ts'
 import { finishedVersionRecord, saveVersionRecord } from './gvs-record.ts'
 import { finalizeCompletedName, reserveOutputPath, tencentNamingEvidence, usesMeasuredNaming, youkuNamingEvidence, type NamingEvidence } from './completed-naming.ts'
 import { defaultAudioIndex } from './audio-selection.ts'
@@ -711,8 +711,8 @@ async function dlTencent(
     const v = isObj(data.video) ? data.video : {}
     runLog(`tencent stream selection requested=${t.quality.split('|')[0]} format=${selection.formatId || '-'} actual=${picked.version.actual?.formatId || '-'} match=${picked.version.matchesSelection} width=${Number(v.width ?? data.width) || 0} height=${Number(v.height ?? data.height) || 0} duration=${Number(v.duration ?? data.duration) || 0}`)
     if (picked.version.matchesSelection === 'different') throw new Error('腾讯返回的实际版本与所选版本不同，已停止下载；请重新取流或选择可用版本')
-    if (requiresTencentEncodingIdentity(selection) && picked.version.matchesSelection !== 'same')
-      throw new Error('腾讯未返回所选编码版本的独立地址，已停止下载；请更新网关或重新选择可用版本')
+    // Missing rendition metadata is not a confirmed mismatch. Keep it unknown;
+    // the existing post-download checks verify the actual video specifications and coverage.
     const cdn = picked.url && /\.m3u8/i.test(picked.url) ? await firstLivePlaylist(tencentMirrors(data, picked.url), referer('tencent'), signal) : picked.url
     if (cdn) onVersion?.(cdn === picked.url ? picked.version :
       tencentActualVersion(data, cdn, picked.version.addressSource, picked.version.selected, t.vid, refreshes))
