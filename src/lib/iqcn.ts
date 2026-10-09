@@ -6,12 +6,13 @@ import { randomUUID } from 'node:crypto'
 import type { GwClient } from './client.ts'
 import type { DlTask } from './jobs.ts'
 import { ensureFFmpeg } from './tools.ts'
-import { ffmpegRemux, validateVideoDecode } from './ffmpeg.ts'
+import { validateVideoDecode } from './ffmpeg.ts'
 import { inspectMediaTiming, type TrackTiming } from './media-timing.ts'
 import { runIQFFmpeg } from './iq-output.ts'
 import { downloadIQCNLocalSegment, iqcnProcessing, type IQCNLocalRuntime } from './iqcn-local.ts'
 import { orderedDownload, processingQueue } from './ordered-download.ts'
 import { restoreIQCNLocal } from './iqcn-local.ts'
+import { iqcnAudios, downloadIQCNAudio } from './iqcn-audio.ts'
 
 /** Domestic selection uses source BID/bitrate/frame rate, never guessed tiers. */
 export function iqcnOptions(data: Record<string, unknown>): StreamOptions {
@@ -30,7 +31,7 @@ export function iqcnOptions(data: Record<string, unknown>): StreamOptions {
     return { id: asString(raw.id), stream: asString(raw.id), label: base + (variant > 1 ? ` · 版本 ${variant}` : ''), title: '爱奇艺国内版',
       width, height, tier, size: Number(raw.size) || 0, fps: Number(raw.fr) || 0, codec: ({ 1: 'H265', 2: 'H264' } as Record<number,string>)[Number(raw.codec_code)] || (/^ts$/i.test(asString(raw.codec)) ? '' : asString(raw.codec).toUpperCase()), drm: Number(raw.drm) > 0 ? 'IQCN' : '' }
   }).filter(raw => raw.id)
-  return { qualities, audios: [] }
+  return { qualities, audios: iqcnAudios(data) }
 }
 
 export function iqcnSelection(quality: string): Record<string, string> {
@@ -89,7 +90,27 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     emit('校验视频', 0.90, '检查还原后的音视频解码')
     const errors = await validateVideoDecode(ffmpeg, transport, signal)
     if (errors.length) throw new Error('爱奇艺国内版还原视频解码失败')
-    assertIQCNCoverage(await inspectMediaTiming(ffmpeg, transport, signal), task.duration || 0)
+    const videoTiming = await inspectMediaTiming(ffmpeg, transport, signal)
+    const available = iqcnAudios(plan)
+    const selected = task.audioTracks?.length ? task.audioTracks : available.filter(audio => audio.selected)
+    const audioFiles: Array<{ path: string; language: string; title: string; isDefault: boolean }> = []
+    for (const [index, audio] of selected.entries()) {
+      signal?.throwIfAborted()
+      emit('下载独立音轨', 0.90 + 0.03 * index / selected.length, audio.label)
+      const path = join(work, `iqcn-audio-${index}.m4a`)
+      const matching = available.filter(option => option.id === audio.id)
+      if (matching.length !== 1 || !matching[0]!.vid) throw new Error('当前集缺少所选音轨，请重新选择')
+      const info = await downloadIQCNAudio(cli, planId, matching[0]!.vid!, path, threads, signal, runtime?.fetch,
+        () => runIQFFmpeg(ffmpeg, ['-i', transport, '-map', '0:a:0', '-c', 'copy', '-y', path], '标准音轨提取失败', signal))
+      await runIQFFmpeg(ffmpeg, ['-xerror', '-err_detect', 'explode', '-i', path, '-map', '0:a:0', '-f', 'null', '-'], '所选音轨解码校验失败', signal)
+      const timing = await inspectMediaTiming(ffmpeg, path, signal)
+      if (timing.filter(track => track.type === 'audio').length !== 1) throw new Error('所选独立音轨数量异常')
+      assertIQCNCoverage([...videoTiming.filter(track => track.type === 'video'), ...timing], task.duration || 0)
+      audioFiles.push({ path, ...info, isDefault: !!audio.isDefault })
+    }
+    if (!audioFiles.length) assertIQCNCoverage(videoTiming, task.duration || 0)
+    const defaultIndex = Math.max(0, audioFiles.findIndex(audio => audio.isDefault))
+    audioFiles.forEach((audio, index) => { audio.isDefault = index === defaultIndex })
     const subtitles: Array<{ path: string; language: string }> = []
     const sourceSubs = Array.isArray(plan.subtitles) ? plan.subtitles.filter(isObj) : []
     for (const sub of sourceSubs) {
@@ -108,15 +129,20 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     emit('封装', 0.95, '生成完整成品')
     // Explicit extension lets ffmpeg determine the destination container.
     const muxed = join(work, dest.toLowerCase().endsWith('.mp4') ? 'iqcn-muxed.mp4' : 'iqcn-muxed.mkv')
-    if (!subtitles.length) await ffmpegRemux(ffmpeg, transport, muxed, undefined, signal)
-    else {
-      const args = ['-i', transport, ...subtitles.flatMap(sub => ['-i', sub.path]), '-map', '0:v', '-map', '0:a']
-      subtitles.forEach((_, index) => args.push('-map', `${index + 1}:s:0`))
+    {
+      const args = ['-i', transport, ...audioFiles.flatMap(audio => ['-i', audio.path]), ...subtitles.flatMap(sub => ['-i', sub.path]), '-map', '0:v:0']
+      if (audioFiles.length) audioFiles.forEach((_, index) => args.push('-map', `${index + 1}:a:0`))
+      else args.push('-map', '0:a')
+      subtitles.forEach((_, index) => args.push('-map', `${index + audioFiles.length + 1}:s:0`))
       args.push('-c', 'copy', '-c:s', muxed.endsWith('.mp4') ? 'mov_text' : 'srt')
+      audioFiles.forEach((audio, index) => args.push(`-metadata:s:a:${index}`, `language=${audio.language}`, `-metadata:s:a:${index}`, `title=${audio.title}`, `-disposition:a:${index}`, audio.isDefault ? 'default' : '0'))
       subtitles.forEach((sub, index) => args.push(`-metadata:s:s:${index}`, `language=${sub.language}`))
       args.push('-y', muxed)
-      await runIQFFmpeg(ffmpeg, args, '爱奇艺国内版字幕封装失败', signal)
+      await runIQFFmpeg(ffmpeg, args, '爱奇艺国内版音轨与字幕封装失败', signal)
     }
+    const finalTiming = await inspectMediaTiming(ffmpeg, muxed, signal)
+    assertIQCNCoverage(finalTiming, task.duration || 0)
+    if (audioFiles.length && finalTiming.filter(track => track.type === 'audio').length !== audioFiles.length) throw new Error('成品音轨数量与选择不一致')
     const { copyFileSync } = await import('node:fs')
     copyFileSync(muxed, staged)
     signal?.throwIfAborted()

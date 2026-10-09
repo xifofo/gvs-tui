@@ -75,6 +75,7 @@ jobs:
         working-directory: .
         run: |
           bun test src/lib/ordered-download.test.ts
+          bun test src/lib/iqcn-audio.test.ts
           bun test src/lib/jobs-hub.test.ts --test-name-pattern "Douyin passes configured concurrency"
       - run: bun x electron-vite build
       - run: bun x electron-builder ${{ matrix.target }} --publish never
