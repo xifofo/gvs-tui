@@ -1,5 +1,5 @@
 /** Match gateway egress admission; business permissions remain per provider. */
-export const TUNNEL_PROVIDERS = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'mewatch', 'hamivideo', 'iq'] as const
+export const TUNNEL_PROVIDERS = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'mewatch', 'hamivideo', 'iq', 'iqcn'] as const
 
 export function needsTunnel(allows: (provider: string) => boolean): boolean {
   return TUNNEL_PROVIDERS.some(allows)

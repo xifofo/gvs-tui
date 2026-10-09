@@ -13,11 +13,19 @@ import { runIQFFmpeg } from './iq-output.ts'
 /** Domestic selection uses source BID/bitrate/frame rate, never guessed tiers. */
 export function iqcnOptions(data: Record<string, unknown>): StreamOptions {
   const formats = Array.isArray(data.formats) ? data.formats.filter(isObj) : []
+  const counts = new Map<string, number>()
   const qualities = formats.map(raw => {
     const width = Number(raw.width) || 0, height = Number(raw.height) || 0
     const tier = width >= 3800 ? 2160 : width >= 1900 ? 1080 : height
-    return { id: asString(raw.id), stream: asString(raw.id), label: tier ? `${tier}P` : `BID ${raw.bid}`, title: '爱奇艺国内版',
-      width, height, tier, size: Number(raw.size) || 0, fps: Number(raw.fr) || 0, codec: asString(raw.codec).toUpperCase(), drm: Number(raw.drm) > 0 ? 'IQCN' : '' }
+    // Legacy gateways omit names; use the official App tier vocabulary.
+    const name = asString(raw.name) || ({ 800: '超高清 4K', 600: '高清 1080P', 500: '准高清 720P', 300: '高清', 200: '标清', 100: '流畅' } as Record<number, string>)[Number(raw.bid)] || '未命名画质'
+    const high = Number(raw.br) > 100 ? ' · 高码率' : ''
+    const rangeName = ({ 1: '杜比视界', 3: '杜比视界', 2: 'HDR10', 7: 'SDR 10bit' } as Record<number, string>)[Number(raw.dynamic_range_code)] || ''
+    const base = asString(raw.name) || name + high + (rangeName ? ` · ${rangeName}` : '')
+    const variant = (counts.get(base) || 0) + 1
+    counts.set(base, variant)
+    return { id: asString(raw.id), stream: asString(raw.id), label: base + (variant > 1 ? ` · 版本 ${variant}` : ''), title: '爱奇艺国内版',
+      width, height, tier, size: Number(raw.size) || 0, fps: Number(raw.fr) || 0, codec: ({ 1: 'H265', 2: 'H264' } as Record<number,string>)[Number(raw.codec_code)] || (/^ts$/i.test(asString(raw.codec)) ? '' : asString(raw.codec).toUpperCase()), drm: Number(raw.drm) > 0 ? 'IQCN' : '' }
   }).filter(raw => raw.id)
   return { qualities, audios: [] }
 }
