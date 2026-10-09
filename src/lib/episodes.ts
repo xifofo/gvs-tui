@@ -1,6 +1,7 @@
 import type { Episode } from '../types.ts'
 import { anyInt, firstStr, isObj } from './util.ts'
 import { parseSeriesTitle } from './series-title.ts'
+import { tencentEpisodePlayParams } from './tencent-edition.ts'
 
 /** One parser for the terminal and desktop clients. Official collections must
  * survive even when their titles contain 彩蛋/采访/预告. */
@@ -32,6 +33,7 @@ export function parseEpisodes(data: Record<string, unknown>): Episode[] {
     if (!official && extra && duration < 600) continue
     const n = anyInt(it.ep) || anyInt(it.number) || anyInt(it.episodeNumber) || Number.parseInt(String(it.stage ?? ''), 10)
     eps.push({ vid, title, number: n > 0 ? n : i + 1, selected: false,
+      tencentPlayParams: tencentEpisodePlayParams(it, data),
       duration: duration || undefined, group, season: seasonOf(it) ?? season,
       collection: official ? group || '正片' : undefined })
     seen.add(vid)

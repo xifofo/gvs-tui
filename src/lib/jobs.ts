@@ -43,6 +43,7 @@ import { defaultAudioIndex } from './audio-selection.ts'
 import type { MediaSpecs } from './actual-version.ts'
 
 export type DlTask = {
+  tencentPlayParams?: import('../types.ts').TencentPlayParams
   provider: string
   title: string
   series: string
@@ -705,7 +706,7 @@ async function dlTencent(
 ): Promise<string> {
   emit('取链', 0.05, t.vid)
   const play = async () => {
-    const payload = await cli.invoke('tencent', 'play', { vid: t.vid, ...tencentPlayQualityInput(t), ...tencentPlayInput(cfg) }, cli.extra(cfg, 'tencent'))
+    const payload = await cli.invoke('tencent', 'play', { vid: t.vid, ...tencentPlayInput(cfg, t.tencentPlayParams), ...tencentPlayQualityInput(t) }, cli.extra(cfg, 'tencent'))
     // The gateway call has no signal of its own; stop right after it returns.
     signal?.throwIfAborted()
     return payload

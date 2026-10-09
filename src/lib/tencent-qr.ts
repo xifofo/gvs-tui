@@ -1,5 +1,6 @@
 import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
+import type { TencentPlayParams } from '../types.ts'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { configPath } from './config.ts'
@@ -14,7 +15,8 @@ export const tencentLabels = {
   tv: '腾讯极光 TV 扫码',
 } as const
 
-export function tencentPlayInput(cfg: FileConfig): Record<string, string> {
+export function tencentPlayInput(cfg: FileConfig, edition?: TencentPlayParams): Record<string, string> {
+  if (edition?.edition === 'imax') return { edition: 'imax', defn: 'imax', session_type: 'tv', ...(edition.cid ? { cid: edition.cid } : {}) }
   const mode = cfg.tencentMode
   if (mode === 'web') return { session_type: 'web', tier: 'h5' }
   if (mode === 'app') return { session_type: 'app', tier: 'phone' }

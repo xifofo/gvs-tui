@@ -1,4 +1,6 @@
 import type { TmdbSeason } from './lib/tmdb-types'
+import type { TencentPlayParams } from './lib/tencent-edition-types'
+export type { TencentPlayParams } from './lib/tencent-edition-types'
 
 export type Job = { id: number; title: string; status: string; pct: number; log: string; err: string; note?: string; phase?: string }
 export type Row = {
@@ -14,6 +16,8 @@ export type Row = {
   mediaKind?: 'movie' | 'show'
 }
 export type Episode = {
+  /** Stable edition request metadata from the gateway; never account secrets. */
+  tencentPlayParams?: TencentPlayParams
   season?: number
   title: string
   vid: string

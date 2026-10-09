@@ -174,6 +174,7 @@ function treeSize(path: string): number {
 function toEpisodeView(e: Episode): EpisodeView {
   return {
     vid: e.vid,
+    tencentPlayParams: e.tencentPlayParams,
     season: e.season,
     title: e.title,
     number: e.number,
@@ -1160,6 +1161,7 @@ export class Core {
       }
     const run = (skipSign: boolean) =>
       probeOptions(this.client(), this.cfg, provider, first.vid, {
+        tencentPlayParams: first.tencentPlayParams,
         skipSign: skipSign || undefined,
         languages: languages.length ? languages : undefined,
       })
@@ -1248,6 +1250,7 @@ export class Core {
         title: ep.title,
         series: movie ? req.detail.title : parseSeriesTitle(req.detail.title).title,
         vid: ep.vid,
+        tencentPlayParams: ep.tencentPlayParams,
         season: movie ? 0 : season ?? seriesSeason(ep.season, req.detail.title),
         episode: movie ? 0 : ep.number || i + 1,
         collection: ep.collection,

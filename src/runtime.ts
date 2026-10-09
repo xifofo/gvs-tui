@@ -2228,6 +2228,7 @@ export class Runtime {
       title: ep.title,
       series: movie ? this.detailTitle : parseSeriesTitle(this.detailTitle).title,
       vid: ep.vid,
+      tencentPlayParams: ep.tencentPlayParams,
       season: movie ? 0 : seriesSeason(ep.season, this.detailTitle),
       episode: movie ? 0 : ep.number || i + 1,
       collection: ep.collection,
@@ -2254,7 +2255,7 @@ export class Runtime {
     )
   }
 
-  private probeLangOpts(skipSign = false): { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }> } {
+  private probeLangOpts(skipSign = false): { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: Episode['tencentPlayParams'] } {
     const seen: Record<string, true> = {}
     const languages: Array<{ vid: string; lang: string }> = []
     for (const t of this.pending) {
@@ -2264,7 +2265,7 @@ export class Runtime {
         languages.push({ vid: l.vid, lang: l.lang })
       }
     }
-    return { skipSign: skipSign || undefined, languages: languages.length ? languages : undefined }
+    return { skipSign: skipSign || undefined, languages: languages.length ? languages : undefined, tencentPlayParams: this.pending[0]?.tencentPlayParams }
   }
 
 
@@ -2417,8 +2418,8 @@ export class Runtime {
               {
                 vid: targets[0]!.vid,
                 vid2: targets[1]!.vid,
+                ...tencentPlayInput(this.cfg, targets[0]!.tencentPlayParams),
                 ...tencentPlayQualityInput(targets[0]!),
-                ...tencentPlayInput(this.cfg),
               },
               this.cli!.extra(this.cfg, 'tencent'),
             ),
@@ -2448,7 +2449,7 @@ export class Runtime {
             this.cli!.invoke(
               'tencent',
               'play',
-              { vid: first.vid, ...tencentPlayQualityInput(first), ...tencentPlayInput(this.cfg) },
+              { vid: first.vid, ...tencentPlayInput(this.cfg, first.tencentPlayParams), ...tencentPlayQualityInput(first) },
               this.cli!.extra(this.cfg, 'tencent'),
             ),
           )

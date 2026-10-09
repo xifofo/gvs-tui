@@ -104,6 +104,7 @@ export type LinkTarget =
   | { kind: 'none' }
 
 export type EpisodeView = {
+  tencentPlayParams?: import('../../../src/lib/tencent-edition-types').TencentPlayParams
   season?: number
   vid: string
   title: string

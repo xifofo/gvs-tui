@@ -1,4 +1,4 @@
-import type { Quality, TencentQualitySelection } from '../types.ts'
+import type { Quality, TencentQualitySelection, TencentPlayParams } from '../types.ts'
 
 export function tencentCaption(value: string): string {
   const c = value.trim().toLowerCase()
@@ -26,6 +26,7 @@ export function selectedTencentQuality(q: Pick<Quality, 'id' | 'formatId' | 'per
 }
 
 export type TencentQualityChoice = {
+  tencentPlayParams?: TencentPlayParams
   id?: string
   quality?: string; stream?: string; caption?: string; group?: string
   formatId?: string; persona?: string; tencentQuality?: TencentQualitySelection
@@ -41,11 +42,18 @@ export function tencentChoiceSelection(q: TencentQualityChoice): TencentQualityS
 export function tencentSelectedPlayInput(q: TencentQualityChoice): Record<string, string> {
   const parts = (q.stream || q.quality || 'fhd').trim().split('|')
   const out: Record<string, string> = { defn: parts[0]! }
+  const imax = q.tencentPlayParams?.edition === 'imax' || out.defn === 'imax'
+  if (imax) {
+    out.defn = 'imax'
+    out.edition = 'imax'
+    out.session_type = 'tv'
+    if (q.tencentPlayParams?.cid) out.cid = q.tencentPlayParams.cid
+  }
   const selection = tencentChoiceSelection(q)
   const cap = tencentCaption(selection.captionProbe || q.caption || (parts.length > 1 ? parts[1]! : ''))
   if (cap === 'soft' || cap === 'hard') out.caption = cap
   if (selection.formatId) out.format_id = selection.formatId
-  if (selection.group === 'encode' && selection.persona) out.rendition_persona = selection.persona
+  if (!imax && selection.group === 'encode' && selection.persona) out.rendition_persona = selection.persona
   return out
 }
 

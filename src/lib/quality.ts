@@ -1,6 +1,7 @@
 import { probeManifest } from './manifest-provider.ts'
 import { iqOptions } from './iq.ts'
-import type { Audio, Episode, Quality, VipProbe } from '../types.ts'
+import type { Audio, Episode, Quality, VipProbe, TencentPlayParams } from '../types.ts'
+import { parseEpisodes } from './episodes.ts'
 import type { FileConfig } from './config.ts'
 import { ReloginRequired, type GwClient } from './client.ts'
 import { anyInt, asBool, asString, isObj } from './util.ts'
@@ -233,6 +234,10 @@ export function moviePlayables(
   data: Record<string, unknown>,
   play?: Record<string, unknown>,
 ): Episode[] {
+  const episodes = parseEpisodes(data)
+  if (episodes.some(ep => ep.tencentPlayParams?.edition === 'imax')) {
+    return episodes.map(ep => ({ ...ep, group: 'edition' }))
+  }
   const src = play ?? data
   const editions = youkuEditionsFromDetail(src)
   const languages = youkuLanguageRefs(src)
@@ -313,7 +318,7 @@ export async function probeOptions(
   cfg: FileConfig,
   provider: string,
   vid: string,
-  opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }> } = {},
+  opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: TencentPlayParams } = {},
 ): Promise<StreamOptions> {
   switch (provider) {
     case 'iqcn': return iqcnOptions(await cli.invoke('iqcn', 'probe', { tvid: vid }, {}, { timeoutMs: 150000 }))
@@ -322,7 +327,7 @@ export async function probeOptions(
     case 'hongguo': return probeHongguo(cli, vid)
     case 'huangguo': return probeHuangguo(cli, vid)
     case 'youku': return probeYouku(cli, cfg, vid, opts)
-    case 'tencent': return probeTencent(cli, cfg, vid)
+    case 'tencent': return probeTencent(cli, cfg, vid, opts.tencentPlayParams)
     case 'douyin': return { qualities: await probeDouyin(cli, vid), audios: [] }
     default: throw new Error('这个平台还没接画质列表')
   }
@@ -811,19 +816,22 @@ export function isTencentEm93(data: Record<string, unknown>): boolean {
  * - no source=1 unless tencentProbeSource
  * - encode=all only if tencentEncodeAll (already opt-in)
  */
-export function tencentCatalogProbeInput(cfg: FileConfig, vid: string): Record<string, string> {
+export function tencentCatalogProbeInput(cfg: FileConfig, vid: string, edition?: TencentPlayParams): Record<string, string> {
   const input: Record<string, string> = {
     vid,
     caption: cfg.tencentCaptionAll ? 'all' : 'soft',
-    ...tencentPlayInput(cfg),
+    ...tencentPlayInput(cfg, edition),
   }
+  // IMAX has its own source and device capabilities. The gateway explicitly
+  // rejects ordinary complete/encode/source presets for this route.
+  if (edition?.edition === 'imax') return input
   if (cfg.tencentProbeSource) input.source = '1'
   if (cfg.tencentEncodeAll) input.encode = 'all'
   return input
 }
 
-async function probeTencent(cli: GwClient, cfg: FileConfig, vid: string): Promise<StreamOptions> {
-  const input = tencentCatalogProbeInput(cfg, vid)
+async function probeTencent(cli: GwClient, cfg: FileConfig, vid: string, edition?: TencentPlayParams): Promise<StreamOptions> {
+  const input = tencentCatalogProbeInput(cfg, vid, edition)
   const data = await cli.invoke('tencent', 'play', input, cli.extra(cfg, 'tencent'))
   if (isTencentEm93(data)) {
     const em = asString(data.em) || asString(data.code) || '93'
@@ -831,8 +839,15 @@ async function probeTencent(cli: GwClient, cfg: FileConfig, vid: string): Promis
     runLog(`tencent probe em93 em=${em} msg=${short.slice(0, 80)}`)
     throw new Error(TENCENT_EM93_STATUS)
   }
-  const qualities = qualitiesFromTencentFormats(data.formats)
+  const formats = edition?.edition === 'imax' && Array.isArray(data.formats)
+    ? data.formats.filter(f => isObj(f) && (asString(f.name) || asString(f.defn)).toLowerCase() === 'imax')
+    : data.formats
+  const qualities = qualitiesFromTencentFormats(formats)
   const audios = audiosFromTencent(data)
+  if (edition?.edition === 'imax' && !qualities.length) {
+    const message = asString(data.error) || asString(data.msg)
+    throw new Error(message && !/^(success|ok)$/i.test(message) ? message : 'IMAX 片源暂未返回可用画质，请检查极光 TV 会话与影片权益。')
+  }
   // Empty catalog without em=93: keep static ladder fallback for old gateways.
   if (!qualities.length) return { qualities: tencentQualityList(), audios }
   return { qualities, audios }
