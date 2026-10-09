@@ -41,6 +41,36 @@ async function until(cond: () => boolean, ms = 3000): Promise<void> {
 
 const never = () => new Promise<void>(() => {})
 
+test('Douyin passes configured concurrency through initial transfer and CDN refresh', async () => {
+  for (const threads of [1, 8, 16]) {
+    const outDir = tempDir('douyin-concurrency')
+    const seen: number[] = []
+    let resolves = 0
+    const cli = { invoke: async () => {
+      resolves++
+      return { media: [{ type: 'video', url: `https://cdn.invalid/${resolves}.mp4` }] }
+    } } as unknown as GwClient
+    const download = spyOn(media, 'downloadProgress').mockImplementation(async (url, _dest, _ref, _cb, _note, concurrency) => {
+      seen.push(concurrency!)
+      if (seen.length === 1) throw new media.CdnDenied(403, url)
+      throw new Error('fixture: refreshed transfer reached')
+    })
+    try {
+      const events: JobEvt[] = []
+      const hub = new JobHub(e => events.push(e))
+      hub.enqueue({ outDir, tmpDir: '', releaseGroup: 'WF', threads } as FileConfig, cli, 900 + threads,
+        task({ provider: 'douyin', vid: '123', url: 'https://www.douyin.com/video/123' }))
+      await until(() => events.some(e => e.done))
+      expect(seen).toEqual([threads, threads])
+      expect(resolves).toBe(2)
+      expect(events.find(e => e.done)?.err).toBe('fixture: refreshed transfer reached')
+    } finally {
+      download.mockRestore()
+      rmSync(outDir, { recursive: true, force: true })
+    }
+  }
+})
+
 /** A runner that blocks until released, recording what it was given. */
 function blockingRunner() {
   const state = {

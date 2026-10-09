@@ -35,12 +35,17 @@ test('domestic job publishes only after every segment is restored and decoded', 
   const task = { vid: '123', quality: '600|100|25' } as DlTask
   const dest = join(dir, 'result.mkv')
   await downloadIQCN(cli, task, dest, join(dir, 'work'), () => {}, undefined, {
-    fetch: async url => new Response(parts[Number(new URL(url).pathname.slice(1))]!),
+    fetch: async url => {
+      const index = Number(new URL(url).pathname.slice(1))
+      // A later segment finishes first; the assembled video must stay ordered.
+      if (index === 0) await Bun.sleep(30)
+      return new Response(parts[index]!)
+    },
     restore: async (source, destination) => {
       copyFileSync(source, destination)
       return { version: 1, bytes: readFileSync(source).length, restored: false, clearCandidate: true }
     },
-  })
+  }, 8)
   expect(restored).toBe(2)
   expect(released).toBe(true)
   expect(existsSync(dest)).toBe(true)

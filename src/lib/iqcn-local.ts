@@ -82,12 +82,21 @@ export function restoreIQCNLocal(source: string, destination: string, material: 
   return new Promise((resolve, reject) => {
     const child = spawn(binary, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     let output = '', done = false
+    let failure: Error | undefined
+    let exited = false
     const finish = (err?: Error, value?: LocalResult) => {
       if (done) return
+      if (err && !exited) {
+        failure ||= err
+        child.kill()
+        // Wait for close before the caller removes files or frees a CPU slot.
+        return
+      }
       done = true
       clearTimeout(timer)
       signal?.removeEventListener('abort', abort)
-      if (err) { child.kill(); reject(err) } else resolve(value!)
+      if (err) reject(err)
+      else resolve(value!)
     }
     const abort = () => finish(new Error('本地分片处理已取消'))
     const timer = setTimeout(() => finish(new Error('本地分片处理超时')), 60_000)
@@ -100,6 +109,8 @@ export function restoreIQCNLocal(source: string, destination: string, material: 
     })
     child.stderr.resume() // The helper emits no secrets; keep user errors stable.
     child.on('close', code => {
+      exited = true
+      if (failure) return finish(failure)
       if (code !== 0) return finish(new Error('爱奇艺国内版本地分片还原失败'))
       try {
         const value = JSON.parse(output) as LocalResult

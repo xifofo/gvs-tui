@@ -10,6 +10,8 @@ import { ffmpegRemux, validateVideoDecode } from './ffmpeg.ts'
 import { inspectMediaTiming, type TrackTiming } from './media-timing.ts'
 import { runIQFFmpeg } from './iq-output.ts'
 import { downloadIQCNLocalSegment, iqcnProcessing, type IQCNLocalRuntime } from './iqcn-local.ts'
+import { orderedDownload, processingQueue } from './ordered-download.ts'
+import { restoreIQCNLocal } from './iqcn-local.ts'
 
 /** Domestic selection uses source BID/bitrate/frame rate, never guessed tiers. */
 export function iqcnOptions(data: Record<string, unknown>): StreamOptions {
@@ -52,7 +54,7 @@ export function assertIQCNCoverage(tracks: TrackTiming[], expectedSeconds = 0): 
   }
 }
 
-export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal, runtime?: IQCNLocalRuntime): Promise<void> {
+export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal, runtime?: IQCNLocalRuntime, threads = 1): Promise<void> {
   signal?.throwIfAborted()
   const plan = await cli.invoke('iqcn', 'streams', { tvid: task.vid, ...iqcnSelection(task.quality), transport: 'local-v1' }, {}, { timeoutMs: 150000 })
   const video = isObj(plan.video) ? plan.video : {}
@@ -64,12 +66,25 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
   writeFileSync(transport, '')
   try {
     const material = iqcnProcessing(plan)
-    for (let index = 0; index < segments.length; index++) {
-      signal?.throwIfAborted()
-      emit('本地下载与处理', 0.02 + index / segments.length * 0.87, `分片 ${index + 1}/${segments.length}`)
-      const bytes = await downloadIQCNLocalSegment(cli, planId, index, Number(segments[index]!.contentlength), material, work, signal, runtime)
-      appendFileSync(transport, bytes)
+    const process = processingQueue(2)
+    const local: IQCNLocalRuntime = {
+      fetch: runtime?.fetch ?? ((url, init) => fetch(url, init)),
+      restore: (source, destination, value, abort) => process(() => (runtime?.restore ?? restoreIQCNLocal)(source, destination, value, abort), abort),
     }
+    const sizes = segments.map(segment => Number(segment.contentlength))
+    const totalBytes = sizes.reduce((sum, size) => sum + size, 0)
+    let completedBytes = 0
+    const started = Date.now()
+    emit('本地下载与处理', 0.02, `分片 0/${segments.length}`)
+    await orderedDownload({ sizes, threads, signal,
+      pull: (index, abort) => downloadIQCNLocalSegment(cli, planId, index, sizes[index]!, material, work, abort, local),
+      write: (bytes, index) => {
+        appendFileSync(transport, bytes)
+        completedBytes += bytes.length
+        const speed = completedBytes / Math.max(0.001, (Date.now() - started) / 1000) / 1048576
+        emit('本地下载与处理', 0.02 + completedBytes / totalBytes * 0.87, `分片 ${index + 1}/${segments.length} · 平均 ${speed.toFixed(2)} MiB/s`)
+      },
+    })
     const ffmpeg = await ensureFFmpeg(undefined, signal)
     emit('校验视频', 0.90, '检查还原后的音视频解码')
     const errors = await validateVideoDecode(ffmpeg, transport, signal)

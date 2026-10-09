@@ -361,7 +361,7 @@ async function runTask(
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
       case 'iqcn':
-        await downloadIQCN(cli, t, out, work, emit, signal)
+        await downloadIQCN(cli, t, out, work, emit, signal, undefined, cfg.threads)
         break
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
@@ -386,7 +386,7 @@ async function runTask(
         })
         break
       case 'douyin':
-        await dlDouyin(cli, t, out, emit, retryNote, signal)
+        await dlDouyin(cli, t, out, emit, retryNote, cfg.threads, signal)
         break
       default:
         throw new Error(`demo 尚未接 ${t.provider} 下载管线`)
@@ -827,6 +827,7 @@ async function dlDouyin(
   cli: GwClient, t: DlTask, out: string,
   emit: (s: string, p: number, l: string) => void,
   retryNote: RetryNote,
+  threads: number,
   signal?: AbortSignal,
 ): Promise<void> {
   emit('取链', 0.02, t.vid || t.url || '')
@@ -841,13 +842,13 @@ async function dlDouyin(
   let cdn = await resolve()
   emit('下载', 0.1, cdn)
   try {
-    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, 4, undefined, undefined, signal)
+    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, threads, undefined, undefined, signal)
   } catch (e) {
     signal?.throwIfAborted()
     if (!(e instanceof CdnDenied)) throw e
     emit('重取', 0.1, `CDN ${e.status}，重新解析后续传`)
     cdn = await resolve()
-    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, 4, undefined, undefined, signal)
+    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, threads, undefined, undefined, signal)
   }
 }
 
