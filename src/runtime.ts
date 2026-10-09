@@ -1339,6 +1339,11 @@ export class Runtime {
     const generation = this.requestGeneration
     const target = row.target
     if(target?.type==='video'&&row.sub==='youku'){await this.downloadYoukuLink(target.id||row.id, row);return}
+    if (target?.type === 'video' && row.sub === 'tencent') {
+      this.pushNavigation(origin, origin === 'workspace' ? this.discovery.view.cursor : this.cursor)
+      await this.openTencentLinks([{ vid: target.id || row.id, cid: '', url: '' }])
+      return
+    }
     if (target?.type === 'unavailable') {
       this.say(target.reason || '此条目不可下载', 'warn')
       return
@@ -1351,7 +1356,7 @@ export class Runtime {
     if (
       target?.type === 'search' ||
       (!row.id && !target?.id) ||
-      row.id.includes('://')
+      (!target?.id && row.id.includes('://'))
     ) {
       if (this.searching) return
       await this.search(row.sub, target?.query || row.title)

@@ -6,13 +6,13 @@ import { randomUUID } from 'node:crypto'
 import type { GwClient } from './client.ts'
 import type { DlTask } from './jobs.ts'
 import { ensureFFmpeg } from './tools.ts'
-import { validateVideoDecode } from './ffmpeg.ts'
-import { inspectMediaTiming, type TrackTiming } from './media-timing.ts'
+import type { TrackTiming } from './media-timing.ts'
 import { runIQFFmpeg } from './iq-output.ts'
 import { downloadIQCNLocalSegment, iqcnProcessing, type IQCNLocalRuntime } from './iqcn-local.ts'
 import { orderedDownload, processingQueue } from './ordered-download.ts'
 import { restoreIQCNLocal } from './iqcn-local.ts'
-import { iqcnAudios, downloadIQCNAudio } from './iqcn-audio.ts'
+import { iqcnAudios, selectIQCNAudios, prepareIQCNAudio, downloadIQCNAudio, type IQCNAudioPlan } from './iqcn-audio.ts'
+import { runLog } from './runlog.ts'
 import { prepareIQCNSubtitles } from './iqcn-subtitles.ts'
 import { defaultIQSubtitleIndex } from './iq-subtitles.ts'
 
@@ -64,10 +64,21 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
   const segments = Array.isArray(video.segments) ? video.segments.filter(isObj) : []
   const planId = asString(plan.planId)
   if (!planId || !segments.length) throw new Error('爱奇艺国内版未返回完整下载计划')
-  mkdirSync(work, { recursive: true })
   const transport = join(work, 'iqcn-video.ts'), staged = join(dirname(dest), `.gvs-iqcn-${randomUUID()}${extname(dest)}`)
-  writeFileSync(transport, '')
   try {
+    const selected = selectIQCNAudios(plan, task.audioTracks)
+    const audioPlans: IQCNAudioPlan[] = []
+    emit('检查音轨', 0.01, '确认所选音轨可用')
+    for (const audio of selected) {
+      try { audioPlans.push(await prepareIQCNAudio(cli, planId, audio.vid!, signal)) }
+      catch (error) {
+        signal?.throwIfAborted()
+        runLog(`iqcn audio preflight failed tvid=${task.vid} choice=${audio.id}: ${error instanceof Error ? error.message : String(error)}`)
+        throw new Error(`“${audio.label}”暂时无法获取，请返回音轨列表选择其他音轨；本次尚未下载视频。`, { cause: error })
+      }
+    }
+    mkdirSync(work, { recursive: true })
+    writeFileSync(transport, '')
     const material = iqcnProcessing(plan)
     const process = processingQueue(2)
     const local: IQCNLocalRuntime = {
@@ -89,28 +100,15 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
       },
     })
     const ffmpeg = await ensureFFmpeg(undefined, signal)
-    emit('校验视频', 0.90, '检查还原后的音视频解码')
-    const errors = await validateVideoDecode(ffmpeg, transport, signal)
-    if (errors.length) throw new Error('爱奇艺国内版还原视频解码失败')
-    const videoTiming = await inspectMediaTiming(ffmpeg, transport, signal)
-    const available = iqcnAudios(plan)
-    const selected = task.audioTracks?.length ? task.audioTracks : available.filter(audio => audio.selected)
     const audioFiles: Array<{ path: string; language: string; title: string; isDefault: boolean }> = []
     for (const [index, audio] of selected.entries()) {
       signal?.throwIfAborted()
       emit('下载独立音轨', 0.90 + 0.03 * index / selected.length, audio.label)
       const path = join(work, `iqcn-audio-${index}.m4a`)
-      const matching = available.filter(option => option.id === audio.id)
-      if (matching.length !== 1 || !matching[0]!.vid) throw new Error('当前集缺少所选音轨，请重新选择')
-      const info = await downloadIQCNAudio(cli, planId, matching[0]!.vid!, path, threads, signal, runtime?.fetch,
-        () => runIQFFmpeg(ffmpeg, ['-i', transport, '-map', '0:a:0', '-c', 'copy', '-y', path], '标准音轨提取失败', signal))
-      await runIQFFmpeg(ffmpeg, ['-xerror', '-err_detect', 'explode', '-i', path, '-map', '0:a:0', '-f', 'null', '-'], '所选音轨解码校验失败', signal)
-      const timing = await inspectMediaTiming(ffmpeg, path, signal)
-      if (timing.filter(track => track.type === 'audio').length !== 1) throw new Error('所选独立音轨数量异常')
-      assertIQCNCoverage([...videoTiming.filter(track => track.type === 'video'), ...timing], task.duration || 0)
+      const info = await downloadIQCNAudio(cli, planId, audio.vid!, path, threads, signal, runtime?.fetch,
+        () => runIQFFmpeg(ffmpeg, ['-i', transport, '-map', '0:a:0', '-c', 'copy', '-y', path], '标准音轨提取失败', signal), audioPlans[index])
       audioFiles.push({ path, ...info, isDefault: !!audio.isDefault })
     }
-    if (!audioFiles.length) assertIQCNCoverage(videoTiming, task.duration || 0)
     const defaultIndex = Math.max(0, audioFiles.findIndex(audio => audio.isDefault))
     audioFiles.forEach((audio, index) => { audio.isDefault = index === defaultIndex })
     emit('下载字幕', 0.93, '优先原生简繁字幕，缺失时用 OpenCC 补齐')
@@ -132,9 +130,6 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
       args.push('-y', muxed)
       await runIQFFmpeg(ffmpeg, args, '爱奇艺国内版音轨与字幕封装失败', signal)
     }
-    const finalTiming = await inspectMediaTiming(ffmpeg, muxed, signal)
-    assertIQCNCoverage(finalTiming, task.duration || 0)
-    if (audioFiles.length && finalTiming.filter(track => track.type === 'audio').length !== audioFiles.length) throw new Error('成品音轨数量与选择不一致')
     const { copyFileSync } = await import('node:fs')
     copyFileSync(muxed, staged)
     signal?.throwIfAborted()

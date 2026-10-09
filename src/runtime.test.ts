@@ -8,6 +8,7 @@ import { wrapLines, displayWidth } from './lib/text'
 import { completedFilename, filename, folder } from './lib/name'
 import { jobNaming } from './lib/jobs'
 import { join } from 'node:path'
+import { discoveryRows } from './lib/discovery'
 const runtimes: Runtime[] = []
 const start = async () => {
   const r = new Runtime({ simulate: true })
@@ -18,6 +19,26 @@ const start = async () => {
 afterEach(() => {
   runtimes.splice(0).forEach((r) => r.close())
 })
+
+for (const [provider, vid] of [['youku', 'XNjUzMzM0MDI1Ng=='], ['tencent', 'g4102f0fkum']]) {
+  test(`${provider} discovery VID opens detail without searching or downloading`, async () => {
+    const r = await start()
+    const x = r as any
+    const calls: Array<{ provider: string; action: string; input: Record<string, string> }> = []
+    x.cli.invoke = async (p: string, action: string, input: Record<string, string>) => {
+      calls.push({ provider: p, action, input })
+      return { title: '专区电影', vid, episodes: [{ vid: 'unrelated', title: '别的版本' }] }
+    }
+    const [row] = discoveryRows(provider, { items: [{ title: '专区电影', vid, target: { type: 'search' } }] })
+    await x.openRow(row)
+    expect(r.snapshot.scene).toBe('detail')
+    expect(x.eps.map((e: { vid: string }) => e.vid)).toEqual([vid])
+    expect(calls).toHaveLength(1)
+    expect(calls[0].provider).toBe(provider)
+    expect(calls[0].action).toBe(provider === 'youku' ? 'detail' : 'resolve')
+    expect(calls[0].input.vid).toBe(vid)
+  })
+}
 
 test('TUI episode-title toggle applies to new IQ tasks and previews while existing tasks keep their choice', async () => {
   const r = await start()

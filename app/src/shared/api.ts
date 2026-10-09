@@ -82,7 +82,7 @@ export type Card = {
   reason?: string
   /** target=search 时网关给的搜索词（缺省用标题） */
   query?: string
-  /** 优酷单视频（id 是 vid 而非节目 id），走 detailFromLink */
+  /** 单视频（id 是 vid 而非节目 id），按 provider 走 detailFromLink */
   video?: boolean
   /** Explicit movie/TV metadata from search/browse, retained when detail lacks it. */
   mediaKind?: 'movie' | 'show'

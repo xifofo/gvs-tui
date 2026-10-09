@@ -1084,12 +1084,16 @@ export class Core {
       const sid = asString(data.showId) || asString(isObj(data.show) ? data.show.showId : '')
       if (sid) {
         try {
-          return await this.detail('youku', sid, hint)
+          const view = await this.detail('youku', sid, hint)
+          if (view.episodes.some(e => e.vid === link.vid)) {
+            view.focusVid = link.vid
+            return view
+          }
         } catch {
           /* 回落到单视频 */
         }
       }
-      if (!asString(data.title)) {
+      if (!asString(data.title) && !hint?.title) {
         // 网页详情拿不到时，play 回包里也有片名
         try {
           const play = await this.invoke('youku', 'play', { vid: link.vid, tier: 'single', expand: '0' })
@@ -1098,7 +1102,7 @@ export class Core {
           /* 留默认标题 */
         }
       }
-      const title = asString(data.title) || `优酷视频 ${link.vid}`
+      const title = asString(data.title) || hint?.title || `优酷视频 ${link.vid}`
       const one: Episode = parseEps(data).find((e) => e.vid === link.vid) ?? { vid: link.vid, title, number: 1, selected: true }
       return buildDetail('youku', link.vid, data, title, [one], hint)
     }

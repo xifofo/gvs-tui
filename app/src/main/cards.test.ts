@@ -8,6 +8,16 @@
 import { expect, test } from 'bun:test'
 import { detailPoster, posterOf, posterUrl, toCards } from './cards.ts'
 
+test('优酷腾讯 VID 卡片修复旧 search 回退，同名不同版本不合并', () => {
+  for (const provider of ['youku', 'tencent'] as const) {
+    const items = ['vid1', 'vid2'].map(vid => ({ title: '同名电影', meta: { vid }, target: { type: 'search' } }))
+    const cards = toCards(provider, { items })
+    expect(cards).toHaveLength(2)
+    expect(cards.map(c => c.id)).toEqual(['vid1', 'vid2'])
+    expect(cards.every(c => c.video && c.target === 'detail')).toBe(true)
+  }
+})
+
 const item = (over: Record<string, unknown>) => ({ title: '片子', ...over })
 
 test('search cards retain movie/TV hints without guessing from a single episode', () => {
@@ -69,10 +79,11 @@ test('search target 没给 query 时用标题', () => {
   expect(c!.query).toBe('片子')
 })
 
-test('search target 压过看起来正常的 id（不再误开详情）', () => {
+test('优酷明确节目 ID 优先于旧网关的 search 回退', () => {
   const [c] = toCards('youku', { items: [item({ seriesId: '12345', target: { type: 'search', query: '别名' } })] })
-  expect(c!.target).toBe('search')
-  expect(c!.query).toBe('别名')
+  expect(c!.target).toBe('detail')
+  expect(c!.id).toBe('12345')
+  expect(c!.query).toBeUndefined()
 })
 
 test('unavailable 带原因', () => {
@@ -121,7 +132,7 @@ test('video target 没带可用 id 时退回搜索', () => {
 })
 
 test('kind=video 的普通条目不受影响（vid 不被当成节目 ID）', () => {
-  const [c] = toCards('youku', { items: [item({ id: 'show-2', vid: 'v-9', kind: 'video' })] })
+  const [c] = toCards('youku', { items: [item({ id: 'show-2', showId: 'show-2', vid: 'v-9', kind: 'video' })] })
   expect(c!.target).toBe('detail')
   expect(c!.id).toBe('show-2')
   expect(c!.video).toBeUndefined()

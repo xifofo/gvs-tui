@@ -7,6 +7,7 @@
 // `@tui` 别名，而相对路径在打包时同样能解析。所以本文件不要引入其他 `@tui/*`。
 import { anyInt, isObj } from '../../../src/lib/util.ts'
 import { mediaKindFromMetadata } from '../../../src/lib/media-kind.ts'
+import { cardTarget } from '../../../src/lib/card-target.ts'
 import type { Card, Provider } from '@shared/api'
 
 const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '')
@@ -131,12 +132,12 @@ export function toCards(provider: Provider, data: Record<string, unknown>): Card
     // 详情 ID 只看「顶层字段」：raw.vid 是优酷单视频的 vid，当节目 ID 用会打开错的详情。
     let id = str(raw.seriesId || raw.showId || raw.cid || raw.id || meta.seriesId || meta.showId || meta.cid)
     if (!isID(id)) id = ''
-    const t = isObj(raw.target) ? raw.target : isObj(meta.target) ? meta.target : {}
+    const t = cardTarget(provider, raw)
     const tid = str(t.id)
     const type = str(t.type)
     // 子频道由 browse() 单独收进 channels，不进卡片列表，也不占去重 key。
     if (type === 'channel') continue
-    const key = id || title
+    const key = tid || id || title
     if (seen.has(key)) continue
     seen.add(key)
     // 没有明确 target 时的兜底：ID 可用就当详情，否则只能按标题搜。

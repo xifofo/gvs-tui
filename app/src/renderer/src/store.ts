@@ -171,7 +171,8 @@ export function openVideo(vid: string, hint?: DetailHint): Promise<void> {
 export function openCard(c: Card): void {
   if (c.target === 'unavailable') return
   const hint = { title: c.title, poster: c.poster, mediaKind: c.mediaKind }
-  if (c.video) void openVideo(c.id, hint)
+  if (c.video && c.provider === 'tencent') void openDetailWith(() => gvs('detailFromLink', { kind: 'tencent', vid: c.id, cid: '', url: '' }, hint), hint)
+  else if (c.video) void openVideo(c.id, hint)
   else if (c.target === 'detail' && c.id) void openDetail(c.provider, c.id, hint)
   else void runSearch(c.query || c.title)
 }

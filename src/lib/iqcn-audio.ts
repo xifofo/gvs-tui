@@ -8,23 +8,58 @@ import { orderedDownload } from './ordered-download.ts'
 const LIMIT = 32 << 20
 export const iqcnLanguage = (id: number): string => id === 1 ? 'zho' : 'und'
 
+function audioChoiceID(row: Record<string, unknown>): string {
+  const base = `iqcn:${Number(row.language_id)}:${Number(row.ct)}:${Number(row.bid)}:${asString(row.cf).toLowerCase()}`
+  // Keep existing queued task IDs valid. Real content/channel variants remain
+  // separate; the delivery format (ff) and episode-specific AID are not quality.
+  const type = Number(row.aat) || 0, channels = Number(row.amt) || 0
+  return type || channels ? `${base}:${type}:${channels}` : base
+}
+
+function audioSourcePriority(row: Record<string, unknown>): number {
+  const format = asString(row.ff).toLowerCase()
+  return (row.has_independent_files === true ? 100 : 0) + (format === 'dash' ? 20 : !format ? 10 : 0) + (row.selected === true ? 1 : 0)
+}
+
 export function iqcnAudios(data: Record<string, unknown>): Audio[] {
-  const seen = new Set<string>()
-  const rows = (Array.isArray(data.audios) ? data.audios.filter(isObj) : []).filter(row => {
-    const id = asString(row.aid)
-    if (!id || seen.has(id)) return false
-    seen.add(id); return true
-  })
-  const preferred = rows.find(row => row.selected === true) ?? rows.find(row => row.has_independent_files === true) ?? rows[0]
-  return rows.map(row => {
+  const groups = new Map<string, { row: Record<string, unknown>; selected: boolean }>()
+  for (const row of Array.isArray(data.audios) ? data.audios.filter(isObj) : []) {
+    if (!asString(row.aid)) continue
+    const id = audioChoiceID(row), group = groups.get(id)
+    if (!group) groups.set(id, { row, selected: row.selected === true })
+    else {
+      group.selected ||= row.selected === true
+      if (audioSourcePriority(row) > audioSourcePriority(group.row)) group.row = row
+    }
+  }
+  const choices = [...groups.entries()]
+  const preferred = choices.find(([, group]) => group.selected)?.[0] ?? choices.find(([, group]) => group.row.has_independent_files === true)?.[0] ?? choices[0]?.[0]
+  return choices.map(([id, { row }]) => {
     const codec = asString(row.cf).toUpperCase()
     const name = asString(row.name) || `语言 ${Number(row.language_id)}`
-    const quality = row.ct === 5 ? '高码率' : row.ct === 1 ? '标准 · 随视频' : ''
-    // AID changes between episodes; persist the language/type/bitrate choice,
-    // then bind it to the current episode's exact source AID at download time.
-    return { id: `iqcn:${Number(row.language_id)}:${Number(row.ct)}:${Number(row.bid)}:${asString(row.cf)}`, vid: asString(row.aid), label: [name, codec, quality].filter(Boolean).join(' · '), lang: name,
-      codec, isDefault: row === preferred, selected: row === preferred }
+    const quality = Number(row.ct) === 5 ? '高码率' : Number(row.ct) === 1 ? '标准 · 随视频' : ''
+    return { id, vid: asString(row.aid), label: [name, codec, quality].filter(Boolean).join(' · '), lang: name,
+      codec, isDefault: id === preferred, selected: id === preferred }
   })
+}
+
+export function selectIQCNAudios(data: Record<string, unknown>, requested?: ReadonlyArray<{ id: string; isDefault?: boolean }>): Audio[] {
+  const available = iqcnAudios(data)
+  if (!requested?.length) return available.filter(audio => audio.selected)
+  const selected = new Map<string, Audio>()
+  for (const wanted of requested) {
+    let matches = available.filter(audio => audio.id === wanted.id)
+    // Old tasks lack channel/type discriminators. Bind only if unambiguous.
+    if (!matches.length && wanted.id.split(':').length === 5) matches = available.filter(audio => audio.id.startsWith(wanted.id + ':'))
+    if (matches.length > 1) throw new Error('当前集有多个不同版本的所选音轨，请刷新音轨列表后重新选择。')
+    const match = matches[0]
+    if (!match?.vid) throw new Error('当前集暂不提供所选音轨，请返回音轨列表选择其他音轨。')
+    const previous = selected.get(match.id)
+    selected.set(match.id, { ...match, selected: true, isDefault: !!wanted.isDefault || !!previous?.isDefault })
+  }
+  const result = [...selected.values()]
+  const defaultIndex = Math.max(0, result.findIndex(audio => audio.isDefault))
+  return result.map((audio, index) => ({ ...audio, isDefault: index === defaultIndex }))
 }
 
 type Fetcher = (url: string, init: RequestInit) => Promise<Response>
@@ -54,16 +89,15 @@ async function boundedFetch(url: string, fetcher: Fetcher, signal?: AbortSignal)
   } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock() }
 }
 
-export async function downloadIQCNAudio(cli: GwClient, planId: string, audioId: string, destination: string, threads: number, signal?: AbortSignal, fetcher: Fetcher = fetch, extractEmbedded?: () => Promise<void>): Promise<{ language: string; title: string }> {
+export type IQCNAudioPlan = { planId: string; audioId: string; info: { language: string; title: string }; embedded: boolean; parts: URL[] }
+
+export async function prepareIQCNAudio(cli: GwClient, planId: string, audioId: string, signal?: AbortSignal): Promise<IQCNAudioPlan> {
+  signal?.throwIfAborted()
   const result = await cli.invoke('iqcn', 'audio', { planId, audioId }, {}, { timeoutMs: 150000 })
   signal?.throwIfAborted()
   if (result.transport !== 'local-audio-v1' || result.audioId !== audioId) throw new Error('网关未返回所选音轨，请同步更新网关和 App')
   const info = { language: iqcnLanguage(Number(result.language_id)), title: [asString(result.name), asString(result.codec).toUpperCase()].filter(Boolean).join(' · ') || '独立音轨' }
-  if (result.embedded === true) {
-    if (!extractEmbedded) throw new Error('所选标准音轨需要从视频提取')
-    await extractEmbedded()
-    return info
-  }
+  if (result.embedded === true) return { planId, audioId, info, embedded: true, parts: [] }
   if (!Array.isArray(result.parts) || !result.parts.length) throw new Error('所选独立音轨没有文件')
   const parts = result.parts.map((value, index) => {
     if (!isObj(value) || value.index !== index) throw new Error('音轨分段顺序无效')
@@ -71,6 +105,19 @@ export async function downloadIQCNAudio(cli: GwClient, planId: string, audioId: 
     if (url.protocol !== 'https:' || url.hostname !== 'data.video.ptqy.gitv.tv' || url.port || url.username || url.password || url.hash || !url.pathname.startsWith('/videos/v0/')) throw new Error('音轨调度地址无效')
     return url
   })
+  return { planId, audioId, info, embedded: false, parts }
+}
+
+export async function downloadIQCNAudio(cli: GwClient, planId: string, audioId: string, destination: string, threads: number, signal?: AbortSignal, fetcher: Fetcher = fetch, extractEmbedded?: () => Promise<void>, prepared?: IQCNAudioPlan): Promise<{ language: string; title: string }> {
+  signal?.throwIfAborted()
+  const plan = prepared ?? await prepareIQCNAudio(cli, planId, audioId, signal)
+  if (plan.planId !== planId || plan.audioId !== audioId) throw new Error('音轨已变更，请刷新后重试。')
+  const { info, parts } = plan
+  if (plan.embedded) {
+    if (!extractEmbedded) throw new Error('所选标准音轨需要从视频提取')
+    await extractEmbedded()
+    return info
+  }
   writeFileSync(destination, '', { mode: 0o600 })
   try {
     await orderedDownload({ sizes: parts.map(() => LIMIT), budget: LIMIT * Math.min(8, Math.max(1, threads)), threads, signal,

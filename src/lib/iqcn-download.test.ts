@@ -9,23 +9,26 @@ import { ensureFFmpeg } from './tools.ts'
 import type { GwClient } from './client.ts'
 import type { DlTask } from './jobs.ts'
 
-test('domestic job publishes only after every segment is restored and decoded', async () => {
+test('domestic job restores segments and muxes unique tracks without a runtime decode-validation stage', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-download-'))
   const ffmpeg = await ensureFFmpeg()
   const source = join(dir, 'source.ts')
-  const generated = spawnSync(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=48000', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-f', 'mpegts', source], { windowsHide: true, timeout: 30000 })
+  const generated = spawnSync(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=48000', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-f', 'mpegts', source], { windowsHide: true, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
   expect(generated.status).toBe(0)
   const audioSources = ['aac', 'eac3'].map((codec, index) => {
     const path = join(dir, `independent-${index}.m4a`)
-    const result = spawnSync(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${600 + index * 500}:sample_rate=48000`, '-t', '2', '-c:a', codec, '-f', 'mp4', path], { windowsHide: true, timeout: 30000 })
+    const result = spawnSync(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${600 + index * 500}:sample_rate=48000`, '-t', '2', '-c:a', codec, '-f', 'mp4', path], { windowsHide: true, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
     expect(result.status).toBe(0)
     const data = readFileSync(path), split = Math.floor(data.length / 2)
     return [gzipSync(data.subarray(0, split)), data.subarray(split)]
   })
   const audioCatalog = [
-    { aid: 'current-aac', name: '普通话', cf: 'aac', ct: 5, bid: 300, language_id: 1, selected: true, has_independent_files: true },
-    { aid: 'current-dolby', name: '普通话', cf: 'dolby', ct: 2, bid: 500, language_id: 1 },
-    { aid: 'current-standard', name: '普通话', cf: 'aac', ct: 1, bid: 100, language_id: 1 },
+    { aid: 'current-aac', name: '普通话', cf: 'aac', ct: 5, bid: 300, language_id: 1, ff: 'dash', selected: true, has_independent_files: true },
+    { aid: 'current-dolby', name: '普通话', cf: 'dolby', ct: 2, bid: 500, language_id: 1, ff: 'dash' },
+    { aid: 'current-standard', name: '普通话', cf: 'aac', ct: 1, bid: 100, language_id: 1, ff: 'dash' },
+    { aid: 'amp4-aac', name: '普通话', cf: 'aac', ct: 5, bid: 300, language_id: 1, ff: 'amp4' },
+    { aid: 'amp4-dolby', name: '普通话', cf: 'dolby', ct: 2, bid: 500, language_id: 1, ff: 'amp4' },
+    { aid: 'amp4-standard', name: '普通话', cf: 'aac', ct: 1, bid: 100, language_id: 1, ff: 'amp4' },
   ]
   const requestedAudios: string[] = []
   const bytes = readFileSync(source), split = Math.floor(bytes.length / 188 / 2) * 188
@@ -39,6 +42,8 @@ test('domestic job publishes only after every segment is restored and decoded', 
     if (action === 'audio') {
       const track = audioCatalog.findIndex(a => a.aid === input.audioId)
       expect(track).toBeGreaterThanOrEqual(0)
+      expect(track).toBeLessThan(3)
+      expect(restored).toBe(0)
       requestedAudios.push(String(input.audioId))
       if (track === 2) return { transport: 'local-audio-v1', audioId: input.audioId, embedded: true, language_id: 1, name: '普通话', codec: 'aac' }
       return { transport: 'local-audio-v1', audioId: input.audioId, language_id: 1, name: '普通话', codec: audioCatalog[track]!.cf,
@@ -50,6 +55,7 @@ test('domestic job publishes only after every segment is restored and decoded', 
       return { index: 0, language_id: 1, format: 'srt', bytes: text.length, data: text.toString('base64') }
     }
     expect(action).toBe('download-segment')
+    expect(requestedAudios).toHaveLength(3)
     expect(input.index).toBe(restored++)
     const part = parts[Number(input.index)]!
     return { transport: 'local-v1', index: input.index, bytes: part.length, urls: [`https://fixture.ptqy.gitv.tv/${input.index}`] }
@@ -58,9 +64,13 @@ test('domestic job publishes only after every segment is restored and decoded', 
     { id: 'iqcn:1:5:300:aac', vid: 'previous-episode-aac', label: '普通话 AAC', isDefault: false },
     { id: 'iqcn:1:2:500:dolby', vid: 'previous-episode-dolby', label: '普通话 DOLBY', isDefault: true },
     { id: 'iqcn:1:1:100:aac', vid: 'previous-episode-standard', label: '普通话 标准', isDefault: false },
+    { id: 'iqcn:1:5:300:aac', vid: 'previous-amp4-aac', label: '普通话 AAC', isDefault: false },
+    { id: 'iqcn:1:2:500:dolby', vid: 'previous-amp4-dolby', label: '普通话 DOLBY', isDefault: true },
+    { id: 'iqcn:1:1:100:aac', vid: 'previous-amp4-standard', label: '普通话 标准', isDefault: false },
   ] } as DlTask
   const dest = join(dir, 'result.mkv')
-  await downloadIQCN(cli, task, dest, join(dir, 'work'), () => {}, undefined, {
+  const stages: string[] = []
+  await downloadIQCN(cli, task, dest, join(dir, 'work'), status => { stages.push(status) }, undefined, {
     fetch: async url => {
       const parsed = new URL(url)
       if (parsed.hostname === 'data.video.ptqy.gitv.tv') return Response.json({ e: '0', l: `https://audio.ptqy.gitv.tv${parsed.pathname}` })
@@ -83,7 +93,8 @@ test('domestic job publishes only after every segment is restored and decoded', 
   expect(released).toBe(true)
   expect(existsSync(dest)).toBe(true)
   expect(requestedAudios).toEqual(['current-aac', 'current-dolby', 'current-standard'])
-  const metadata = spawnSync(ffmpeg, ['-hide_banner', '-i', dest], { windowsHide: true, timeout: 30000 }).stderr.toString()
+  expect(stages).not.toContain('校验视频')
+  const metadata = spawnSync(ffmpeg, ['-hide_banner', '-i', dest], { windowsHide: true, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }).stderr.toString()
   const audioLines = metadata.split('\n').filter(line => /Stream #.*Audio:/.test(line))
   expect(audioLines).toHaveLength(3)
   expect(audioLines[0]).toContain('aac')
@@ -99,13 +110,13 @@ test('domestic job publishes only after every segment is restored and decoded', 
   expect(subtitleLines[1]).not.toContain('(default)')
   expect(metadata).toContain('简体中文')
   expect(metadata).toContain('繁体中文 (OpenCC 转换)')
-  const decoded = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:v', '-map', '0:a', '-f', 'null', '-'], { windowsHide: true, timeout: 30000 })
+  const decoded = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:v', '-map', '0:a', '-f', 'null', '-'], { windowsHide: true, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
   expect(decoded.status).toBe(0)
   expect(decoded.stderr.toString().trim()).toBe('')
-  const subtitle = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:s:0', '-f', 'srt', '-'], { windowsHide: true, timeout: 30000 })
+  const subtitle = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:s:0', '-f', 'srt', '-'], { windowsHide: true, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
   expect(subtitle.status).toBe(0)
   expect(subtitle.stdout.toString()).toContain('验收字幕')
-  const traditional = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:s:1', '-f', 'srt', '-'], { windowsHide: true, timeout: 30000 })
+  const traditional = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:s:1', '-f', 'srt', '-'], { windowsHide: true, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
   expect(traditional.status).toBe(0)
   expect(traditional.stdout.toString()).toContain('驗收字幕')
   const timing = /\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}/
@@ -128,4 +139,25 @@ test('failed restoration preserves an existing output and releases the private p
   expect(readFileSync(dest, 'utf8')).toBe('original-output')
   expect(released).toBe(true)
   expect(existsSync(dest + '.iqcn-part')).toBe(false)
+})
+
+test('missing or unresolved audio fails before fetching video and preserves downloaded work', async () => {
+  for (const mode of ['missing', 'unresolved']) {
+    const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-audio-preflight-')), dest = join(dir, 'result.mkv')
+    const video = join(dir, 'iqcn-video.ts')
+    writeFileSync(video, 'previously downloaded video')
+    const actions: string[] = []
+    const cli = { invoke: async (_p: string, action: string) => {
+      actions.push(action)
+      if (action === 'streams') return { planId: 'fixture-plan', video: { segments: [{ contentlength: 188 }] }, audios: mode === 'missing' ? [] : [{ aid: 'current', language_id: 1, ct: 2, bid: 500, cf: 'dolby', ff: 'dash', name: '普通话' }] }
+      if (action === 'download-finish') return {}
+      if (action === 'audio') throw new Error('fixture: audio unavailable')
+      throw new Error('video should not be requested')
+    } } as unknown as GwClient
+    const task = { vid: '123', quality: '600|100|25', audioTracks: [{ id: 'iqcn:1:2:500:dolby', label: '普通话 DOLBY' }] } as DlTask
+    await expect(downloadIQCN(cli, task, dest, dir, () => {})).rejects.toThrow(mode === 'missing' ? '当前集暂不提供' : '本次尚未下载视频')
+    expect(actions).toEqual(mode === 'missing' ? ['streams', 'download-finish'] : ['streams', 'audio', 'download-finish'])
+    expect(readFileSync(video, 'utf8')).toBe('previously downloaded video')
+    expect(existsSync(dest)).toBe(false)
+  }
 })

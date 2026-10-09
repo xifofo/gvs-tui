@@ -107,6 +107,16 @@ const listMode = computed(() => cards.value.length > 0 && cards.value.filter((c)
 const rankSkeleton = computed(() => section.value?.mode === 'rank')
 
 const visibleSections = computed(() => sections.value.filter((s) => s.available))
+const sectionGroup = (s: Section) => s.title.split(' · ')[0] || s.title
+const groups = computed(() => [...new Set(visibleSections.value.map(sectionGroup))])
+const activeGroup = computed(() => section.value ? sectionGroup(section.value) : '')
+const groupSections = computed(() => visibleSections.value.filter(s => sectionGroup(s) === activeGroup.value))
+const hasSubsections = computed(() => groupSections.value.length > 1 || groupSections.value.some(s => s.title.includes(' · ')))
+function chooseGroup(group: string) {
+  const candidates = visibleSections.value.filter(s => sectionGroup(s) === group)
+  void choose(candidates.find(s => s.title === group) ?? candidates[0] ?? null)
+}
+const subsectionTitle = (s: Section) => s.title === sectionGroup(s) ? '推荐' : s.title.split(' · ').slice(1).join(' · ')
 
 /** 进行中的批次：running/queued/paused 都算 */
 const active = computed(() => {
@@ -152,14 +162,19 @@ onBeforeUnmount(() => io?.disconnect())
 
     <div v-if="visibleSections.length > 1" class="sections">
       <button
-        v-for="s in visibleSections"
-        :key="s.id"
+        v-for="group in groups"
+        :key="group"
         type="button"
         class="sec"
-        :class="{ on: s.id === section?.id }"
-        @click="choose(s)"
+        :class="{ on: group === activeGroup }"
+        @click="chooseGroup(group)"
       >
-        {{ s.title }}
+        {{ group }}
+      </button>
+    </div>
+    <div v-if="hasSubsections" class="sections subsections" aria-label="二级栏目">
+      <button v-for="s in groupSections" :key="s.id" type="button" class="sec" :class="{ on: s.id === section?.id }" @click="choose(s)">
+        {{ subsectionTitle(s) }}
       </button>
     </div>
 
@@ -230,6 +245,7 @@ onBeforeUnmount(() => io?.disconnect())
 .lbar span { display: block; height: 100%; background: var(--orange); }
 .la { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 700; color: var(--orange-text); flex-shrink: 0; }
 .sections { display: flex; gap: 4px; flex-wrap: wrap; margin-top: -8px; }
+.subsections { max-height: 140px; overflow-y: auto; padding: 6px 0; border-top: 1px solid var(--line); }
 .sec { height: 32px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; font-size: 14px; color: var(--ink-2); cursor: pointer; }
 .sec:hover { background: var(--paper-2); }
 .sec.on { background: var(--paper-2); color: var(--ink); font-weight: 700; box-shadow: inset 0 -2px 0 var(--orange); }

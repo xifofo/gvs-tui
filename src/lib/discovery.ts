@@ -2,6 +2,7 @@ import { supportsBrowse } from './providers.ts'
 import { errorCode } from './user-message.ts'
 import type { Row } from '../types'
 import { mediaKindFromMetadata } from './media-kind'
+import { cardTarget } from './card-target'
 export type Section = {
   id: string
   title: string
@@ -66,7 +67,7 @@ export function discoveryRows(
     const i = obj(v),
       meta = obj(i.meta),
       title = str(i.title || i.name || meta.title),
-      id = str(
+      fallbackID = str(
         i.seriesId ||
           i.showId ||
           i.cid ||
@@ -77,15 +78,11 @@ export function discoveryRows(
       )
     const kind = str(i.kind || meta.kind)
     if (!title || /advert|广告|trailer|预告/.test(kind)) return []
+    let target = cardTarget(provider, i)
+    const id = target.id || fallbackID
     const key = id && !id.includes('://') ? id : title
     if (seen.has(key)) return []
     seen.add(key)
-    let target = obj(i.target || meta.target)
-    if (!target.type)
-      target =
-        id && !id.includes('://')
-          ? { type: 'detail', id }
-          : { type: 'search', query: title }
     if (
       data.contentType === 'reservation' ||
       kind === 'reservation' ||
