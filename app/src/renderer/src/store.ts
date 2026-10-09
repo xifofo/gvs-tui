@@ -53,7 +53,7 @@ export const store = reactive({
   probing: false,
   probeError: '',
 
-  qr: null as null | 'youku' | 'tencent',
+  qr: null as null | 'youku' | 'tencent' | 'iqcn',
   /** 打开着的确认框数量：Esc 返回时要避开 */
   dialogCount: 0,
   update: null as UpdateState | null,

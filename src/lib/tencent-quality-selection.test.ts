@@ -1,12 +1,27 @@
 import { expect, test } from 'bun:test'
 import { selectedTencentQuality, tencentDownloadSelection, tencentSelectedPlayInput } from './tencent-quality-selection.ts'
 import type { Quality } from '../types.ts'
+import { qualitiesFromTencentFormats, qualityCaptionText } from './quality.ts'
+import { pickTencentDownloadURL } from './media.ts'
+
+test('unknown subtitle display retains the soft probe for selection and queued downloads', () => {
+  const [quality] = qualitiesFromTencentFormats([{ name: 'fhd', id: '3', caption_probe: '软' }])
+  expect(quality!.caption).toBeUndefined()
+  expect(qualityCaptionText(quality!.caption)).toBe('')
+  expect(tencentSelectedPlayInput(quality!)).toEqual({ defn: 'fhd', caption: 'soft', format_id: '3' })
+  const task = JSON.parse(JSON.stringify({ quality: quality!.stream, tencentQuality: selectedTencentQuality(quality!) }))
+  expect(tencentSelectedPlayInput(task)).toEqual({ defn: 'fhd', caption: 'soft', format_id: '3' })
+  expect(pickTencentDownloadURL({ formats: [
+    { name: 'fhd', id: '3', caption_probe: '硬', url: 'https://example.invalid/hard' },
+    { name: 'fhd', id: '3', caption_probe: '软', url: 'https://example.invalid/soft' },
+  ] }, { stream: 'fhd', formatId: '3', caption: 'soft' })).toBe('https://example.invalid/soft')
+})
 
 const q: Quality = { id: 'suhd|hard|322157|2741517771455_硬', stream: 'suhd', caption: 'hard', formatId: '322157', persona: '2741517771455_硬', group: 'encode', label: '臻彩MAX · HEVC·A', title: 'suhd', width: 3840, height: 1636, size: 1128670539, codec: '4', drm: '' }
 
 test('selected HEVC identity survives persistence while play uses compatible parameters', () => {
   const task = JSON.parse(JSON.stringify({ quality: q.stream, caption: q.caption, group: 'WF', tencentQuality: selectedTencentQuality(q) }))
-  expect(task.tencentQuality).toEqual({ formatId: '322157', persona: '2741517771455_硬', group: 'encode', width: 3840, height: 1636 })
+  expect(task.tencentQuality).toEqual({ formatId: '322157', persona: '2741517771455_硬', captionProbe: 'hard', group: 'encode', width: 3840, height: 1636 })
   expect(tencentSelectedPlayInput(task)).toEqual({ defn: 'suhd', caption: 'hard', format_id: '322157', rendition_persona: '2741517771455_硬' })
   expect(tencentDownloadSelection(task)).toEqual({ stream: 'suhd', caption: 'hard', formatId: '322157' })
   expect(tencentSelectedPlayInput(task).encode).toBeUndefined()

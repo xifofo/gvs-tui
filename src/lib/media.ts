@@ -93,6 +93,7 @@ export function referer(p: string): string {
     case 'tencent': return 'https://v.qq.com/'
     case 'youku': return 'https://www.youku.com/'
     case 'douyin': return 'https://www.douyin.com/'
+    case 'iqcn': return 'https://www.iqiyi.com/'
     case 'huangguo': return 'https://huangguoai.com/'
     default: return ''
   }
@@ -197,7 +198,7 @@ export function pickTencentDownload(
       let score = 0
       const name = asString(raw.name).toLowerCase()
       const defn = asString(raw.defn).toLowerCase()
-      const cap = asString(raw.caption).toLowerCase()
+      const cap = (asString(raw.caption_probe) || asString(raw.caption)).toLowerCase()
       const id = asString(raw.id)
       // A caption match alone must never select a different requested format.
       if (wantId && id !== wantId) continue
@@ -1511,15 +1512,19 @@ export async function youkuAudioURLs(data: Record<string, unknown>, want: string
 
 /** Resolve the requested row, or the actual fallback video, once for URL and delivery. */
 function youkuVideoSelection(data: Record<string, unknown>, want: string): { playlist: string; streamType: string } {
+  const [streamType = '', source = ''] = want.split('|')
   if (want && Array.isArray(data.streams)) {
     for (const s of data.streams) {
       if (!isObj(s)) continue
-      if (asString(s.stream_type) !== want) continue
+      if (asString(s.stream_type) !== streamType) continue
+      if (source && asString(s.source) !== source) continue
       if (asString(s.media_type).toLowerCase() === 'audio') continue
       const u = asString(s.playlist_url)
       if (u) return { playlist: u, streamType: asString(s.stream_type) }
     }
   }
+  // A source-qualified selection must not silently become another lane.
+  if (source) throw new Error('优酷所选来源端没有返回对应档位，请重新取流或选择可用档位')
   if (isObj(data.video)) {
     const playlist = asString(data.video.playlist_url) || asString(data.video.url)
     const streamType = asString(data.video.stream_type)

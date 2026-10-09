@@ -100,7 +100,7 @@ export type SearchResult = { query: string; groups: SearchGroup[]; ms: number }
 export type LinkTarget =
   | { kind: 'youku'; vid: string }
   | { kind: 'tencent'; cid: string; vid: string; url: string }
-  | { kind: 'mewatch' | 'hamivideo' | 'iq'; url: string }
+  | { kind: 'mewatch' | 'hamivideo' | 'iq' | 'iqcn'; url: string }
   | { kind: 'none' }
 
 export type EpisodeView = {
@@ -268,6 +268,8 @@ export interface GvsApi {
   /** 选文件夹；start 为对话框初始位置（缺省下载目录） */
   chooseDir(start?: string): Promise<string>
   youkuQrStart(): Promise<QRStart>
+  iqcnQrStart(): Promise<QRStart>
+  iqcnQrPoll(): Promise<QRPoll>
   youkuQrPoll(): Promise<QRPoll>
   youkuRenew(): Promise<string>
   tencentQrStart(): Promise<QRStart>

@@ -30,7 +30,7 @@ export type Episode = {
 }
 export type TMDBHit = { id: number; name: string; title: string; year: number; overview?: string; kind: 'movie' | 'show' }
 /** Tencent rendition identity; separate from the release-group suffix in file names. */
-export type TencentQualitySelection = { formatId?: string; persona?: string; group?: 'main' | 'encode' | 'source'; width?: number; height?: number; fps?: number; hdr?: string }
+export type TencentQualitySelection = { formatId?: string; persona?: string; captionProbe?: string; group?: 'main' | 'encode' | 'source'; width?: number; height?: number; fps?: number; hdr?: string }
 export type Quality = {
   id: string
   label: string

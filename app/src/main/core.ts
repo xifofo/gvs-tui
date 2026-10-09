@@ -30,7 +30,7 @@ import {
   type DlTask,
   type JobEvt,
 } from '@tui/jobs.ts'
-import { extractTencentLinks, extractYoukuVideoId, extractIQLink } from '@tui/link.ts'
+import { extractTencentLinks, extractYoukuVideoId, extractIQLink, extractIQCNLink } from '@tui/link.ts'
 import { youkuSpokenLangKey } from '@tui/media.ts'
 import { completedFilename, filename, folder, tierHeight, dots } from '@tui/name.ts'
 import { usesMeasuredNaming } from '@tui/completed-naming.ts'
@@ -301,7 +301,7 @@ export class Core {
   private readonly hub: JobHub
   private probeToken = 0
   private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[] }>()
-  private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | null = null
+  private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | null = null
 
   constructor(private readonly emit: Emit) {
     this.hub = new JobHub((e) => this.onJob(e))
@@ -542,6 +542,7 @@ export class Core {
     if (this.has('tencent')) void this.refreshTencent()
     if (this.has('douyin')) void this.probeDouyin()
     this.checkIQOnConnect()
+    if (this.has('iqcn')) void this.providerSession({ provider: 'iqcn', op: 'status' }).catch(() => {})
     if (this.has('hamivideo')) void this.providerSession({ provider: 'hamivideo', op: 'status' }).catch(() => {})
   }
 
@@ -697,6 +698,10 @@ export class Core {
         const risk = account.state === 'risk_verification_required'
         const short = account.authenticated ? '已登录' : risk ? '需验证' : account.webAuthenticated ? 'Web 已登录' : '未登录'
         return { provider:p, short, summary:account.summary, tone:account.authenticated?'ok':'warn' }
+      }
+      if (p === 'iqcn') {
+        const account = this.providerAccounts.get(p)
+        return { provider:p, short:account?.authenticated?'已登录':'待登录', summary:account?.summary || '到平台账号设置扫码登录爱奇艺国内版', tone:account?.authenticated?'ok':'muted' }
       }
       if (isManifestProvider(p)) {
         const account = this.providerAccounts.get(p + (p === 'hamivideo' ? ':' + (this.cfg.hamiClient || 'tv') : ''))
@@ -916,7 +921,23 @@ export class Core {
     return { done: false, message: '等待扫码…', tone: 'muted' }
   }
 
-  qrCancel(): void {
+  async iqcnQrStart(): Promise<QRStart> {
+    const view = await this.providerSession({ provider: 'iqcn', op: 'start' })
+    if (!view.url) throw new Error('网关没有返回爱奇艺二维码')
+    this.qr = { kind: 'iqcn' }
+    const image = await QRCode.toDataURL(view.url, { margin: 1, width: 420, errorCorrectionLevel: 'M' })
+    return { images: [{ title: '爱奇艺 App 扫码', image }], hint: view.summary }
+  }
+
+  async iqcnQrPoll(): Promise<QRPoll> {
+    if (this.qr?.kind !== 'iqcn') return { done: false, message: '二维码已失效，请刷新', tone: 'warn' }
+    const view = await this.providerSession({ provider: 'iqcn', op: 'poll' })
+    if (view.authenticated) this.qr = null
+    return { done: view.authenticated, message: view.summary, tone: view.authenticated ? 'ok' : ['expired', 'denied'].includes(view.state) ? 'warn' : 'muted' }
+  }
+
+  async qrCancel(): Promise<void> {
+    if (this.qr?.kind === 'iqcn') await this.providerSession({ provider: 'iqcn', op: 'cancel' }).catch(() => undefined)
     this.qr = null
   }
 
@@ -998,6 +1019,8 @@ export class Core {
   }
 
   parseLink(text: string): LinkTarget {
+    const cnLink = extractIQCNLink(text)
+    if (cnLink) return { kind: 'iqcn', url: cnLink }
     const iqLink = extractIQLink(text)
     if (iqLink) return { kind: 'iq', url: iqLink }
     const manifest = providerLink(text)
@@ -1040,11 +1063,13 @@ export class Core {
     const eps = parseEps(data)
     // 有些老片/短剧详情接口不给海报和片名，卡片上其实已经有，拿它兜底。
     const view = buildDetail(provider, id, data, '', eps, hint)
+    if (provider === 'iqcn') view.focusVid = asString(data.focusVid) || undefined
     await this.applyMovieEditions(view, data)
     return view
   }
 
   async detailFromLink(link: LinkTarget, hint?: DetailHint): Promise<DetailView> {
+    if (link.kind === 'iqcn') return this.detail('iqcn', link.url, hint)
     if (link.kind === 'iq') return this.detail('iq', link.url, hint)
     if (link.kind === 'mewatch' || link.kind === 'hamivideo') return this.detail(link.kind, link.url, hint)
     if (link.kind === 'youku') {

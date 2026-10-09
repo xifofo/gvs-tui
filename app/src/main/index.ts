@@ -89,6 +89,8 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
     return r.canceled ? '' : (r.filePaths[0] ?? '')
   },
   youkuQrStart: () => core.youkuQrStart(),
+  iqcnQrStart: () => core.iqcnQrStart(),
+  iqcnQrPoll: () => core.iqcnQrPoll(),
   youkuQrPoll: () => core.youkuQrPoll(),
   youkuRenew: () => core.youkuRenew(),
   tencentQrStart: () => core.tencentQrStart(),

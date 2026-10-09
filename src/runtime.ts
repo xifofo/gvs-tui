@@ -60,7 +60,7 @@ import {
 } from './lib/youku-session.ts'
 import { normalizeTmdbProxy, tmdbSearch, tmdbSeasons } from './lib/tmdb.ts'
 import { mediaKindFromMetadata, movieEdition, type TitleKind } from './lib/media-kind.ts'
-import { clipTitle, extractDouyinURL, extractTencentLinks, extractYoukuVideoId, extractIQLink } from './lib/link.ts'
+import { clipTitle, extractDouyinURL, extractTencentLinks, extractYoukuVideoId, extractIQLink, extractIQCNLink } from './lib/link.ts'
 import { pickDouyinURL, pickURL, tencentPlayProbeOk } from './lib/media.ts'
 import {
   installRunLogProcessHooks,
@@ -203,6 +203,7 @@ export class Runtime {
   private qrAscii = ''
   private qrPngPaths: string[] = []
   private qrTencent: TencentMode | null = null
+  private qrIQCN = false
   /** When true, qr scene polls App+TV in parallel. */
   private qrTencentDual = false
   private qrDualDone = { app: false, tv: false }
@@ -547,9 +548,9 @@ export class Runtime {
 
   private homeItems(): string[] {
     const items: string[] = []
-    if (this.has('douyin') || this.has('youku') || this.has('tencent')) items.push('粘贴链接')
+    if (this.has('douyin') || this.has('youku') || this.has('tencent') || this.has('iqcn')) items.push('粘贴链接')
     items.push('搜索')
-    if (this.has('hongguo') || this.has('huangguo') || this.has('youku') || this.has('tencent'))
+    if (this.has('hongguo') || this.has('huangguo') || this.has('youku') || this.has('tencent') || this.has('iqcn'))
       items.push('榜单')
     items.push('任务', '设置')
     return items
@@ -570,6 +571,7 @@ export class Runtime {
     if (this.has('huangguo')) f.push('黄果 NFO', '黄果封装')
     if (this.has('douyin')) f.push('抖音 Cookie')
     if (this.has('iq')) f.push('IQ 账号密码登录', 'IQ Web Cookie换TV', 'IQ 账号状态', 'IQ 换TV', 'IQ 检查授权', 'IQ 退出', 'IQ Cookie', 'IQ 设备资料')
+    if (this.has('iqcn')) f.push('爱奇艺国内版扫码', '爱奇艺国内版状态', '爱奇艺国内版退出')
     if (this.has('mewatch')) f.push('mewatch 激活', 'mewatch 检查授权', 'mewatch 状态', 'mewatch profiles', 'mewatch profile', 'mewatch 退出')
     if (this.has('hamivideo')) f.push('Hami 会话类型', 'Hami TV Cookie', 'Hami TV 续期', 'Hami Web 准备', 'Hami 手机号（确认发码）', 'Hami 短信码', 'Hami 状态', 'Hami 退出')
     if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯诊断日志')
@@ -578,6 +580,7 @@ export class Runtime {
   }
 
   private settingValue(f: string): string {
+    if (f.startsWith('爱奇艺国内版')) return '回车操作 · 会话由网关保存'
     if (f.startsWith('IQ ') && !['IQ Cookie', 'IQ 设备资料'].includes(f)) return '回车操作 · 密码仅本次提交'
     if (f === 'IQ Cookie') return this.cfg.iqCookie ? '已保存 · 独立音轨会话' : '回车粘贴本人 IQ 会话'
     if (f === 'IQ 设备资料') return this.cfg.iqProfile ? '已保存' : '网关已配置设备证书时可留空；或粘贴设备资料 JSON'
@@ -1216,7 +1219,7 @@ export class Runtime {
     }
   }
   private switchPlatform(slot: number): void {
-    const p = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin'][slot]
+    const p = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'iqcn'][slot]
     if (!p) return
     if (!this.has(p)) {
       this.say('当前 Key 没有这个平台权限', 'warn')
@@ -1396,6 +1399,8 @@ export class Runtime {
     }
     const manifest = providerLink(query)
     const iqLink = extractIQLink(query)
+    const iqcnLink = extractIQCNLink(query)
+    if (iqcnLink) { if (!this.has('iqcn')) { this.say('当前 Key 没有爱奇艺国内版权限', 'warn'); return }; void this.detail('iqcn', iqcnLink); return }
     if (iqLink) { if (!this.has('iq')) { this.say('当前 Key 没有 IQ 海外版权限', 'warn'); return }; void this.detail('iq', iqLink); return }
     if (manifest) { if (!this.has(manifest.provider)) { this.say('当前 Key 没有该平台权限', 'warn'); return }; void this.detail(manifest.provider, manifest.url); return }
     if (!supportsSearch(p)) { void this.detail(p, query); return }
@@ -1802,6 +1807,7 @@ export class Runtime {
     if (f === '腾讯观测绑定') { this.cfg.tencentObservations = !this.cfg.tencentObservations; this.persistConfig(); this.emit(); return }
     if (f === 'Hami 会话类型') { this.cfg.hamiClient = this.cfg.hamiClient === 'web' ? 'tv' : 'web'; this.persistConfig(); this.emit(); return }
     const loginCommands: Record<string, SessionCommand> = {
+      '爱奇艺国内版扫码': {provider:'iqcn',op:'start'}, '爱奇艺国内版状态': {provider:'iqcn',op:'status'}, '爱奇艺国内版退出': {provider:'iqcn',op:'logout'},
       'IQ 账号状态': {provider:'iq',op:'status'}, 'IQ 换TV': {provider:'iq',op:'exchange_tv'}, 'IQ 检查授权': {provider:'iq',op:'poll'}, 'IQ 退出': {provider:'iq',op:'logout'},
       'mewatch profiles': {provider:'mewatch',op:'profiles'}, 'Hami TV 续期': {provider:'hamivideo',op:'refresh'},
       'mewatch 激活': {provider:'mewatch',op:'start'}, 'mewatch 检查授权': {provider:'mewatch',op:'poll'}, 'mewatch 状态': {provider:'mewatch',op:'status'}, 'mewatch 退出': {provider:'mewatch',op:'logout'},
@@ -2027,6 +2033,16 @@ export class Runtime {
         if (command.op === 'start') { this.cancelQRScene(); this.mewatchQR = true; this.scene = 'qr'; this.qrAscii = await QRCode.toString(view.url, { type: 'terminal', small: true }) }
         if (this.mewatchQR) this.qrHint = `mewatch 官方激活页 · 代码 ${view.userCode || ''} · 回车检查（至少 ${view.interval || 5}s）`
       } else if (command.provider === 'mewatch' && this.mewatchQR) { this.cancelQRScene(); this.scene = 'settings' }
+      if (command.provider === 'iqcn') {
+        if (command.op === 'start' && view.url) {
+          this.cancelQRScene(); this.qrIQCN = true; this.scene = 'qr'
+          this.qrAscii = await QRCode.toString(view.url, { type: 'terminal', small: true })
+          this.qrHint = '用爱奇艺 App 扫码并确认登录'
+          this.startQRPoll()
+        } else if (this.qrIQCN && (view.authenticated || ['expired', 'denied'].includes(view.state))) {
+          this.cancelQRScene(); this.scene = 'settings'
+        }
+      }
       this.say(view.summary + (view.profiles?.length ? ' · ' + view.profiles.map(p => p.id + ':' + p.name).join(' / ') : '') + (view.url && this.scene !== 'qr' ? ' · ' + view.url : ''), view.authenticated ? 'ok' : 'info')
     } catch (e) { this.say(e instanceof Error ? e.message : '账号操作失败', 'err') }
     finally { this.providerLoginBusy = false; this.emit() }
@@ -2859,6 +2875,7 @@ export class Runtime {
       this.detailProv = provider
       this.detailId = trimmed
       this.detailTitle = asString(data.title)
+      if (provider === 'iqcn' && !focusVid) focusVid = asString(data.focusVid)
       this.episodeCatalog = parseEps(data)
       this.episodeGroup = this.episodeCatalog.find(e => e.vid === focusVid)?.collection ?? episodeCollections(this.episodeCatalog)[0] ?? ''
       this.eps = this.episodeGroup ? this.episodeCatalog.filter(e => e.collection === this.episodeGroup) : this.episodeCatalog
@@ -2950,6 +2967,7 @@ export class Runtime {
   }
 
   private cancelQRScene(): void {
+    this.qrIQCN = false
     this.providerLoginGeneration++
     this.mewatchQR = false
     this.stopQR()
@@ -2962,6 +2980,7 @@ export class Runtime {
 
   private async pollQR(): Promise<void> {
     if (this.scene !== 'qr' || !this.cli || this.qrBusy) return
+    if (this.qrIQCN) { await this.providerLogin({provider:'iqcn',op:'poll'}); return }
     if (this.mewatchQR) { await this.providerLogin({provider:'mewatch',op:'poll'}); return }
     if (!this.qrTencentDual && !this.qrTencent && !this.qrTicket && !this.qrLoginToken) return
     this.qrBusy = true

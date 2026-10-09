@@ -7,7 +7,7 @@ import { providerName } from '../lib/theme.ts'
 import type { StyledText } from 'vue-termui'
 
 /** Fixed order of the platform tabs; the digit prefix is part of the label. */
-export const PLATFORM_ORDER = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin'] as const
+export const PLATFORM_ORDER = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'iqcn'] as const
 
 /**
  * `1 优酷  2 腾讯 …`, plus `推荐 / 榜单` when the screen has both modes.

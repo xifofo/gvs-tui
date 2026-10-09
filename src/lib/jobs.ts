@@ -28,6 +28,7 @@ import type { Job, TencentQualitySelection } from '../types.ts'
 import { tencentDownloadSelection } from './tencent-quality-selection.ts'
 import { moveFileSync } from './file-move.ts'
 import { downloadIQ } from './iq.ts'
+import { downloadIQCN } from './iqcn.ts'
 import { runLog } from './runlog.ts'
 import { prepareAudioLanguage } from './audio-language.ts'
 import type { TmdbDetails } from './tmdb.ts'
@@ -359,6 +360,9 @@ async function runTask(
     if (n.container === 'mkv' && !mkvmerge) throw new Error('没有 mkvmerge')
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
+      case 'iqcn':
+        await downloadIQCN(cli, t, out, work, emit, signal)
+        break
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
         break
@@ -1164,6 +1168,12 @@ async function playYouku(cli: GwClient, cfg: FileConfig, t: DlTask, vid = t.vid)
   // RE/relay reads the selected playlist; expanding every track here fetches
   // unused playlists and adds latency to every signed-URL refresh.
   const input: Record<string, unknown> = { vid, expand: '0', tier: t.quality ? 'multi' : 'single', nocache: '1' }
+  const lane = (t.quality || '').split('|')[1]
+  if (lane) {
+    input.lane = lane
+    input.tier = 'single'
+    input.lanes = '0'
+  }
   return cli.invoke('youku', 'play', input, cli.extra(cfg, 'youku'))
 }
 

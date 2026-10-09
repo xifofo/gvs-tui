@@ -33,6 +33,7 @@ export function sourceTag(provider: string): string {
     case 'hongguo': return 'HG'
     case 'huangguo': return 'HGO'
     case 'douyin': return 'DY'
+    case 'iqcn': return 'IQ'
     case 'mewatch': return 'MEWATCH'
     case 'hamivideo': return 'HAMI'
     default: return provider ? provider.slice(0, 3).toUpperCase() : 'WEB'
