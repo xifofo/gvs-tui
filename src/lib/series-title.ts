@@ -31,3 +31,23 @@ export function parseSeriesTitle(value: string): SeriesTitle {
 export function seriesSeason(season: number | undefined, title: string): number {
   return season !== undefined && Number.isSafeInteger(season) && season >= 0 ? season : parseSeriesTitle(title).season ?? 1
 }
+
+/** Search the full title first. Non-numeric season labels are only a fallback,
+ * and never imply a season number or change an unmatched output title. */
+export function tmdbTitleQueries(value: string): string[] {
+  const title = parseSeriesTitle(value).title
+  const normalized = title.normalize('NFKC')
+  const match = normalized.match(/(?:[\s·•:：\-–—]+|\s*[(\[【]\s*)(?:最终季|最終季|完结季|完結季|final\s+season)\s*[)\]】]?$/i)
+  const base = match?.index === undefined ? '' : normalized.slice(0, match.index).trim()
+  return base ? [title, base] : [title]
+}
+
+/** An explicit TMDB season only changes output numbering, never stream IDs. */
+export function tmdbSeasonOverride(season: number | undefined, match: { id: number; kind: 'movie' | 'show' } | null): number | undefined {
+  if (season === undefined) return undefined
+  if (!match || match.kind !== 'show' || !Number.isSafeInteger(match.id) || match.id <= 0)
+    throw new Error('请先绑定 TMDB 剧集，再选择输出季号')
+  if (!Number.isSafeInteger(season) || season < 0 || season > 999)
+    throw new Error('无效的 TMDB 季号')
+  return season
+}

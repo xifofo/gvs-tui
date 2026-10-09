@@ -1,3 +1,5 @@
+import type { TmdbSeason } from './lib/tmdb-types'
+
 export type Job = { id: number; title: string; status: string; pct: number; log: string; err: string; note?: string; phase?: string }
 export type Row = {
   title: string
@@ -150,6 +152,8 @@ export type Snapshot = {
   tmdbHits?: TMDBHit[]
   tmdbState?: 'idle' | 'loading' | 'ready' | 'error'
   tmdbError?: string
+  tmdbSeasonPicker?: { title: string; seasons: TmdbSeason[]; state: 'loading' | 'ready' | 'error'; error: string; warning?: string }
+  canSelectTmdbSeason?: boolean
   jobs?: Job[]
   settings?: { label: string; value: string }[]
   detail?: Detail

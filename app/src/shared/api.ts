@@ -168,6 +168,8 @@ export type ProbeResult = {
 }
 
 export type TmdbHit = { id: number; name: string; title: string; year: number; overview: string; kind: 'movie' | 'show' }
+export type { TmdbSeason, TmdbSeasonList } from '../../../src/lib/tmdb-types'
+import type { TmdbSeasonList } from '../../../src/lib/tmdb-types'
 
 export type EnqueueRequest = {
   token: number
@@ -178,6 +180,8 @@ export type EnqueueRequest = {
   /** 默认播放的已选音轨；省略时按 DTS、杜比 / 全景声、AAC 顺序自动选择。 */
   defaultAudioId?: string
   tmdb: TmdbHit | null
+  /** Explicit season from the matched TMDB show's list; episode IDs/numbers stay unchanged. */
+  tmdbSeason?: number
 }
 
 export type JobView = {
@@ -242,6 +246,7 @@ export interface GvsApi {
   probe(provider: Provider, episodes: EpisodeView[]): Promise<ProbeResult>
   namingPreview(req: EnqueueRequest): Promise<NamingPreview>
   tmdbSearch(title: string, tv: boolean): Promise<TmdbHit[]>
+  tmdbSeasons(id: number): Promise<TmdbSeasonList>
   enqueue(req: EnqueueRequest): Promise<number>
   jobs(): Promise<JobView[]>
   retryJob(id: number): Promise<void>

@@ -39,9 +39,9 @@ import { selectedTencentQuality } from '@tui/tencent-quality-selection.ts'
 import { runLog } from '@tui/runlog.ts'
 import { applyTencentLogin, pollTencentDualQR, tencentTVLoginInput } from '@tui/tencent-qr.ts'
 import { fetchTencentAccount, txAccountSummary, type TxAccount } from '@tui/tencent-account.ts'
-import { tmdbSearch } from '@tui/tmdb.ts'
+import { tmdbSearch, tmdbSeasons } from '@tui/tmdb.ts'
 import { mediaKindFromMetadata, movieEdition } from '@tui/media-kind.ts'
-import { parseSeriesTitle, seriesSeason } from '@tui/series-title.ts'
+import { parseSeriesTitle, seriesSeason, tmdbSeasonOverride } from '@tui/series-title.ts'
 import { ensureTools, lookBundledFFmpeg, lookMP4Box, lookMkvmerge, lookM3u8dl } from '@tui/tools.ts'
 import { runTunnel } from '@tui/tunnel.ts'
 import { anyInt, asString, isObj } from '@tui/util.ts'
@@ -1184,12 +1184,16 @@ export class Core {
 
   async tmdbSearch(title: string, tv: boolean): Promise<TmdbHit[]> {
     if (!this.cfg.tmdbKey.trim()) return []
-    const hits = await tmdbSearch(this.cfg.tmdbKey, this.cfg.tmdbLang, title)
+    const hits = await tmdbSearch(this.cfg.tmdbKey, this.cfg.tmdbLang, title, { proxy: this.cfg.tmdbProxy })
     // Prefer the platform's type, but keep the other type: incomplete metadata
     // must not hide an exact movie match as if TMDB had no record.
     const preferred = tv ? 'show' : 'movie'
     return hits.sort((a, b) => Number(b.kind === preferred) - Number(a.kind === preferred))
       .map((h) => ({ id: h.id, name: h.name || h.title, title: h.title, year: h.year, overview: h.overview ?? '', kind: h.kind }))
+  }
+
+  async tmdbSeasons(id: number) {
+    return tmdbSeasons(this.cfg.tmdbKey, this.cfg.tmdbLang, id, { proxy: this.cfg.tmdbProxy })
   }
 
   // ---------------------------------------------------------------- 入队
@@ -1201,6 +1205,7 @@ export class Core {
     const q = probe.qualities[req.quality]
     if (!q) throw new Error('请选择画质')
     const movie = (req.tmdb?.kind ?? req.detail.kind) === 'movie'
+    const season = tmdbSeasonOverride(req.tmdbSeason, req.tmdb)
     // 与 TUI 一致：这一档自带音轨就用它的，否则用探测到的整体音轨（优酷各档都不单独带）
     const pool = q.audios?.length ? q.audios : probe.audios
     const tracks = selectAudioTracks(pool, req.audioIds, req.defaultAudioId)
@@ -1213,7 +1218,7 @@ export class Core {
         title: ep.title,
         series: movie ? req.detail.title : parseSeriesTitle(req.detail.title).title,
         vid: ep.vid,
-        season: movie ? 0 : seriesSeason(ep.season, req.detail.title),
+        season: movie ? 0 : season ?? seriesSeason(ep.season, req.detail.title),
         episode: movie ? 0 : ep.number || i + 1,
         collection: ep.collection,
         duration: ep.duration,

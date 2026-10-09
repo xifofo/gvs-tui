@@ -262,6 +262,8 @@ const metaText = computed(() => {
         ? `${resultView.value.first}-${resultView.value.last} / ${resultView.value.total}${state.value.listMore ? '+' : ''}`
         : ''
     case 'tmdb':
+      if (state.value.tmdbSeasonPicker) return state.value.tmdbSeasonPicker.state === 'ready'
+        ? `${state.value.cursor + 1} / ${state.value.tmdbSeasonPicker.seasons.length + 1}` : ''
       return tmdbView.value.total
         ? `${tmdbView.value.first}-${tmdbView.value.last} / ${tmdbView.value.total}`
         : ''
@@ -322,11 +324,18 @@ const statusLeftW = computed(() =>
 
 const hints = computed((): Array<[string, string]> => {
   if (state.value.scene === 'tmdb') {
+    if (state.value.tmdbSeasonPicker) return state.value.tmdbSeasonPicker.state === 'loading'
+      ? [['esc', '保留编号']]
+      : state.value.tmdbSeasonPicker.state === 'error' ? [['r', '重试'], ['esc', '保留编号']]
+      : state.value.tmdbSeasonPicker.warning ? [['↑↓', '选择季号'], ['⏎', '采用'], ['r', '重试'], ['esc', '保留编号']]
+      : [['↑↓', '选择季号'], ['⏎', '采用'], ['esc', '保留编号']]
     if (state.value.tmdbState === 'loading' || (state.value.busy && !state.value.tmdbHits?.length))
       return [['s', '跳过'], ['esc', '返回画质']]
     if (state.value.tmdbState === 'error' || !state.value.tmdbHits?.length)
       return [['r', '重试'], ['s', '跳过'], ['esc', '返回画质']]
   }
+  if (state.value.scene === 'confirm' && state.value.canSelectTmdbSeason)
+    return [['⏎', '加入队列'], ['t', 'TMDB 季号'], ['o', '改目录'], ['esc', '返回画质']]
   if (state.value.scene === 'quality' && !audios.value.length)
     return [
       ['⏎', '继续'],

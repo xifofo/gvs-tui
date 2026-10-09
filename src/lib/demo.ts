@@ -225,6 +225,27 @@ export function demoSnapshot(scene: string, cursor = 0): Snapshot {
       return { ...s, scene: 'tmdb', detailTitle: '现在就出发 第3季', tmdbState: 'ready', status: '' }
     case 'tmdb-error':
       return { ...s, scene: 'tmdb', detailTitle: '现在就出发 第3季', tmdbState: 'error', tmdbError: '连接超时，请检查 TMDB 代理设置', status: '' }
+    case 'tmdb-seasons':
+    case 'tmdb-seasons-loading':
+    case 'tmdb-seasons-error':
+      return { ...s, scene: 'tmdb', detailTitle: '诛仙 最终季', cursor, status: '', tmdbSeasonPicker: {
+        title: '诛仙', state: scene === 'tmdb-seasons-loading' ? 'loading' : scene === 'tmdb-seasons-error' ? 'error' : 'ready',
+        error: scene === 'tmdb-seasons-error' ? '连接超时' : '', seasons: scene === 'tmdb-seasons' ? [
+          { number: 0, name: '特别篇', episodeCount: 2, airDate: '' },
+          { number: 1, name: '第 1 季', episodeCount: 26, airDate: '2022-08-02' },
+          { number: 4, name: '第 4 季', episodeCount: 26, airDate: '2026-08-21' },
+        ] : [],
+      } }
+    case 'tmdb-season-groups':
+    case 'tmdb-season-groups-warning':
+      return { ...s, scene: 'tmdb', detailTitle: '狐妖小红娘 黄风岭篇', cursor, status: '', tmdbSeasonPicker: {
+        title: '狐妖小红娘', state: 'ready', error: '', warning: scene === 'tmdb-season-groups-warning' ? '部分剧集分组读取失败' : '', seasons: [
+          { number: 0, name: '特别篇', episodeCount: 29, airDate: '' },
+          { number: 1, name: '第 1 季', episodeCount: 183, airDate: '2015-06-25' },
+          { number: 1, name: '下沙篇', episodeCount: 13, airDate: '2015-06-25', groupId: '67680070aff5a7d64174fbab', groupName: 'Seasons' },
+          { number: 13, name: '黄风岭篇', episodeCount: 16, airDate: '2026-09-11', groupId: '67680070aff5a7d64174fbab', groupName: 'Seasons' },
+        ],
+      } }
     case 'tmdb':
       return { ...s, scene, detailTitle: '斗破苍穹年番', tmdbState: 'ready', tmdbHits: TMDB, cursor, pendingCount: 12, status: '找到 3 个候选', statusKind: 'info' }
     case 'jobs':
@@ -254,5 +275,5 @@ export function demoSnapshot(scene: string, cursor = 0): Snapshot {
 }
 
 export const DEMO_SCENES = [
-  'workspace','workspace-long-title','workspace-loading','workspace-empty','workspace-error','workspace-no-access','filters','confirm','help','job-detail', 'setup', 'home', 'search', 'results', 'detail', 'detail-movie', 'detail-expanded', 'quality', 'quality-tencent', 'quality-audio', 'jobs-error', 'confirm-long', 'settings-advanced', 'settings-gateway', 'settings-account', 'tmdb-loading', 'tmdb-empty', 'tmdb-error', 'tmdb', 'jobs', 'settings', 'edit', 'qr',
+  'workspace','workspace-long-title','workspace-loading','workspace-empty','workspace-error','workspace-no-access','filters','confirm','help','job-detail', 'setup', 'home', 'search', 'results', 'detail', 'detail-movie', 'detail-expanded', 'quality', 'quality-tencent', 'quality-audio', 'jobs-error', 'confirm-long', 'settings-advanced', 'settings-gateway', 'settings-account', 'tmdb-loading', 'tmdb-empty', 'tmdb-error', 'tmdb-seasons', 'tmdb-seasons-loading', 'tmdb-seasons-error', 'tmdb', 'jobs', 'settings', 'edit', 'qr',
 ]

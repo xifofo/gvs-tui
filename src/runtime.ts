@@ -6,7 +6,7 @@ import { readTencentDiagnostics, tencentDiagnosticPath } from './lib/tencent-dia
 import { PROVIDER_IDS, supportsSearch, supportsTmdb, isManifestProvider } from './lib/providers.ts'
 import { needsTunnel } from './lib/tunnel-policy.ts'
 import { parseEpisodes as parseEps, episodeCollections } from './lib/episodes.ts'
-import { parseSeriesTitle, seriesSeason } from './lib/series-title.ts'
+import { parseSeriesTitle, seriesSeason, tmdbSeasonOverride } from './lib/series-title.ts'
 import { startTencentDualQR, pollTencentQR, pollTencentDualQR, applyTencentLogin, tencentLabels, tencentPlayInput, type TencentMode } from './lib/tencent-qr.ts'
 import { fetchTencentAccount, txAccountSummary, type TxAccount } from './lib/tencent-account.ts'
 import { Discovery, discoveryRows } from './lib/discovery'
@@ -58,7 +58,7 @@ import {
   type YkAccount,
   type YkLogin,
 } from './lib/youku-session.ts'
-import { normalizeTmdbProxy, tmdbSearch } from './lib/tmdb.ts'
+import { normalizeTmdbProxy, tmdbSearch, tmdbSeasons } from './lib/tmdb.ts'
 import { mediaKindFromMetadata, movieEdition, type TitleKind } from './lib/media-kind.ts'
 import { clipTitle, extractDouyinURL, extractTencentLinks, extractYoukuVideoId, extractIQLink } from './lib/link.ts'
 import { pickDouyinURL, pickURL, tencentPlayProbeOk } from './lib/media.ts'
@@ -173,6 +173,7 @@ export class Runtime {
   private tmdbState: NonNullable<Snapshot['tmdbState']> = 'idle'
   private tmdbError = ''
   private tmdbGeneration = 0
+  private tmdbSeasonPicker: Snapshot['tmdbSeasonPicker']
   private jobs: Job[] = []
   private readonly logs = new Map<number, string[]>()
   private readonly draft = new DownloadDraft()
@@ -411,6 +412,8 @@ export class Runtime {
           this.editField = '确认下载目录'
           this.editValue = this.cfg.outDir
           this.scene = 'edit'
+        } else if (k.toLowerCase() === 't') {
+          void this.selectTMDBSeason()
         } else {
           const total = confirmationLines(this.confirmation(), this.viewport.width - 2).length
           const room = viewMetrics(this.viewport.width, this.viewport.height).scrollRoom
@@ -769,6 +772,8 @@ export class Runtime {
       tmdbHits: this.tmdbHits,
       tmdbState: this.tmdbState === 'loading' && this.tmdbGeneration !== this.requestGeneration ? 'idle' : this.tmdbState,
       tmdbError: this.tmdbError,
+      tmdbSeasonPicker: this.scene === 'tmdb' ? this.tmdbSeasonPicker : undefined,
+      canSelectTmdbSeason: this.pending.length > 0 && this.pending.every(t => t.kind === 'show' && t.tmdbId > 0 && t.tmdbId === this.pending[0]?.tmdbId),
       // Publish immutable rows so Vue recomputes both the list and the selected detail pane on every event.
       jobs: this.jobs.map((job) => ({ ...job })),
       settings: this.settingFields().map((label) => ({
@@ -1634,6 +1639,31 @@ export class Runtime {
 
   private updateTMDB(k: string): void {
     k = k.toLowerCase()
+    const picker = this.tmdbSeasonPicker
+    if (picker) {
+      if (k === 'esc' || k === 's') {
+        this.requestGeneration++
+        this.searching = false
+        this.tmdbSeasonPicker = undefined
+        this.scene = 'confirm'
+      } else if (k === 'r' && !this.searching) {
+        void this.selectTMDBSeason()
+      } else if (picker.state === 'ready') {
+        const n = picker.seasons.length + 1 // first row keeps/restores platform numbering
+        if (['j', 'k', 'down', 'up', 'home', 'end', 'pageup', 'pagedown'].includes(k))
+          this.cursor = moveCursor(this.cursor, k === 'j' ? 'down' : k === 'k' ? 'up' : k, n, Math.max(1, this.viewport.height - 7))
+        else if (k === 'enter') {
+          const row = picker.seasons[this.cursor - 1]
+          for (const task of this.pending) task.season = row
+            ? tmdbSeasonOverride(row.number, { id: task.tmdbId, kind: 'show' })!
+            : seriesSeason(this.eps.find(ep => ep.vid === task.vid)?.season, this.detailTitle)
+          this.tmdbSeasonPicker = undefined
+          this.scene = 'confirm'
+          this.say(row ? `整批输出季号 S${String(row.number).padStart(2, '0')}，集号沿用平台` : '整批沿用平台季号', 'ok')
+        }
+      }
+      return
+    }
     if (k === 'r') {
       void this.matchTMDB()
       return
@@ -1668,7 +1698,40 @@ export class Runtime {
         if (h.name) t.series = h.name
       }
       this.scene = 'confirm'
-      this.say(`已匹配${h.kind === 'movie' ? '电影' : '剧集'}：${h.name || h.title}`, 'ok')
+      this.say(`已匹配${h.kind === 'movie' ? '电影' : '剧集'}：${h.name || h.title}${h.kind === 'show' ? ' · T 选择 TMDB 季号' : ''}`, 'ok')
+    }
+  }
+
+  private async selectTMDBSeason(): Promise<void> {
+    const first = this.pending[0]
+    if (this.searching || !first || first.kind !== 'show' || !first.tmdbId
+      || !this.pending.every(t => t.kind === 'show' && t.tmdbId === first.tmdbId)) return
+    const generation = this.requestGeneration
+    const picker: NonNullable<Snapshot['tmdbSeasonPicker']> = { title: first.series, seasons: [], state: 'loading', error: '' }
+    this.tmdbSeasonPicker = picker
+    this.scene = 'tmdb'
+    this.cursor = 0
+    this.searching = true
+    this.say('正在读取 TMDB 季列表… · Esc 保留当前编号')
+    this.emit()
+    try {
+      const result = await this.work(() => tmdbSeasons(this.cfg.tmdbKey, this.cfg.tmdbLang, first.tmdbId, { proxy: this.cfg.tmdbProxy }))
+      if (generation !== this.requestGeneration || this.tmdbSeasonPicker !== picker) return
+      const seasons = result.seasons
+      picker.seasons = seasons
+      picker.warning = result.warning
+      picker.state = 'ready'
+      this.say(result.warning || (seasons.length ? '选择整批输出季号，集号沿用平台 · Enter 采用 / Esc 保留当前编号' : 'TMDB 暂无季列表，可沿用平台编号'), result.warning || !seasons.length ? 'warn' : 'info')
+    } catch (e) {
+      if (generation !== this.requestGeneration || this.tmdbSeasonPicker !== picker) return
+      picker.state = 'error'
+      picker.error = e instanceof Error ? e.message : '读取季列表失败'
+      this.say(`${picker.error} · R 重试 / Esc 保留当前编号`, 'warn')
+    } finally {
+      if (generation === this.requestGeneration && this.tmdbSeasonPicker === picker) {
+        this.searching = false
+        this.emit()
+      }
     }
   }
 
@@ -2407,6 +2470,7 @@ export class Runtime {
     const generation = this.requestGeneration
     this.searching = true
     this.tmdbHits = []
+    this.tmdbSeasonPicker = undefined
     this.tmdbState = 'loading'
     this.tmdbError = ''
     this.tmdbGeneration = generation

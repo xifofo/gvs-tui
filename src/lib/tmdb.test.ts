@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { createTmdbDetails, createTmdbSearch, normalizeTmdbProxy } from './tmdb'
+import { createTmdbDetails, createTmdbSearch, createTmdbSeasons, normalizeTmdbProxy } from './tmdb'
 
 const results = [
   { id: 10, media_type: 'person', name: '演员' },
@@ -17,6 +17,67 @@ test('season-specific platform titles search TMDB by the series name', async () 
     expect((await search('key', 'zh-CN', title))[0]?.id).toBe(146339)
   }
   expect(queries).toEqual(Array(4).fill('大王饶命'))
+})
+
+test('an empty final-season search falls back to the base show, but an exact title is kept', async () => {
+  const queries: string[] = []
+  const search = createTmdbSearch(async url => {
+    const query = new URL(url).searchParams.get('query')!
+    queries.push(query)
+    return Response.json({ results: query === '诛仙' ? [{ id: 206484, media_type: 'tv', name: '诛仙' }] : [] })
+  })
+  expect((await search('key', 'zh-CN', '诛仙 最终季'))[0]?.id).toBe(206484)
+  expect(queries).toEqual(['诛仙 最终季', '诛仙'])
+  let calls = 0
+  const exact = createTmdbSearch(async () => { calls++; return Response.json({ results: [{ id: 12, media_type: 'tv', name: '某剧 最终季' }] }) })
+  expect((await exact('key', 'zh-CN', '某剧 最终季'))[0]?.name).toBe('某剧 最终季')
+  expect(calls).toBe(1)
+})
+
+test('TMDB seasons retain S00, validate rows, sort by number and share concurrent requests', async () => {
+  let calls = 0
+  const seasons = createTmdbSeasons(async (url, init) => {
+    calls++
+    const u = new URL(url)
+    if (u.pathname.endsWith('/episode_groups')) return Response.json({ id: 206484, results: [] })
+    expect(u.pathname).toBe('/3/tv/206484')
+    expect(u.searchParams.get('language')).toBe('zh-CN')
+    expect(init?.proxy).toBe('http://127.0.0.1:7897')
+    return Response.json({ id: 206484, seasons: [
+      { season_number: 4, name: '第 4 季', episode_count: 26, air_date: '2026-08-21' },
+      { season_number: 0, name: '特别篇', episode_count: 2, air_date: null },
+      { season_number: 1, episode_count: 26, air_date: 'bad' },
+      { season_number: 4, name: 'duplicate' }, { season_number: -1 }, { season_number: '2' }, { season_number: 2.5 }, null,
+    ] })
+  })
+  const opts = { proxy: 'http://127.0.0.1:7897' }
+  const [a, b] = await Promise.all([seasons('key', 'zh-CN', 206484, opts), seasons('key', 'zh-CN', 206484, opts)])
+  expect(a).toEqual({ seasons: [
+    { number: 0, name: '特别篇', episodeCount: 2, airDate: '' },
+    { number: 1, name: '第 1 季', episodeCount: 26, airDate: '' },
+    { number: 4, name: '第 4 季', episodeCount: 26, airDate: '2026-08-21' },
+  ], warning: '' })
+  expect(a).toEqual(b)
+  await seasons('key', 'zh-CN', 206484, opts)
+  expect(calls).toBe(2)
+})
+
+test('season cache is scoped to show, language and proxy; failed responses can be retried', async () => {
+  const calls: string[] = []
+  const seasons = createTmdbSeasons(async (url, init) => {
+    const u = new URL(url)
+    if (u.pathname.endsWith('/episode_groups')) return Response.json({ id: Number(u.pathname.split('/').at(-2)), results: [] })
+    calls.push(`${u.pathname}:${u.searchParams.get('language')}:${init?.proxy || ''}`)
+    if (calls.length <= 2) throw new Error(`private ${url}`)
+    return Response.json({ id: Number(u.pathname.split('/').at(-1)), seasons: [] })
+  })
+  await expect(seasons('private-key', 'zh-CN', 12)).rejects.toThrow('两个 API 地址')
+  expect(await seasons('private-key', 'zh-CN', 12)).toEqual({ seasons: [], warning: '' })
+  await seasons('private-key', 'en-US', 12)
+  await seasons('private-key', 'zh-CN', 13)
+  await seasons('private-key', 'zh-CN', 12, { proxy: 'http://127.0.0.1:7897' })
+  expect(calls).toHaveLength(6)
+  await expect(seasons('key', '', 0)).rejects.toThrow('无效的 TMDB ID')
 })
 
 test('searches movies and TV together, excludes people, and retains their distinct types', async () => {
@@ -169,4 +230,91 @@ test('bad/failed details cannot mislabel a title and do not retry for every epis
   await expect(details('private-key', 'movie', 123)).rejects.toThrow('两个 API 地址')
   expect(calls).toBe(2)
   expect((await createTmdbDetails(async () => Response.json({ id: 123 }))('key', 'movie', 123)).countries).toEqual([])
+})
+
+test('episode groups add named season choices without replacing ordinary seasons or shifting their order', async () => {
+  const id = '67680070aff5a7d64174fbab'
+  const calls: string[] = []
+  const seasons = createTmdbSeasons(async (url, init) => {
+    const u = new URL(url)
+    calls.push(u.pathname)
+    expect(init?.proxy).toBe('http://127.0.0.1:7897')
+    expect(u.searchParams.get('language')).toBe('zh-CN')
+    if (u.pathname === '/3/tv/75787') return Response.json({ id: 75787, seasons: [{ season_number: 1, name: '第 1 季', episode_count: 183, air_date: '2015-06-25' }] })
+    if (u.pathname.endsWith('/episode_groups')) return Response.json({ id: 75787, results: [
+      { id, name: 'Seasons', type: 6 }, { id, name: 'duplicate' }, { id: '../private', name: 'invalid' }, null,
+    ] })
+    expect(u.pathname).toBe('/3/tv/episode_group/' + id)
+    return Response.json({ id, groups: [
+      { order: 13, name: '黄风岭篇', episodes: [{ id: 1, episode_number: 168, air_date: '2026-09-18' }, { id: 2, episode_number: 169, air_date: '2026-09-11' }, null] },
+      { order: 1, name: '下沙篇', episodes: [{ id: 3, air_date: '2015-06-25' }] },
+      { order: 0, name: '特别篇', episodes: [] }, { order: 0, name: 'duplicate', episodes: [] },
+      { order: -1, episodes: [] }, { order: '2', episodes: [] }, { order: 2.5, episodes: [] }, { order: 1000, episodes: [] }, { order: 3 }, null,
+    ] })
+  })
+  const result = await seasons('key', '', 75787, { proxy: 'http://127.0.0.1:7897' })
+  expect(result).toEqual({ seasons: [
+    { number: 1, name: '第 1 季', episodeCount: 183, airDate: '2015-06-25' },
+    { number: 0, name: '特别篇', episodeCount: 0, airDate: '', groupId: id, groupName: 'Seasons' },
+    { number: 1, name: '下沙篇', episodeCount: 1, airDate: '2015-06-25', groupId: id, groupName: 'Seasons' },
+    { number: 13, name: '黄风岭篇', episodeCount: 2, airDate: '2026-09-11', groupId: id, groupName: 'Seasons' },
+  ], warning: '' })
+  expect(calls).toHaveLength(3)
+  expect(JSON.stringify(result)).not.toContain('episode_number')
+})
+
+test('an unavailable group list preserves ordinary seasons, warns safely and permits an immediate retry', async () => {
+  let failed = true, listCalls = 0
+  const seasons = createTmdbSeasons(async url => {
+    const u = new URL(url)
+    if (!u.pathname.endsWith('/episode_groups')) return Response.json({ id: 123, seasons: [{ season_number: 0 }] })
+    listCalls++
+    if (failed) throw new Error('private key in URL: ' + url)
+    return Response.json({ id: 123, results: [] })
+  })
+  const result = await seasons('private-key', '', 123)
+  expect(result.seasons).toEqual([{ number: 0, name: '特别篇', episodeCount: 0, airDate: '' }])
+  expect(result.warning).toContain('剧集分组读取失败')
+  expect(result.warning).not.toContain('private-key')
+  failed = false
+  expect((await seasons('private-key', '', 123)).warning).toBe('')
+  expect(listCalls).toBe(3)
+})
+
+test('partial group failures retain other groups, use at most three parallel reads and retain source order', async () => {
+  const groups = Array.from({ length: 5 }, (_, i) => ({ id: String(i + 1).padStart(24, '0'), name: '分组 ' + i }))
+  let active = 0, maximum = 0, fail = true
+  const seasons = createTmdbSeasons(async url => {
+    const u = new URL(url)
+    if (u.pathname === '/3/tv/321') return Response.json({ id: 321, seasons: [{ season_number: 1 }] })
+    if (u.pathname.endsWith('/episode_groups')) return Response.json({ id: 321, results: groups })
+    active++; maximum = Math.max(maximum, active)
+    try {
+      await Bun.sleep(5)
+      const id = u.pathname.split('/').at(-1)!
+      if (id === groups[1]!.id && fail) return new Response('', { status: 404 })
+      return Response.json({ id, groups: [{ order: 1, name: '第一季', episodes: [] }] })
+    } finally { active-- }
+  })
+  const first = await seasons('key', '', 321)
+  expect(maximum).toBeLessThanOrEqual(3)
+  expect(first.seasons.map(row => row.groupId).filter(Boolean)).toEqual([groups[0]!.id, ...groups.slice(2).map(g => g.id)])
+  expect(first.warning).toContain('部分剧集分组')
+  fail = false
+  const retry = await seasons('key', '', 321)
+  expect(retry.seasons).toHaveLength(6)
+  expect(retry.warning).toBe('')
+})
+
+test('wrong group response identity cannot supply output season choices', async () => {
+  const id = '67680070aff5a7d64174fbab'
+  const seasons = createTmdbSeasons(async url => {
+    const path = new URL(url).pathname
+    if (path === '/3/tv/75787') return Response.json({ id: 75787, seasons: [] })
+    if (path.endsWith('/episode_groups')) return Response.json({ id: 75787, results: [{ id, name: 'Seasons' }] })
+    return Response.json({ id: 'different-group', groups: [{ order: 13, name: 'wrong title', episodes: [] }] })
+  })
+  const result = await seasons('key', '', 75787)
+  expect(result.seasons).toEqual([])
+  expect(result.warning).toContain('部分剧集分组')
 })

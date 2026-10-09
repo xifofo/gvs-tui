@@ -122,6 +122,77 @@ test('IQ series TMDB matching keeps the platform season and episode numbers acro
   } finally { x.simulated = true }
 })
 
+test('a matched final season can use TMDB S04 for the batch while retaining all platform episode IDs and numbers', async () => {
+  const r = await start()
+  const x = r as any
+  x.cli.invoke = async () => ({ title: '诛仙 最终季', year: 2026, episodes: [
+    { vid: 'ep10', title: '诛仙 最终季 第10话', number: 10 },
+    { vid: 'ep11', title: '诛仙 最终季 第11话', number: 11 },
+  ] })
+  await x.detail('tencent', 'final-season')
+  x.pending = x.eps.map((_: unknown, i: number) => x.taskFromEp(i))
+  x.scene = 'tmdb'
+  x.tmdbHits = [{ id: 206484, name: '诛仙', year: 2022, title: '', kind: 'show' }]
+  x.emit()
+  r.handleKey('enter')
+  expect(r.snapshot.scene).toBe('confirm')
+  expect(r.snapshot.canSelectTmdbSeason).toBe(true)
+  expect(x.pending.every((t: any) => t.season === 1)).toBe(true)
+  const rows = [
+    { number: 0, name: '特别篇', episodeCount: 2, airDate: '' },
+    { number: 1, name: '第 1 季', episodeCount: 26, airDate: '2022-08-02' },
+    { number: 4, name: '第 4 季', episodeCount: 26, airDate: '2026-08-21' },
+  ]
+  x.work = async () => ({ seasons: rows, warning: '' })
+  r.handleKey('t')
+  await Bun.sleep(1)
+  expect(r.snapshot.tmdbSeasonPicker?.seasons).toEqual(rows)
+  r.handleKey('end')
+  r.handleKey('enter')
+  expect(x.pending.map((t: any) => [t.vid, t.season, t.episode])).toEqual([['ep10', 4, 10], ['ep11', 4, 11]])
+  expect(r.snapshot.confirmation?.name).toContain('诛仙.S04E10.诛仙.最终季.第10话.2022.')
+  expect(r.snapshot.confirmation?.directory).toEndWith('诛仙 (2022) {tmdb-206484}/Season 04')
+  const restored = JSON.parse(JSON.stringify(x.pending[1]))
+  expect(completedFilename(jobNaming(restored, x.cfg), { status: 'probed', height: 2160, codec: 'HEVC' })).toContain('.S04E11.')
+  r.handleKey('t')
+  await Bun.sleep(1)
+  r.handleKey('down')
+  r.handleKey('enter')
+  expect(x.pending.every((t: any) => t.season === 0)).toBe(true)
+  expect(r.snapshot.confirmation?.directory).toEndWith('Season 00')
+  r.handleKey('t')
+  await Bun.sleep(1)
+  r.handleKey('enter') // platform numbering
+  expect(x.pending.every((t: any) => t.season === 1)).toBe(true)
+})
+
+test('TMDB season failures and cancelled requests keep the matched title and previous output numbers', async () => {
+  const r = await start()
+  const x = r as any
+  x.detailProv = 'tencent'
+  x.detailTitle = '诛仙 最终季'
+  x.eps = [{ vid: 'ep10', title: '第10话', number: 10, languages: [] }]
+  x.pending = [{ ...x.taskFromEp(0), series: '诛仙', nameDots: '诛仙', season: 4, tmdbId: 206484, year: 2022 }]
+  x.scene = 'confirm'
+  x.work = async () => { throw new Error('季列表连接失败') }
+  r.handleKey('t')
+  await Bun.sleep(1)
+  expect(r.snapshot.tmdbSeasonPicker?.state).toBe('error')
+  r.handleKey('esc')
+  expect(r.snapshot.scene).toBe('confirm')
+  expect(x.pending[0]).toMatchObject({ tmdbId: 206484, season: 4, episode: 10 })
+  let release!: (v: unknown) => void
+  x.work = () => new Promise(resolve => { release = resolve })
+  r.handleKey('t')
+  expect(r.snapshot.tmdbSeasonPicker?.state).toBe('loading')
+  r.handleKey('s')
+  release({ seasons: [{ number: 1, name: '第 1 季', episodeCount: 26, airDate: '' }], warning: '' })
+  await Bun.sleep(1)
+  expect(r.snapshot.scene).toBe('confirm')
+  expect(r.snapshot.tmdbSeasonPicker).toBeUndefined()
+  expect(x.pending[0].season).toBe(4)
+})
+
 test('IQ without a TMDB key proceeds normally and a lookup failure remains skippable', async () => {
   const r = await start()
   const x = r as any
@@ -933,4 +1004,39 @@ test('batch episode titles survive TMDB matching and share preview and download 
   r.handleKey('enter')
   expect(r.snapshot.jobs![0]!.title).toContain(subtitles[0]!)
   expect(r.snapshot.jobs![1]!.title).toContain(subtitles[1]!)
+})
+
+test('TUI group season selection keeps parent TMDB binding and platform episode numbers, including duplicate S01 choices', async () => {
+  const r = await start(), x = r as any
+  x.cli.invoke = async () => ({ title: '狐妖小红娘 黄风岭篇', episodes: [
+    { vid: 'fox-one', title: '黄风岭篇 第01话', number: 1, season: 13 },
+    { vid: 'fox-two', title: '黄风岭篇 第02话', number: 2, season: 13 },
+  ] })
+  await x.detail('tencent', 'fox')
+  x.pending = x.eps.map((_: unknown, i: number) => x.taskFromEp(i))
+  x.tmdbHits = [{ id: 75787, name: '狐妖小红娘', year: 2015, title: '', kind: 'show' }]
+  x.scene = 'tmdb'; x.emit(); r.handleKey('enter')
+  const group = { groupId: '67680070aff5a7d64174fbab', groupName: 'Seasons' }
+  const rows = [
+    { number: 1, name: '第 1 季', episodeCount: 183, airDate: '2015-06-25' },
+    { number: 1, name: '下沙篇', episodeCount: 13, airDate: '2015-06-25', ...group },
+    { number: 13, name: '黄风岭篇', episodeCount: 16, airDate: '2026-09-11', ...group },
+  ]
+  x.work = async () => ({ seasons: rows, warning: '部分剧集分组读取失败' })
+  r.handleKey('t'); await Bun.sleep(1)
+  expect(r.snapshot.tmdbSeasonPicker?.seasons).toEqual(rows)
+  expect(r.snapshot.tmdbSeasonPicker?.warning).toContain('部分剧集分组')
+  expect(r.snapshot.tmdbSeasonPicker?.state).toBe('ready')
+  r.handleKey('r'); await Bun.sleep(1)
+  r.handleKey('end'); r.handleKey('enter')
+  expect(x.pending.map((t: any) => [t.tmdbId, t.vid, t.season, t.episode])).toEqual([
+    [75787, 'fox-one', 13, 1], [75787, 'fox-two', 13, 2],
+  ])
+  expect(r.snapshot.confirmation?.directory).toEndWith('狐妖小红娘 (2015) {tmdb-75787}/Season 13')
+  expect(r.snapshot.confirmation?.name).toContain('狐妖小红娘.S13E01.')
+  expect(r.snapshot.confirmation?.name).not.toContain('E168')
+  const saved = JSON.parse(JSON.stringify(x.pending[1]))
+  expect(completedFilename(jobNaming(saved, x.cfg), { status: 'probed', height: 2160, codec: 'HEVC' })).toContain('.S13E02.')
+  r.handleKey('t'); await Bun.sleep(1); r.handleKey('enter')
+  expect(x.pending.every((t: any) => t.season === 13)).toBe(true)
 })

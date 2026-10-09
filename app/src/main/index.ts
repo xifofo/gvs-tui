@@ -64,6 +64,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   probe: (p, eps) => core.probe(p, eps),
   namingPreview: (r) => core.namingPreview(r),
   tmdbSearch: (t, tv) => core.tmdbSearch(t, tv),
+  tmdbSeasons: (id) => core.tmdbSeasons(id),
   enqueue: (r) => core.enqueue(r),
   jobs: () => core.jobList(),
   retryJob: (id) => core.retryJob(id),
