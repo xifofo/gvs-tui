@@ -1,0 +1,24 @@
+[package]
+name = "gvs-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+blinc_app = "=0.5.1"
+blinc_core = "=0.5.1"
+blinc_layout = "=0.5.1"
+blinc_icons = "=0.5.1"
+blinc_theme = "=0.5.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+debug = 0
+
+
+[patch.crates-io]
+blinc_gpu = { path = 'vendor/blinc_gpu' }
+blinc_text = { path = 'vendor/blinc_text' }
