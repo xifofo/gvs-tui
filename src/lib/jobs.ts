@@ -1,4 +1,5 @@
 import { resolveManifest, requireClearDownload } from './manifest-provider.ts'
+import { userMessage } from './user-message.ts'
 import { youkuMediaError } from './media-output.ts'
 import { decryptYoukuTs } from './youku-ts.ts'
 import { tencentPlayInput } from './tencent-qr.ts'
@@ -28,6 +29,8 @@ import type { Job, TencentQualitySelection } from '../types.ts'
 import { tencentDownloadSelection } from './tencent-quality-selection.ts'
 import { moveFileSync } from './file-move.ts'
 import { downloadIQ } from './iq.ts'
+import { downloadIQCN } from './iqcn.ts'
+import { youkuPlayInput } from './youku-play-input.ts'
 import { runLog } from './runlog.ts'
 import { prepareAudioLanguage } from './audio-language.ts'
 import type { TmdbDetails } from './tmdb.ts'
@@ -359,6 +362,9 @@ async function runTask(
     if (n.container === 'mkv' && !mkvmerge) throw new Error('没有 mkvmerge')
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
+      case 'iqcn':
+        note = await downloadIQCN(cli, t, out, work, emit, signal, undefined, cfg.threads)
+        break
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
         break
@@ -382,7 +388,7 @@ async function runTask(
         })
         break
       case 'douyin':
-        await dlDouyin(cli, t, out, emit, retryNote, signal)
+        await dlDouyin(cli, t, out, emit, retryNote, cfg.threads, signal)
         break
       default:
         throw new Error(`demo 尚未接 ${t.provider} 下载管线`)
@@ -433,7 +439,8 @@ async function runTask(
       }
       return
     }
-    emitEvt({ id, status: '失败', pct: lastPct, log: '', err: e instanceof Error ? e.message : String(e), done: true })
+    runLog(`download ${id} failed: ${e instanceof Error ? e.message : String(e)}`)
+    emitEvt({ id, status: '失败', pct: lastPct, log: '', err: userMessage(e), done: true })
   } finally {
     if (!succeeded && ownsOutput && out) {
       // Remove only our empty reservation; retain any completed/partial media for diagnosis.
@@ -823,6 +830,7 @@ async function dlDouyin(
   cli: GwClient, t: DlTask, out: string,
   emit: (s: string, p: number, l: string) => void,
   retryNote: RetryNote,
+  threads: number,
   signal?: AbortSignal,
 ): Promise<void> {
   emit('取链', 0.02, t.vid || t.url || '')
@@ -837,13 +845,13 @@ async function dlDouyin(
   let cdn = await resolve()
   emit('下载', 0.1, cdn)
   try {
-    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, 4, undefined, undefined, signal)
+    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, threads, undefined, undefined, signal)
   } catch (e) {
     signal?.throwIfAborted()
     if (!(e instanceof CdnDenied)) throw e
     emit('重取', 0.1, `CDN ${e.status}，重新解析后续传`)
     cdn = await resolve()
-    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, 4, undefined, undefined, signal)
+    await downloadProgress(cdn, out, referer('douyin'), speedCB(emit, '下载', 0.1, 0.85), retryNote, threads, undefined, undefined, signal)
   }
 }
 
@@ -1163,7 +1171,7 @@ export function cleanupOutputCaches(dir: string): void {
 async function playYouku(cli: GwClient, cfg: FileConfig, t: DlTask, vid = t.vid): Promise<Record<string, unknown>> {
   // RE/relay reads the selected playlist; expanding every track here fetches
   // unused playlists and adds latency to every signed-URL refresh.
-  const input: Record<string, unknown> = { vid, expand: '0', tier: t.quality ? 'multi' : 'single', nocache: '1' }
+  const input = youkuPlayInput(vid, t.quality)
   return cli.invoke('youku', 'play', input, cli.extra(cfg, 'youku'))
 }
 

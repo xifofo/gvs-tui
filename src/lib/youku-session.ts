@@ -5,6 +5,7 @@
 // `revoke` 作废。TUI 之前只在请求头里塞 Yk-Sign，从来没刷新过，
 // 于是 token 一过期就表现为「重启就失效」。
 import type { GwClient } from './client.ts'
+import { userMessage, errorCode } from './user-message.ts'
 import type { VipProbe, VipSource } from '../types.ts'
 import { anyInt, asBool, asString, isObj } from './util.ts'
 
@@ -140,9 +141,9 @@ export async function ykAccount(cli: GwClient, sign: string): Promise<YkAccount>
   } catch (e) {
     const out = emptyAccount()
     const msg = e instanceof Error ? e.message : String(e)
-    out.needsScan = /invalid Yk-Sign|re-login|relogin|未登录|YOUKU_RELOGIN_REQUIRED|需要重新登录/i.test(msg)
+    out.needsScan = errorCode(e) === 'RELOGIN_REQUIRED' || /invalid Yk-Sign|re-login|relogin|未登录|YOUKU_RELOGIN_REQUIRED|需要重新登录/i.test(msg)
     out.loggedIn = !out.needsScan
-    out.hint = msg
+    out.hint = userMessage(e)
     return out
   }
 }

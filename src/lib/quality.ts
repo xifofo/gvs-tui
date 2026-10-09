@@ -9,6 +9,7 @@ import { hongguoItem, pickHongguo } from './media.ts'
 import { hongguoResolveInput } from './hongguo.ts'
 import { huangguoResolveInput, huangguoStreamOptions } from './huangguo.ts'
 import { tencentPlayInput } from './tencent-qr.ts'
+import { iqcnOptions } from './iqcn.ts'
 import { runLog } from './runlog.ts'
 import { tencentSelectedPlayInput, tencentPersonaKey } from './tencent-quality-selection.ts'
 export { tencentPersonaKey } from './tencent-quality-selection.ts'
@@ -315,6 +316,7 @@ export async function probeOptions(
   opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }> } = {},
 ): Promise<StreamOptions> {
   switch (provider) {
+    case 'iqcn': return iqcnOptions(await cli.invoke('iqcn', 'probe', { tvid: vid }, {}, { timeoutMs: 150000 }))
     case 'iq': return iqOptions(await cli.invoke('iq','probe',{vid},cli.extra(cfg,'iq'),{timeoutMs:150000}))
     case 'mewatch': case 'hamivideo': return probeManifest(cli, cfg, provider, vid)
     case 'hongguo': return probeHongguo(cli, vid)
@@ -558,10 +560,11 @@ export function qualitiesFromTencentFormats(formats: unknown): Quality[] {
     const name = asString(raw.name) || asString(raw.defn)
     if (!name) continue
     const caption = tencentCaptionLabel(asString(raw.caption))
+    const captionProbe = tencentCaptionLabel(asString(raw.caption_probe)) || caption
     const fid = asString(raw.id)
     const persona = asString(raw.persona)
     const group = tencentFormatGroup(raw)
-    const id = [name, caption || '-', fid || '0', persona || group].join('|')
+    const id = [name, captionProbe || '-', fid || '0', persona || group].join('|')
     if (seen.has(id)) continue
     seen.add(id)
     const encodeTag = tencentEncodeTag(persona)
@@ -950,13 +953,17 @@ async function probeYouku(
     codecRaw: string,
     drm: string,
     fps: number,
+    source = '',
+    sourceLabel = '',
   ): void => {
-    if (!st || seen.has(st)) return
-    seen.add(st)
+    const id = source ? `${st}|${source}` : st
+    if (!st || seen.has(id)) return
+    seen.add(id)
     const codec = (codecRaw.split('.')[0] ?? '').toUpperCase()
+    const laneLabel = sourceLabel || ({ frame_xiang: '帧享', tv: 'TV', app: 'App' } as Record<string, string>)[source] || source
     qualities.push({
-      id: st,
-      label: label(st, height),
+      id,
+      label: label(st, height) + (laneLabel ? ` · ${laneLabel}` : ''),
       title: st,
       size,
       width,
@@ -974,7 +981,9 @@ async function probeYouku(
   const mediaByStream = new Map<string, Record<string, unknown>>()
   for (const m of media) {
     if (!isObj(m)) continue
-    mediaByStream.set(asString(m.quality) || asString(m.stream_type), m)
+    const st = asString(m.quality) || asString(m.stream_type)
+    const source = asString(m.source) || (isObj(m.meta) ? asString(m.meta.source) : '')
+    mediaByStream.set(source ? `${st}|${source}` : st, m)
   }
 
   for (const s of streams) {
@@ -982,9 +991,11 @@ async function probeYouku(
     const kind = asString(s.media_type).toLowerCase()
     if (kind === 'audio' || kind === 'subtitle') continue
     const st = asString(s.stream_type)
-    if (!st || seen.has(st)) continue
+    const source = asString(s.source)
+    const id = source ? `${st}|${source}` : st
+    if (!st || seen.has(id)) continue
     if (!asString(s.playlist_url) && !asString(s.url)) continue // 没有真实分片 → 不列出来
-    const m = mediaByStream.get(st) ?? {}
+    const m = mediaByStream.get(id) ?? mediaByStream.get(st) ?? {}
     const meta = isObj(m.meta) ? m.meta : {}
     add(
       st,
@@ -994,6 +1005,8 @@ async function probeYouku(
       asString(s.codecs) || asString(m.codec) || asString(meta.codecs) || (asBool(s.h265) ? 'H265' : ''),
       asString(s.drm) || asString(m.drm) || asString(meta.drm),
       anyInt(s.fps) || anyInt(m.fps) || anyInt(meta.fps),
+      source,
+      asString(s.source_label),
     )
   }
 
@@ -1013,6 +1026,8 @@ async function probeYouku(
         asString(m.codec) || asString(meta.codecs),
         asString(m.drm) || asString(meta.drm),
         anyInt(m.fps) || anyInt(meta.fps),
+        asString(m.source) || asString(meta.source),
+        asString(m.source_label) || asString(meta.source_label),
       )
     }
   }

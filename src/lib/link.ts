@@ -8,6 +8,18 @@ const QQ_BARE_RE =
 
 export type TencentLinkIds = { vid: string; cid: string; url: string }
 
+export function extractIQCNLink(text: string): string {
+  const values = text.match(/https?:\/\/[^\s<>"'，。、]+|(?:www\.|m\.)?iqiyi\.com\/[^\s<>"'，。、]+/gi) ?? []
+  for (const raw of values) {
+    try {
+      const u = new URL((/^https?:/i.test(raw) ? raw : `https://${raw}`).replace(TRAIL, ''))
+      if (u.protocol !== 'https:' || u.username || u.password || u.port || !['iqiyi.com', 'www.iqiyi.com', 'm.iqiyi.com'].includes(u.hostname)) continue
+      if (/^\/(v_|a_)[A-Za-z0-9]+\.html\/?$/.test(u.pathname)) return u.href
+    } catch { /* not a content URL */ }
+  }
+  return ''
+}
+
 /** Strict overseas IQ page matching; domestic IQIYI pages are a different source. */
 export function extractIQLink(text: string): string {
   const values = text.match(/https?:\/\/[^\s<>"'，。、]+|(?:www\.|m\.)?iq\.com\/[^\s<>"'，。、]+/gi) ?? []

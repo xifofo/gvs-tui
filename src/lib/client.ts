@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { normalizeIQCookie } from './iq.ts'
 import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
 import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
+import { userMessage } from './user-message.ts'
 export type KeyInfo = {
   id: string
   name: string
@@ -21,7 +22,7 @@ export type KeyInfo = {
   daysLeft: number | null
 }
 
-type Envelope = { code: number; msg: string; data: unknown }
+type Envelope = { code: number; msg: string; data: unknown; error_code?: string }
 
 /** 优酷登录态失效（本地 Yk-Sign 过期或被踢）。调用方应清掉本地签名并引导重新扫码。 */
 export class ReloginRequired extends Error {
@@ -206,6 +207,9 @@ export class GwClient {
     let res: Response
     try {
       res = await fetchGateway(`${this.host}${path}`, { method, headers, body: payload, signal: ac.signal }, this.proxyOf() ?? '')
+    } catch (error) {
+      if (ac.signal.aborted) throw Object.assign(new Error('请求等待超时，请检查网络后重试。'), { errorCode: 'TIMEOUT' })
+      throw error
     } finally {
       clearTimeout(timer)
     }
@@ -213,12 +217,14 @@ export class GwClient {
     let env: Envelope
     try {
       env = JSON.parse(text) as Envelope
+      if (!env || typeof env !== 'object' || typeof env.code !== 'number') throw new Error('invalid envelope')
     } catch {
       throw new Error(`http ${res.status}: ${truncate(text, 180)}`)
     }
     if (!res.ok || env.code !== 0) {
-      const message = limitError(env.msg) || `http ${res.status}`
-      throw RELOGIN_RE.test(message) ? new ReloginRequired(message) : Object.assign(new Error(message), { httpStatus: res.status, code: env.code })
+      const message = limitError(typeof env.msg === 'string' ? env.msg : '') || `http ${res.status}`
+      const error = env.error_code === 'RELOGIN_REQUIRED' || RELOGIN_RE.test(message) ? new ReloginRequired(message) : new Error(message)
+      throw Object.assign(error, { httpStatus: res.status, code: env.code, errorCode: env.error_code || '', userMessage: userMessage({ message, error_code: env.error_code }) })
     }
     return env
   }

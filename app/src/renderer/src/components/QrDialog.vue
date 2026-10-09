@@ -6,6 +6,7 @@ import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
 
 const kind = store.qr!
+const title = kind === 'iqcn' ? '扫码登录爱奇艺国内版' : kind === 'youku' ? '扫码登录优酷' : '扫码登录腾讯视频'
 const start = ref<QRStart | null>(null)
 const status = ref<QRPoll>({ done: false, message: '正在获取二维码…', tone: 'muted' })
 const error = ref('')
@@ -18,9 +19,9 @@ async function load() {
   start.value = null
   status.value = { done: false, message: '正在获取二维码…', tone: 'muted' }
   try {
-    start.value = kind === 'youku' ? await gvs('youkuQrStart') : await gvs('tencentQrStart')
+    start.value = kind === 'iqcn' ? await gvs('iqcnQrStart') : kind === 'youku' ? await gvs('youkuQrStart') : await gvs('tencentQrStart')
     status.value = { done: false, message: '等待扫码…', tone: 'muted' }
-    timer = setInterval(poll, kind === 'youku' ? 1500 : 3500)
+    timer = setInterval(poll, kind === 'iqcn' ? 2000 : kind === 'youku' ? 1500 : 3500)
   } catch (e) {
     error.value = errText(e)
   }
@@ -30,7 +31,7 @@ async function poll() {
   if (busy) return
   busy = true
   try {
-    const r = kind === 'youku' ? await gvs('youkuQrPoll') : await gvs('tencentQrPoll')
+    const r = kind === 'iqcn' ? await gvs('iqcnQrPoll') : kind === 'youku' ? await gvs('youkuQrPoll') : await gvs('tencentQrPoll')
     status.value = r
     if (r.done) {
       stop()
@@ -39,6 +40,7 @@ async function poll() {
     } else if (r.tone === 'warn') stop()
   } catch (e) {
     status.value = { done: false, message: errText(e), tone: 'warn' }
+    stop()
   } finally {
     busy = false
   }
@@ -70,10 +72,10 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="scrim" @click.self="close">
-    <div class="dlg" role="dialog" aria-modal="true" :aria-label="kind === 'youku' ? '扫码登录优酷' : '扫码登录腾讯视频'">
+    <div class="dlg" role="dialog" aria-modal="true" :aria-label="title">
       <div class="head">
         <PlatformLogo :provider="kind" :size="26" />
-        <h1 class="title">{{ kind === 'youku' ? '扫码登录优酷' : '扫码登录腾讯视频' }}</h1>
+        <h1 class="title">{{ title }}</h1>
         <button type="button" class="btn sm icon" aria-label="关闭" @click="close"><Icon name="x" :size="16" /></button>
       </div>
 

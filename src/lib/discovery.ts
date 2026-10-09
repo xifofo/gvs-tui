@@ -1,4 +1,5 @@
 import { supportsBrowse } from './providers.ts'
+import { errorCode } from './user-message.ts'
 import type { Row } from '../types'
 import { mediaKindFromMetadata } from './media-kind'
 export type Section = {
@@ -274,7 +275,7 @@ export class Discovery {
           }
         } catch (e) {
           if (
-            !/unknown.*action|action.*browse_catalog|INVALID_CATALOG|not supported|PROVIDER_NOT_FOUND|http 404/i.test(
+            !['ACTION_UNSUPPORTED', 'PROVIDER_NOT_FOUND', 'NOT_FOUND'].includes(errorCode(e)) && !/unknown.*action|action.*browse_catalog|INVALID_CATALOG|not supported|PROVIDER_NOT_FOUND|http 404/i.test(
               String(e),
             )
           )

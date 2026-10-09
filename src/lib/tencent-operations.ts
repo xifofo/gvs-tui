@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { errorCode } from './user-message.ts'
 import { tencentRisk } from './tencent-risk.ts'
 import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
 
@@ -14,7 +15,7 @@ const actions = new Set(['search', 'detail', 'resolve', 'play'])
 /** The gateway has no `tencent/report` action. Observation must not block search or playback. */
 function reportUnsupported(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /INVALID_PARAM/i.test(message) && /["']report["']/i.test(message)
+  return errorCode(error) === 'ACTION_UNSUPPORTED' || /INVALID_PARAM/i.test(message) && /["']report["']/i.test(message)
 }
 
 /** Local observations, not simulated Android telemetry or Tencent signatures. */
@@ -129,7 +130,7 @@ export class TencentOperations {
       this.log(`tencent_event action=${op.action} phase=${phase} outcome=${outcome || '-'} flow=${op.root.flow} operation=${op.id} job=${this.jobID || '-'} status=${String(reply.status || 'unknown')}`)
     } catch (error) {
       this.log(`tencent_event action=${op.action} phase=${phase} flow=${op.root.flow} status=observation_error`)
-      if (error instanceof Error && /report_binding_/.test(error.message)) { op.root.rejected = true; throw error }
+      if (errorCode(error) === 'ACCOUNT_BINDING_INVALID' || error instanceof Error && /report_binding_/.test(error.message)) { op.root.rejected = true; throw error }
       // Logging failures do not change playback; the main request validates its binding.
     }
   }

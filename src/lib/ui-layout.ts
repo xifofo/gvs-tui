@@ -90,6 +90,7 @@ export function settingGroup(label: string): string {
   if (label.startsWith('红果')) return '红果'
   if (label.startsWith('黄果')) return '黄果'
   if (label.startsWith('抖音')) return '抖音'
+  if (label.startsWith('爱奇艺国内版')) return '爱奇艺国内版'
   if (label.startsWith('mewatch')) return 'mewatch'
   if (label.startsWith('Hami')) return 'Hami'
   return '诊断'

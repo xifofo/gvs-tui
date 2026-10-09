@@ -6,6 +6,7 @@ import { Core } from './core'
 import { handlePosterProtocol, registerPosterScheme } from './posters'
 import { runLog } from '@tui/runlog.ts'
 import { Updater } from './updater'
+import { userMessage, userFacing } from '@tui/user-message.ts'
 
 // 开发调试：独立 profile，不和已安装的 GVS 抢单实例锁。
 // 同时把 configPath() 依赖的 APPDATA 也指过去（它在每次调用时读环境变量），
@@ -27,7 +28,7 @@ if (!app.requestSingleInstanceLock()) app.quit()
 let win: BrowserWindow | null = null
 
 function send(channel: string, payload: unknown): void {
-  if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+  if (win && !win.isDestroyed()) win.webContents.send(channel, userFacing(payload))
 }
 
 let stateTimer: NodeJS.Timeout | null = null
@@ -89,6 +90,8 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
     return r.canceled ? '' : (r.filePaths[0] ?? '')
   },
   youkuQrStart: () => core.youkuQrStart(),
+  iqcnQrStart: () => core.iqcnQrStart(),
+  iqcnQrPoll: () => core.iqcnQrPoll(),
   youkuQrPoll: () => core.youkuQrPoll(),
   youkuRenew: () => core.youkuRenew(),
   tencentQrStart: () => core.tencentQrStart(),
@@ -101,11 +104,12 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
 
 ipcMain.handle('gvs:call', async (_e, method: string, args: unknown[]) => {
   const fn = (api as Record<string, (...a: unknown[]) => unknown>)[method]
-  if (!fn) return { ok: false, error: `unknown method ${method}` }
+  if (!fn) return { ok: false, error: '当前客户端暂不支持此操作，请更新后重试。' }
   try {
-    return { ok: true, data: await fn(...(args ?? [])) }
+    return { ok: true, data: userFacing(await fn(...(args ?? []))) }
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    runLog(`ipc ${method} failed: ${e instanceof Error ? e.message : String(e)}`)
+    return { ok: false, error: userMessage(e) }
   }
 })
 

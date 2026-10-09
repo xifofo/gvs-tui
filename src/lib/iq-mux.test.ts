@@ -215,10 +215,22 @@ realMediaTest('IQ final MKV contains an OpenCC Chinese pair, excludes AI alterna
       const subs = streams.filter((s: { codec_type: string }) => s.codec_type === 'subtitle')
       expect(subs.map((s: { tags: { title: string } }) => s.tags.title)).toEqual(scenario.titles)
       expect(subs.map((s: { disposition: { default: number } }) => s.disposition.default)).toEqual([1, 0, 0])
+      // AAC priming can cause ffmpeg to shift every muxed track together.
+      // Compare converted cues with the untouched English track, not zero.
+      const english = execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:s:2', '-f', 'srt', '-'], { encoding: 'utf8' })
+      const timing = /\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}/
+      const reference = english.match(timing)?.[0]
+      expect(reference).toBeDefined()
+      const millis = (stamp: string) => {
+        const [h, m, s, ms] = stamp.split(/[:,]/).map(Number)
+        return h! * 3600000 + m! * 60000 + s! * 1000 + ms!
+      }
+      const [start, end] = reference!.split(' --> ')
+      expect(millis(end!) - millis(start!)).toBe(200)
       for (let index = 0; index < 2; index++) {
         const text = execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-i', dest, '-map', `0:s:${index}`, '-f', 'srt', '-'], { encoding: 'utf8' })
         expect(text).toContain(scenario.texts[index]!)
-        expect(text).toContain('00:00:00,000 --> 00:00:00,200')
+        expect(text.match(timing)?.[0]).toBe(reference)
       }
       expect(readdirSync(root).some(file => file.startsWith('.gvs-iq-mux-'))).toBe(false)
     }

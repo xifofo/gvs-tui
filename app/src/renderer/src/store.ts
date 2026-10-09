@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { ipcArgs } from '@shared/ipc-args'
+import { userMessage, userFacing } from '@shared/user-message'
 import type {
   AppState,
   Card,
@@ -53,7 +54,7 @@ export const store = reactive({
   probing: false,
   probeError: '',
 
-  qr: null as null | 'youku' | 'tencent',
+  qr: null as null | 'youku' | 'tencent' | 'iqcn',
   /** 打开着的确认框数量：Esc 返回时要避开 */
   dialogCount: 0,
   update: null as UpdateState | null,
@@ -66,14 +67,14 @@ export const modalOpen = () => store.qr !== null || store.dialogCount > 0
 let toastId = 0
 export function toast(message: string, tone: Tone = 'muted'): void {
   const id = ++toastId
-  store.toasts.push({ id, message, tone })
+  store.toasts.push({ id, message: tone === 'err' || tone === 'warn' ? userMessage(message) : message, tone })
   setTimeout(() => {
     const i = store.toasts.findIndex((t) => t.id === id)
     if (i >= 0) store.toasts.splice(i, 1)
   }, tone === 'err' ? 7000 : 3500)
 }
 
-export const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
+export const errText = userMessage
 
 export function go(view: View): void {
   if (store.view === view) return
@@ -121,7 +122,7 @@ export async function runSearch(raw: string): Promise<void> {
       targets.map(async (p) => {
         const g = await gvs('searchProvider', p, q)
         if (gen !== searchGen || !store.search) return
-        store.search.groups.push(g)
+        store.search.groups.push(userFacing(g))
         store.search.ms = Date.now() - t0
         store.searchPending = store.searchPending.filter((x) => x !== p)
       }),
@@ -195,8 +196,8 @@ export async function openQuality(): Promise<void> {
 }
 
 export function initStore(): void {
-  window.gvs.on('state', (s) => (store.state = s))
-  window.gvs.on('jobs', (j) => (store.jobs = j))
+  window.gvs.on('state', (s) => (store.state = userFacing(s)))
+  window.gvs.on('jobs', (j) => (store.jobs = userFacing(j)))
   window.gvs.on('toast', (t) => toast(t.message, t.tone))
   window.gvs.on('update', (u) => (store.update = u))
   void gvs('updateState').then((u) => (store.update = u))

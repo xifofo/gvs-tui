@@ -42,23 +42,27 @@ mediaTest('Youku missing TV quality falls back to HQ with default audio; exact T
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
     const cfg = { ...defaultConfig(), outDir: join(root, 'output'), tmpDir: join(root, 'work'), threads: 2, releaseGroup: 'TEST' }
-    for (const mode of ['hq-fallback', 'muxed-exact', 'hq-missing-audio'] as const) {
+    for (const mode of ['hq-fallback', 'frame-profile-selected', 'muxed-exact', 'hq-missing-audio'] as const) {
       const id = events.length + 1
       const audioCalls: string[] = []
       const hq = 'cmfv5hd4_sdr_hbr_bit10_hq'
       const payload = {
         drm: { actually_clear: true }, audio_delivery: 'separate',
         video: { stream_type: hq, playlist_url: `${base}/video.m3u8` },
-        streams: [{ stream_type: hq, media_type: 'video', playlist_url: `${base}/video.m3u8` },
+        streams: [{ stream_type: hq, source: 'frame_xiang', media_type: 'video', playlist_url: `${base}/video.m3u8` },
           ...(mode === 'muxed-exact' ? [{ stream_type: 'mp5hd4', media_type: 'video', playlist_url: `${base}/muxed.m3u8` }] : [])],
         audio_tracks: mode === 'hq-missing-audio' ? [] : [{ stream_type: 'cmfa1hd3', default: true, playlist_url: `${base}/audio.m3u8` }],
       }
-      const cli = { extra: () => ({}), invoke: async (_p: string, _a: string, input: { vid: string }) => {
+      const cli = { extra: () => ({}), invoke: async (_p: string, _a: string, input: { vid: string; tier?: string; lane?: string }) => {
         audioCalls.push(input.vid)
+        if (mode === 'frame-profile-selected') {
+          expect(input.tier).toBe('multi')
+          expect(input.lane).toBeUndefined()
+        }
         return payload
       } } as unknown as GwClient
       const t: DlTask = { provider: 'youku', series: 'Fixture', title: mode, vid: mode,
-        quality: 'mp5hd4', audioTracks: [], namingVersion: 1, kind: 'show', season: 1, episode: id,
+        quality: mode === 'frame-profile-selected' ? `${hq}|frame_xiang` : 'mp5hd4', audioTracks: [], namingVersion: 1, kind: 'show', season: 1, episode: id,
         height: 1080, codec: 'H264', group: 'TEST', tmdbId: 0, nameDots: '', year: 2026, plot: '' }
       const requestStart = requested.length
       hub.enqueue(cfg, cli, id, t)
@@ -79,7 +83,7 @@ mediaTest('Youku missing TV quality falls back to HQ with default audio; exact T
       const probe = JSON.parse(run('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', done.log]))
       expect(probe.streams.map((s: { codec_type: string }) => s.codec_type).sort()).toEqual(['audio', 'video'])
       const requests = requested.slice(requestStart)
-      if (mode === 'hq-fallback') {
+      if (mode === 'hq-fallback' || mode === 'frame-profile-selected') {
         expect(requests).toContain('/audio.m3u8')
         expect(audioCalls).toEqual([mode, mode])
         expect(t.namingEvidence?.marker).toBe('HQ')

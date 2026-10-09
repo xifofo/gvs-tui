@@ -1,0 +1,9 @@
+{
+  "origin": "gateway/internal/provider/iqcn",
+  "purpose": "Local-only copy of existing processing code; no network dependency",
+  "files": {
+    "sample_restore.go": "ed5b4029d44eaa6bc99bb4352b7924af0ad199589d1e283f86bffd671e36aa01",
+    "sample_parameter.go": "660ca028d3514f447aa758db99f62698d836a8e4be76e52055dbc04b5eea0121",
+    "sample_tables.bin": "499728a0202ab638650a2704444a898b17f056279b3ad9952367e8ffc5a87321"
+  }
+}

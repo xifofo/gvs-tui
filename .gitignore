@@ -26,6 +26,12 @@ downloads/
 # QR login PNGs written next to cwd
 youku-qr/
 
+# driver/tool scratch (iqcn & taigu profiles, packages, logs — hundreds of MB)
+tmp/
+
+# review screenshots written next to cwd (root only, so app assets stay tracked)
+/*.png
+
 # secrets live in the user config dir, never commit copies
 tui.json
 .env

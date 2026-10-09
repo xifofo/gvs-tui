@@ -156,7 +156,7 @@ const BASE: Omit<Snapshot, 'scene'> = {
   audioIndex: 0,
   optionTab: 'quality',
   probeFailed: false,
-  providers: ['hongguo', 'youku', 'tencent', 'huangguo', 'douyin'],
+  providers: ['hongguo', 'youku', 'tencent', 'huangguo', 'douyin', 'iqcn'],
   homeItems: ['粘贴链接', '搜索', '榜单', '任务', '设置'],
   rows: [],
   episodes: [],

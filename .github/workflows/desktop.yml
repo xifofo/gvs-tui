@@ -33,6 +33,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/iqcn-local/go.mod
+      - name: Build local IQCN processor (Windows)
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: node scripts/build-iqcn-local.mjs
+      - name: Build local IQCN processor (macOS)
+        if: runner.os == 'macOS'
+        working-directory: .
+        run: |
+          node scripts/build-iqcn-local.mjs --platform=darwin --arch=arm64 --output=.build/iqcn-local/darwin-arm64/iqcn-local
+          node scripts/build-iqcn-local.mjs --platform=darwin --arch=x64 --output=.build/iqcn-local/darwin-x64/iqcn-local
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -58,6 +71,13 @@ jobs:
         run: npm pkg set version="${GITHUB_REF_NAME#desktop-v}"
       - run: node node_modules/electron/install.js
       - run: bun run typecheck
+      - name: Verify bounded download concurrency
+        working-directory: .
+        run: |
+          bun test src/lib/ordered-download.test.ts
+          bun test src/lib/iqcn-audio.test.ts
+          bun test src/lib/iq-subtitles.test.ts src/lib/iqcn-subtitles.test.ts
+          bun test src/lib/jobs-hub.test.ts --test-name-pattern "Douyin passes configured concurrency"
       - run: bun x electron-vite build
       - run: bun x electron-builder ${{ matrix.target }} --publish never
         env:

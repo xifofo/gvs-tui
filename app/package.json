@@ -2,16 +2,16 @@
   "name": "gvs-desktop",
   "productName": "GVS",
   "private": true,
-  "version": "0.1.24",
+  "version": "0.1.31",
   "description": "GVS 桌面端：多平台搜索与本机下载",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "node ../scripts/build-iqcn-local.mjs && electron-vite build",
     "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "start": "electron-vite preview",
-    "dist:win": "electron-vite build && electron-builder --win",
-    "dist:mac": "electron-vite build && electron-builder --mac"
+    "dist:win": "node ../scripts/build-iqcn-local.mjs && electron-vite build && electron-builder --win",
+    "dist:mac": "node ../scripts/build-iqcn-local.mjs --platform=darwin --arch=arm64 --output=.build/iqcn-local/darwin-arm64/iqcn-local && node ../scripts/build-iqcn-local.mjs --platform=darwin --arch=x64 --output=.build/iqcn-local/darwin-x64/iqcn-local && electron-vite build && electron-builder --mac"
   },
   "dependencies": {
     "electron-updater": "^6",

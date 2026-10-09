@@ -8,7 +8,7 @@ import mewatch from '../assets/platforms/mewatch.png'
 import hamivideo from '../assets/platforms/hamivideo.png'
 
 withDefaults(defineProps<{ provider: string; size?: number }>(), { size: 18 })
-const LOGOS: Record<string, string> = { youku, tencent, hongguo, douyin, iq, mewatch, hamivideo }
+const LOGOS: Record<string, string> = { youku, tencent, hongguo, douyin, iq, iqcn: iq, mewatch, hamivideo }
 </script>
 
 <template>

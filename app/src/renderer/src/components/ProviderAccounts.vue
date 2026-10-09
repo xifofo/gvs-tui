@@ -62,6 +62,16 @@ onBeforeUnmount(() => { revision++ })
 </script>
 
 <template>
+  <div v-if="allowed('iqcn')" class="provider-account">
+    <h3>爱奇艺国内版 · 扫码登录</h3>
+    <p>用爱奇艺 App 扫码确认，账号会话由网关按当前 Key 保存。</p>
+    <div class="controls">
+      <button class="btn sm" :disabled="busy" @click="store.qr = 'iqcn'">扫码登录</button>
+      <button class="btn sm" :disabled="busy" @click="command({provider:'iqcn',op:'status'})">账号状态</button>
+      <button class="btn sm" :disabled="busy" @click="command({provider:'iqcn',op:'logout'})">退出</button>
+    </div>
+    <p v-if="views.iqcn" aria-live="polite">{{ views.iqcn.summary }}</p>
+  </div>
   <div v-if="allowed('iq')" class="provider-account">
     <h3>IQ 海外版 · 账号登录</h3>
     <p>账号密码登录后自动取得 Web 会话，再换取 TV 下载会话。密码仅本次提交；遇到人工验证时按源站要求完成。</p>

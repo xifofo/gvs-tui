@@ -561,8 +561,8 @@ test('Tencent batch selection retains distinct rendition IDs and personas in eve
   internal.pending = [{ provider: 'tencent', vid: 'one' }, { provider: 'tencent', vid: 'two' }]
   internal.applyOptions()
   expect(internal.pending.map((t: any) => t.tencentQuality)).toEqual([
-    { formatId: '322157', persona: '2741517771455_硬', group: 'encode', width: 3840, height: 1636 },
-    { formatId: '322157', persona: '2741517771455_硬', group: 'encode', width: 3840, height: 1636 },
+    { formatId: '322157', persona: '2741517771455_硬', captionProbe: 'hard', group: 'encode', width: 3840, height: 1636 },
+    { formatId: '322157', persona: '2741517771455_硬', captionProbe: 'hard', group: 'encode', width: 3840, height: 1636 },
   ])
   expect(internal.pending[0].group).toBe(internal.cfg.releaseGroup)
   expect(internal.pending[0].tencentQuality).not.toBe(internal.pending[1].tencentQuality)

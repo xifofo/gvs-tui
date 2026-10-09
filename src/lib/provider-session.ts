@@ -1,10 +1,10 @@
-export type SessionProvider = 'mewatch' | 'hamivideo' | 'iq'
+export type SessionProvider = 'mewatch' | 'hamivideo' | 'iq' | 'iqcn'
 export type SessionCommand = { provider: SessionProvider; op: string; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string }
 export type ProviderSessionView = { provider: SessionProvider; state: string; authenticated: boolean; summary: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
 const positive = (v: unknown, fallback: number) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback
-const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']) }
+const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']) }
 
 /** Source credentials are transient: never persist or log command inputs. */
 export class ProviderSessions {
@@ -17,10 +17,11 @@ export class ProviderSessions {
   private nextSMS = 0
   private busy = new Map<SessionProvider, { op: string; result?: Promise<ProviderSessionView> }>()
   private views = new Map<string, ProviderSessionView>()
+  private cnFlow?: { id: string; expires: number; nextPoll: number }
   constructor(private readonly invoke: Invoke, private readonly now = Date.now) {}
   setScope(scope: string): void {
     if (scope === this.scope) return
-    this.scope = scope; this.scopeRevision++; this.busy.clear(); this.flow = ''; this.flowExpires = 0; this.nextPoll = 0; this.nextSMS = 0; this.activation = undefined; this.views.clear()
+    this.scope = scope; this.scopeRevision++; this.busy.clear(); this.flow = ''; this.flowExpires = 0; this.nextPoll = 0; this.nextSMS = 0; this.activation = undefined; this.cnFlow = undefined; this.views.clear()
   }
   command(c: SessionCommand): Promise<ProviderSessionView> {
     const pending = this.busy.get(c.provider)
@@ -41,6 +42,17 @@ export class ProviderSessions {
     const web = c.provider === 'hamivideo' && c.op.startsWith('web_')
     const key = c.provider + (web ? ':web' : ':tv')
     const input: Record<string, unknown> = { op: c.op }
+    if (c.provider === 'iqcn' && (c.op === 'poll' || c.op === 'cancel')) {
+      if (!this.cnFlow) throw new Error('二维码已过期，请重新开始')
+      if (this.now() >= this.cnFlow.expires) {
+        this.cnFlow = undefined
+        const expired: ProviderSessionView = { provider: 'iqcn', state: 'expired', authenticated: false, summary: '二维码已过期，请刷新' }
+        this.views.set(key, expired)
+        return expired
+      }
+      input.flowId = this.cnFlow.id
+      if (c.op === 'poll' && this.now() < this.cnFlow.nextPoll) return this.views.get(key)!
+    }
     if (c.provider === 'mewatch' && c.op === 'poll') {
       const prev = this.activation
       if (!prev?.expiresAt || this.now() >= prev.expiresAt) throw new Error('激活码已过期，请重新开始')
@@ -80,6 +92,22 @@ export class ProviderSessions {
     const authenticated = data.authenticated === true || data.authorized === true || data.signedIn === true || data.loggedIn === true || state === 'authorized' || state === 'authenticated'
     const previous = c.provider === 'mewatch' ? this.activation : this.views.get(key)
     const view: ProviderSessionView = { provider: c.provider, state, authenticated, summary: authenticated ? '已登录；播放仍以源站授权为准' : state === 'imported' ? '已导入；尚未验证订阅' : state }
+    if (c.provider === 'iqcn') {
+      view.summary = text(data.summary) || (authenticated ? '爱奇艺国内版已登录' : state === 'pending' ? '用爱奇艺 App 扫码并确认' : state === 'expired' ? '二维码已过期，请刷新' : '登录未完成，请重试')
+      if (c.op === 'start') {
+        const url = new URL(text(data.url))
+        const trusted = ['iqiyi.com', 'gitv.tv'].some(host => url.hostname === host || url.hostname.endsWith('.' + host))
+        const expires = positive(data.expiresAt, 0) * 1000
+        if (url.protocol !== 'https:' || !trusted || url.username || url.password || !text(data.flowId) || expires <= this.now()) throw new Error('网关返回的爱奇艺二维码无效')
+        view.url = url.href; view.expiresAt = expires; view.interval = positive(data.interval, 2)
+        this.cnFlow = { id: text(data.flowId), expires, nextPoll: this.now() + view.interval * 1000 }
+      } else if (state === 'pending') {
+        view.url = this.views.get(key)?.url; view.expiresAt = this.cnFlow?.expires
+        view.interval = positive(data.interval, 2)
+        if (this.cnFlow) this.cnFlow.nextPoll = this.now() + view.interval * 1000
+      }
+      if (authenticated || ['logout', 'cancel'].includes(c.op) || ['expired', 'denied'].includes(state)) this.cnFlow = undefined
+    }
     if (c.provider === 'iq') {
       view.webAuthenticated = data.webAuthenticated === true; view.tvAuthenticated = data.tvAuthenticated === true
       view.authenticated = view.webAuthenticated && view.tvAuthenticated

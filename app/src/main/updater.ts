@@ -11,6 +11,7 @@ import { app, net, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { UpdateState } from '@shared/api'
 import { runLog } from '@tui/runlog.ts'
+import { userMessage } from '@tui/user-message.ts'
 
 const OWNER = 'my-name-is-alan'
 const REPO = 'gvs-tui'
@@ -63,6 +64,10 @@ export class Updater {
   }
 
   private set(patch: Partial<UpdateState>): void {
+    if (patch.status === 'error' && patch.message) {
+      runLog(`update failed: ${patch.message}`)
+      patch = { ...patch, message: userMessage(patch.message, '暂时无法检查或下载更新，请稍后重试。') }
+    }
     Object.assign(this.state, patch)
     this.emit(this.view())
   }

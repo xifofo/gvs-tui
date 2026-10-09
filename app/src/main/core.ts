@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { userMessage, errorCode } from '@tui/user-message.ts'
 import { ProviderSessions, type SessionCommand, type ProviderSessionView } from '@tui/provider-session.ts'
 import { supportsSearch, supportsBrowse, isManifestProvider } from '@tui/providers.ts'
 import { manifestDetail } from '@tui/manifest-detail.ts'
@@ -30,7 +31,7 @@ import {
   type DlTask,
   type JobEvt,
 } from '@tui/jobs.ts'
-import { extractTencentLinks, extractYoukuVideoId, extractIQLink } from '@tui/link.ts'
+import { extractTencentLinks, extractYoukuVideoId, extractIQLink, extractIQCNLink } from '@tui/link.ts'
 import { youkuSpokenLangKey } from '@tui/media.ts'
 import { completedFilename, filename, folder, tierHeight, dots } from '@tui/name.ts'
 import { usesMeasuredNaming } from '@tui/completed-naming.ts'
@@ -261,9 +262,9 @@ function dedupeAudios(audios: Audio[], vidLang: Map<string, string>): Audio[] {
 /** 隧道失败原因给人看：网关/WAF 的 403 回的是整页 HTML，原样显示只会是一串标签。 */
 function tunnelErrText(err: string): string {
   if (!err) return ''
-  if (/route forbidden|\b403\b/i.test(err)) return '网关拒绝了隧道（403）：这个 Key 可能没有隧道权限，请联系网关管理员'
-  if (/\b401\b|unauthori[sz]ed/i.test(err)) return '网关拒绝了隧道（401）：Key 无效或已过期'
-  return err.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)
+  if (/route forbidden|\b403\b/i.test(err)) return '服务未允许建立连接，请联系管理员检查使用权限。'
+  if (/\b401\b|unauthori[sz]ed/i.test(err)) return '访问密钥无效或已过期，请在连接设置中检查。'
+  return userMessage(err, '本机连接暂时不可用，请检查网络和代理设置。')
 }
 
 function mask(key: string): string {
@@ -301,7 +302,7 @@ export class Core {
   private readonly hub: JobHub
   private probeToken = 0
   private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[] }>()
-  private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | null = null
+  private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | null = null
 
   constructor(private readonly emit: Emit) {
     this.hub = new JobHub((e) => this.onJob(e))
@@ -542,6 +543,7 @@ export class Core {
     if (this.has('tencent')) void this.refreshTencent()
     if (this.has('douyin')) void this.probeDouyin()
     this.checkIQOnConnect()
+    if (this.has('iqcn')) void this.providerSession({ provider: 'iqcn', op: 'status' }).catch(() => {})
     if (this.has('hamivideo')) void this.providerSession({ provider: 'hamivideo', op: 'status' }).catch(() => {})
   }
 
@@ -697,6 +699,10 @@ export class Core {
         const risk = account.state === 'risk_verification_required'
         const short = account.authenticated ? '已登录' : risk ? '需验证' : account.webAuthenticated ? 'Web 已登录' : '未登录'
         return { provider:p, short, summary:account.summary, tone:account.authenticated?'ok':'warn' }
+      }
+      if (p === 'iqcn') {
+        const account = this.providerAccounts.get(p)
+        return { provider:p, short:account?.authenticated?'已登录':'待登录', summary:account?.summary || '到平台账号设置扫码登录爱奇艺国内版', tone:account?.authenticated?'ok':'muted' }
       }
       if (isManifestProvider(p)) {
         const account = this.providerAccounts.get(p + (p === 'hamivideo' ? ':' + (this.cfg.hamiClient || 'tv') : ''))
@@ -916,7 +922,23 @@ export class Core {
     return { done: false, message: '等待扫码…', tone: 'muted' }
   }
 
-  qrCancel(): void {
+  async iqcnQrStart(): Promise<QRStart> {
+    const view = await this.providerSession({ provider: 'iqcn', op: 'start' })
+    if (!view.url) throw new Error('网关没有返回爱奇艺二维码')
+    this.qr = { kind: 'iqcn' }
+    const image = await QRCode.toDataURL(view.url, { margin: 1, width: 420, errorCorrectionLevel: 'M' })
+    return { images: [{ title: '爱奇艺 App 扫码', image }], hint: view.summary }
+  }
+
+  async iqcnQrPoll(): Promise<QRPoll> {
+    if (this.qr?.kind !== 'iqcn') return { done: false, message: '二维码已失效，请刷新', tone: 'warn' }
+    const view = await this.providerSession({ provider: 'iqcn', op: 'poll' })
+    if (view.authenticated) this.qr = null
+    return { done: view.authenticated, message: view.summary, tone: view.authenticated ? 'ok' : ['expired', 'denied'].includes(view.state) ? 'warn' : 'muted' }
+  }
+
+  async qrCancel(): Promise<void> {
+    if (this.qr?.kind === 'iqcn') await this.providerSession({ provider: 'iqcn', op: 'cancel' }).catch(() => undefined)
     this.qr = null
   }
 
@@ -960,7 +982,7 @@ export class Core {
       if (!Array.isArray(data.sections)) throw new Error('INVALID_CATALOG')
       sections = data.sections.filter(isObj)
     } catch (e) {
-      if (!/unknown.*action|action.*browse_catalog|INVALID_CATALOG|not supported|not implemented|PROVIDER_NOT_FOUND|http 404/i.test(errText(e))) throw e
+      if (!['ACTION_UNSUPPORTED', 'PROVIDER_NOT_FOUND', 'NOT_FOUND'].includes(errorCode(e)) && !/unknown.*action|action.*browse_catalog|INVALID_CATALOG|not supported|not implemented|PROVIDER_NOT_FOUND|http 404/i.test(errText(e))) throw e
       sections = fallbackSections(provider)
     }
     return sections.map((s) => ({
@@ -998,6 +1020,8 @@ export class Core {
   }
 
   parseLink(text: string): LinkTarget {
+    const cnLink = extractIQCNLink(text)
+    if (cnLink) return { kind: 'iqcn', url: cnLink }
     const iqLink = extractIQLink(text)
     if (iqLink) return { kind: 'iq', url: iqLink }
     const manifest = providerLink(text)
@@ -1040,11 +1064,13 @@ export class Core {
     const eps = parseEps(data)
     // 有些老片/短剧详情接口不给海报和片名，卡片上其实已经有，拿它兜底。
     const view = buildDetail(provider, id, data, '', eps, hint)
+    if (provider === 'iqcn') view.focusVid = asString(data.focusVid) || undefined
     await this.applyMovieEditions(view, data)
     return view
   }
 
   async detailFromLink(link: LinkTarget, hint?: DetailHint): Promise<DetailView> {
+    if (link.kind === 'iqcn') return this.detail('iqcn', link.url, hint)
     if (link.kind === 'iq') return this.detail('iq', link.url, hint)
     if (link.kind === 'mewatch' || link.kind === 'hamivideo') return this.detail(link.kind, link.url, hint)
     if (link.kind === 'youku') {
