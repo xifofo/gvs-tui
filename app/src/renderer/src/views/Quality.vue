@@ -6,6 +6,7 @@ import { resolveDefaultAudioId } from '@shared/audio-selection'
 import { defaultTmdbHit } from '@shared/tmdb-selection'
 import Icon from '../components/Icon.vue'
 import Skeleton from '../components/Skeleton.vue'
+import IQCNAudioPicker from '../components/IQCNAudioPicker.vue'
 import { back, errText, go, gvs, human, openQuality, store, toast } from '../store'
 
 const d = computed(() => store.detail)
@@ -356,6 +357,8 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
           <span class="atitle">音轨</span>
           <span class="muted">随视频内嵌{{ embeddedNote ? `：${embeddedNote}` : '，无需选择' }}</span>
         </div>
+        <IQCNAudioPicker v-else-if="d?.provider === 'iqcn' && audios.length" :audios="audios" :selected-ids="audioIds" :default-id="defaultAudioId"
+          @toggle="toggleAudio" @set-default="setDefaultAudio" @all="pickAll" @only-default="pickDefault" />
         <fieldset v-else-if="audios.length" class="fs abox">
           <legend class="sr-only">音轨</legend>
           <div class="alegend">

@@ -13,6 +13,7 @@ import { c } from '../lib/theme.ts'
 import { qualityCaptionText, qualityFpsText, qualityHdrText, qualityResolution } from '../lib/quality.ts'
 import { episodeRanges, qualityColumns, selectedAudioText } from '../lib/ui-layout.ts'
 import { resolveDefaultAudioId } from '../lib/audio-selection.ts'
+import { iqcnAudioGroups } from '../lib/iqcn-audio-ui.ts'
 import { human } from '../lib/util.ts'
 import { audioTab, optionWindow } from '../lib/view.ts'
 import type { Audio, Quality, Snapshot } from '../types.ts'
@@ -35,6 +36,7 @@ const bodyH = computed(() => props.height)
 
 const qualities = computed(() => props.state.qualities ?? [])
 const audios = computed(() => props.state.audios ?? [])
+const audioTitles = computed(() => new Map(iqcnAudioGroups(audios.value.filter(audio => audio.id.startsWith('iqcn:'))).flatMap(group => group.items.map(row => [row.audio.id, row.title] as const))))
 const detail = computed(() => props.state.detail)
 const isMovie = computed(() =>
   detail.value?.kind === 'movie' || /电影/.test(detail.value?.category ?? ''),
@@ -232,7 +234,7 @@ function audioHeader(): StyledText {
 function audioLine(row: Audio, selected: boolean): StyledText {
   const muxDefault = resolveDefaultAudioId(audios.value, audios.value.filter(a => a.selected).map(a => a.id)) === row.id
   const tags: TextChunk[] = []
-  if (muxDefault) tags.push(...chipChunks('封装默认', c.ok))
+  if (muxDefault) tags.push(...chipChunks('默认播放', c.ok))
   if (row.isDefault) {
     if (tags.length) tags.push({ __isChunk: true, text: ' ' })
     tags.push(...chipChunks('平台默认', c.dim))
@@ -246,7 +248,7 @@ function audioLine(row: Audio, selected: boolean): StyledText {
         color: row.selected ? c.ok : c.faint,
       },
       {
-        text: row.label || row.id,
+        text: audioTitles.value.get(row.id) || row.label || row.id,
         cells: AUDIO_COLS.label,
         color: selected ? c.text : c.dim,
         bold: selected,
