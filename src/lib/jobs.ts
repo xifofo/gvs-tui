@@ -361,7 +361,7 @@ async function runTask(
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
       case 'iqcn':
-        await downloadIQCN(cli, t, out, work, emit, signal, undefined, cfg.threads)
+        note = await downloadIQCN(cli, t, out, work, emit, signal, undefined, cfg.threads)
         break
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)

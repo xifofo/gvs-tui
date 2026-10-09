@@ -47,7 +47,7 @@ test('domestic job publishes only after every segment is restored and decoded', 
     if (action === 'download-finish') { released = true; return {} }
     if (action === 'download-subtitle') {
       const text = Buffer.from('1\n00:00:00,000 --> 00:00:01,500\n验收字幕\n')
-      return { index: 0, format: 'srt', bytes: text.length, data: text.toString('base64') }
+      return { index: 0, language_id: 1, format: 'srt', bytes: text.length, data: text.toString('base64') }
     }
     expect(action).toBe('download-segment')
     expect(input.index).toBe(restored++)
@@ -93,12 +93,23 @@ test('domestic job publishes only after every segment is restored and decoded', 
   expect(audioLines[2]).toContain('aac')
   expect(audioLines[2]).not.toContain('(default)')
   expect(metadata).toContain('普通话 · DOLBY')
+  const subtitleLines = metadata.split('\n').filter(line => /Stream #.*Subtitle:/.test(line))
+  expect(subtitleLines).toHaveLength(2)
+  expect(subtitleLines[0]).toContain('(default)')
+  expect(subtitleLines[1]).not.toContain('(default)')
+  expect(metadata).toContain('简体中文')
+  expect(metadata).toContain('繁体中文 (OpenCC 转换)')
   const decoded = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:v', '-map', '0:a', '-f', 'null', '-'], { windowsHide: true, timeout: 30000 })
   expect(decoded.status).toBe(0)
   expect(decoded.stderr.toString().trim()).toBe('')
   const subtitle = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:s:0', '-f', 'srt', '-'], { windowsHide: true, timeout: 30000 })
   expect(subtitle.status).toBe(0)
   expect(subtitle.stdout.toString()).toContain('验收字幕')
+  const traditional = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:s:1', '-f', 'srt', '-'], { windowsHide: true, timeout: 30000 })
+  expect(traditional.status).toBe(0)
+  expect(traditional.stdout.toString()).toContain('驗收字幕')
+  const timing = /\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}/
+  expect(traditional.stdout.toString().match(timing)?.[0]).toBe(subtitle.stdout.toString().match(timing)?.[0])
 }, 60000)
 
 test('failed restoration preserves an existing output and releases the private plan', async () => {

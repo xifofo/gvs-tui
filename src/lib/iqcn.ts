@@ -13,6 +13,8 @@ import { downloadIQCNLocalSegment, iqcnProcessing, type IQCNLocalRuntime } from 
 import { orderedDownload, processingQueue } from './ordered-download.ts'
 import { restoreIQCNLocal } from './iqcn-local.ts'
 import { iqcnAudios, downloadIQCNAudio } from './iqcn-audio.ts'
+import { prepareIQCNSubtitles } from './iqcn-subtitles.ts'
+import { defaultIQSubtitleIndex } from './iq-subtitles.ts'
 
 /** Domestic selection uses source BID/bitrate/frame rate, never guessed tiers. */
 export function iqcnOptions(data: Record<string, unknown>): StreamOptions {
@@ -55,7 +57,7 @@ export function assertIQCNCoverage(tracks: TrackTiming[], expectedSeconds = 0): 
   }
 }
 
-export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal, runtime?: IQCNLocalRuntime, threads = 1): Promise<void> {
+export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal, runtime?: IQCNLocalRuntime, threads = 1): Promise<string> {
   signal?.throwIfAborted()
   const plan = await cli.invoke('iqcn', 'streams', { tvid: task.vid, ...iqcnSelection(task.quality), transport: 'local-v1' }, {}, { timeoutMs: 150000 })
   const video = isObj(plan.video) ? plan.video : {}
@@ -111,21 +113,11 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     if (!audioFiles.length) assertIQCNCoverage(videoTiming, task.duration || 0)
     const defaultIndex = Math.max(0, audioFiles.findIndex(audio => audio.isDefault))
     audioFiles.forEach((audio, index) => { audio.isDefault = index === defaultIndex })
-    const subtitles: Array<{ path: string; language: string }> = []
-    const sourceSubs = Array.isArray(plan.subtitles) ? plan.subtitles.filter(isObj) : []
-    for (const sub of sourceSubs) {
-      const formats = Array.isArray(sub.formats) ? sub.formats : []
-      const format = formats.includes('srt') ? 'srt' : formats.includes('webvtt') ? 'webvtt' : ''
-      if (!format) continue
-      signal?.throwIfAborted()
-      emit('下载字幕', 0.93, `字幕 ${sub.index}`)
-      const result = await cli.invoke('iqcn', 'download-subtitle', { planId, index: sub.index, format }, {}, { timeoutMs: 150000 })
-      const bytes = Buffer.from(asString(result.data), 'base64')
-      if (!bytes.length || Number(result.bytes) !== bytes.length || Number(result.index) !== Number(sub.index) || result.format !== format) throw new Error('爱奇艺国内版字幕响应无效')
-      const path = join(work, `iqcn-sub-${sub.index}.${format === 'srt' ? 'srt' : 'vtt'}`)
-      writeFileSync(path, bytes)
-      subtitles.push({ path, language: Number(sub.language_id) === 1 ? 'zho' : 'und' })
-    }
+    emit('下载字幕', 0.93, '优先原生简繁字幕，缺失时用 OpenCC 补齐')
+    const prepared = await prepareIQCNSubtitles(cli, plan, planId, work, signal)
+    const subtitles = prepared.subtitles
+    const subtitleDefault = defaultIQSubtitleIndex(subtitles)
+    if (prepared.note) emit('字幕处理', 0.94, prepared.note)
     emit('封装', 0.95, '生成完整成品')
     // Explicit extension lets ffmpeg determine the destination container.
     const muxed = join(work, dest.toLowerCase().endsWith('.mp4') ? 'iqcn-muxed.mp4' : 'iqcn-muxed.mkv')
@@ -136,7 +128,7 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
       subtitles.forEach((_, index) => args.push('-map', `${index + audioFiles.length + 1}:s:0`))
       args.push('-c', 'copy', '-c:s', muxed.endsWith('.mp4') ? 'mov_text' : 'srt')
       audioFiles.forEach((audio, index) => args.push(`-metadata:s:a:${index}`, `language=${audio.language}`, `-metadata:s:a:${index}`, `title=${audio.title}`, `-disposition:a:${index}`, audio.isDefault ? 'default' : '0'))
-      subtitles.forEach((sub, index) => args.push(`-metadata:s:s:${index}`, `language=${sub.language}`))
+      subtitles.forEach((sub, index) => args.push(`-metadata:s:s:${index}`, `language=${sub.language}`, `-metadata:s:s:${index}`, `title=${sub.title}`, `-disposition:s:${index}`, index === subtitleDefault ? 'default' : '0'))
       args.push('-y', muxed)
       await runIQFFmpeg(ffmpeg, args, '爱奇艺国内版音轨与字幕封装失败', signal)
     }
@@ -150,6 +142,7 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     // destination, including another concurrent task's completed output.
     linkSync(staged, dest)
     unlinkSync(staged)
+    return prepared.note || ''
   } finally {
     try { unlinkSync(staged) } catch { /* no staged output */ }
     await cli.invoke('iqcn', 'download-finish', { planId }, {}, { timeoutMs: 15000 }).catch(() => undefined)
