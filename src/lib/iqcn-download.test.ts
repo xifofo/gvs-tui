@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, existsSync, writeFileSync, copyFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -18,7 +18,10 @@ test('domestic job publishes only after every segment is restored and decoded', 
   const parts = [bytes.subarray(0, split), bytes.subarray(split)]
   let restored = 0, released = false
   const cli = { invoke: async (_p: string, action: string, input: Record<string, unknown>) => {
-    if (action === 'streams') return { planId: 'fixture-plan', video: { segments: [{}, {}] }, subtitles: [{ index: 0, language_id: 1, formats: ['srt'] }] }
+    if (action === 'streams') {
+      expect(input.transport).toBe('local-v1')
+      return { planId: 'fixture-plan', transport: 'local-v1', localProcessing: { version: 1, ticket: 'fixture', identity: 'fixture' }, video: { segments: parts.map(p => ({ contentlength: p.length })) }, subtitles: [{ index: 0, language_id: 1, formats: ['srt'] }] }
+    }
     if (action === 'download-finish') { released = true; return {} }
     if (action === 'download-subtitle') {
       const text = Buffer.from('1\n00:00:00,000 --> 00:00:01,500\n验收字幕\n')
@@ -27,11 +30,17 @@ test('domestic job publishes only after every segment is restored and decoded', 
     expect(action).toBe('download-segment')
     expect(input.index).toBe(restored++)
     const part = parts[Number(input.index)]!
-    return { index: input.index, bytes: part.length, data: part.toString('base64'), restored: true }
+    return { transport: 'local-v1', index: input.index, bytes: part.length, urls: [`https://fixture.ptqy.gitv.tv/${input.index}`] }
   } } as unknown as GwClient
   const task = { vid: '123', quality: '600|100|25' } as DlTask
   const dest = join(dir, 'result.mkv')
-  await downloadIQCN(cli, task, dest, join(dir, 'work'), () => {})
+  await downloadIQCN(cli, task, dest, join(dir, 'work'), () => {}, undefined, {
+    fetch: async url => new Response(parts[Number(new URL(url).pathname.slice(1))]!),
+    restore: async (source, destination) => {
+      copyFileSync(source, destination)
+      return { version: 1, bytes: readFileSync(source).length, restored: false, clearCandidate: true }
+    },
+  })
   expect(restored).toBe(2)
   expect(released).toBe(true)
   expect(existsSync(dest)).toBe(true)
@@ -48,11 +57,14 @@ test('failed restoration preserves an existing output and releases the private p
   writeFileSync(dest, 'original-output')
   let released = false
   const cli = { invoke: async (_p: string, action: string) => {
-    if (action === 'streams') return { planId: 'fixture-plan', video: { segments: [{}] } }
+    if (action === 'streams') return { planId: 'fixture-plan', transport: 'local-v1', localProcessing: { version: 1, ticket: 'fixture', identity: 'fixture' }, video: { segments: [{ contentlength: 188 }] } }
     if (action === 'download-finish') { released = true; return {} }
-    return { index: 0, bytes: 188, data: Buffer.alloc(188).toString('base64'), restored: false }
+    return { transport: 'local-v1', index: 0, bytes: 188, urls: ['https://fixture.ptqy.gitv.tv/0'] }
   } } as unknown as GwClient
-  await expect(downloadIQCN(cli, { vid: '123', quality: '600|100|25' } as DlTask, dest, join(dir, 'work'), () => {})).rejects.toThrow('还原')
+  await expect(downloadIQCN(cli, { vid: '123', quality: '600|100|25' } as DlTask, dest, join(dir, 'work'), () => {}, undefined, {
+    fetch: async () => new Response(Buffer.alloc(188)),
+    restore: async () => { throw new Error('本地还原失败') },
+  })).rejects.toThrow('还原')
   expect(readFileSync(dest, 'utf8')).toBe('original-output')
   expect(released).toBe(true)
   expect(existsSync(dest + '.iqcn-part')).toBe(false)

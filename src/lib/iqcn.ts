@@ -9,6 +9,7 @@ import { ensureFFmpeg } from './tools.ts'
 import { ffmpegRemux, validateVideoDecode } from './ffmpeg.ts'
 import { inspectMediaTiming, type TrackTiming } from './media-timing.ts'
 import { runIQFFmpeg } from './iq-output.ts'
+import { downloadIQCNLocalSegment, iqcnProcessing, type IQCNLocalRuntime } from './iqcn-local.ts'
 
 /** Domestic selection uses source BID/bitrate/frame rate, never guessed tiers. */
 export function iqcnOptions(data: Record<string, unknown>): StreamOptions {
@@ -51,9 +52,9 @@ export function assertIQCNCoverage(tracks: TrackTiming[], expectedSeconds = 0): 
   }
 }
 
-export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal): Promise<void> {
+export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal, runtime?: IQCNLocalRuntime): Promise<void> {
   signal?.throwIfAborted()
-  const plan = await cli.invoke('iqcn', 'streams', { tvid: task.vid, ...iqcnSelection(task.quality) }, {}, { timeoutMs: 150000 })
+  const plan = await cli.invoke('iqcn', 'streams', { tvid: task.vid, ...iqcnSelection(task.quality), transport: 'local-v1' }, {}, { timeoutMs: 150000 })
   const video = isObj(plan.video) ? plan.video : {}
   const segments = Array.isArray(video.segments) ? video.segments.filter(isObj) : []
   const planId = asString(plan.planId)
@@ -62,13 +63,11 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
   const transport = join(work, 'iqcn-video.ts'), staged = join(dirname(dest), `.gvs-iqcn-${randomUUID()}${extname(dest)}`)
   writeFileSync(transport, '')
   try {
+    const material = iqcnProcessing(plan)
     for (let index = 0; index < segments.length; index++) {
       signal?.throwIfAborted()
-      emit('下载与还原', 0.02 + index / segments.length * 0.87, `分片 ${index + 1}/${segments.length}`)
-      const result = await cli.invoke('iqcn', 'download-segment', { planId, index }, {}, { timeoutMs: 150000 })
-      signal?.throwIfAborted()
-      const bytes = Buffer.from(asString(result.data), 'base64')
-      if ((result.restored !== true && result.clearCandidate !== true) || Number(result.index) !== index || !bytes.length || Number(result.bytes) !== bytes.length) throw new Error('爱奇艺国内版分片还原或长度校验失败')
+      emit('本地下载与处理', 0.02 + index / segments.length * 0.87, `分片 ${index + 1}/${segments.length}`)
+      const bytes = await downloadIQCNLocalSegment(cli, planId, index, Number(segments[index]!.contentlength), material, work, signal, runtime)
       appendFileSync(transport, bytes)
     }
     const ffmpeg = await ensureFFmpeg(undefined, signal)

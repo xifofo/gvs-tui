@@ -33,6 +33,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/iqcn-local/go.mod
+      - name: Build local IQCN processor (Windows)
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: node scripts/build-iqcn-local.mjs
+      - name: Build local IQCN processor (macOS)
+        if: runner.os == 'macOS'
+        working-directory: .
+        run: |
+          node scripts/build-iqcn-local.mjs --platform=darwin --arch=arm64 --output=.build/iqcn-local/darwin-arm64/iqcn-local
+          node scripts/build-iqcn-local.mjs --platform=darwin --arch=x64 --output=.build/iqcn-local/darwin-x64/iqcn-local
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'

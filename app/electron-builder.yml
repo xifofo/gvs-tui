@@ -35,6 +35,8 @@ nsis:
   shortcutName: GVS
 mac:
   extraResources:
+    - from: ../.build/iqcn-local/darwin-${arch}/iqcn-local
+      to: bin/iqcn-local
     - from: ../.build/managed-re/osx-${arch}/N_m3u8DL-RE
       to: bin/N_m3u8DL-RE
     - from: ../bin/licenses
