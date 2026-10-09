@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { filename, folder, sourceTag, type Naming } from './name.ts'
+import { filename, folder, sourceTag, tierHeight, type Naming } from './name.ts'
 
 function movie(partial: Partial<Naming> = {}): Naming {
   return {
@@ -31,6 +31,17 @@ describe('filename', () => {
   test('show still uses SxxExx', () => {
     expect(filename(movie({ kind: 'show', edition: undefined }))).toContain('S01E01')
   })
+})
+
+test('resolution tiers are identical for landscape, portrait and cropped equivalents', () => {
+  for (const [width, height, expected] of [[3840, 2160, 2160], [3840, 1608, 2160], [1920, 1080, 1080],
+    [1920, 808, 1080], [1280, 720, 720], [854, 480, 480]]) {
+    expect(tierHeight(width!, height!)).toBe(expected!)
+    expect(tierHeight(height!, width!)).toBe(expected!)
+  }
+  expect(tierHeight(0, 2160)).toBe(2160)
+  expect(tierHeight(0, 1080)).toBe(1080)
+  expect(tierHeight(0, 0)).toBe(0)
 })
 
 describe('short-drama folders', () => {

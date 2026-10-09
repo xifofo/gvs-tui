@@ -102,12 +102,14 @@ export function folder(n: Naming, outDir: string): string {
 
 /**
  * 真实像素 → 发行命名里的规范档位。片源常见 letterbox / 2:1 画幅，
- * 直接拿高度会写出 `1608p`、`1920p` 这种不存在的档位，所以按宽度判：
- * 3840×1920（4K 2:1）→ 2160p、1920×808（1080p 宽银幕）→ 1080p。
+ * 直接拿高度会写出 `1608p`、`1920p` 这种不存在的档位，所以按长边判：
+ * 3840×1920（4K 2:1）/ 2160×3840（竖屏 4K）→ 2160p。
+ * 仅有高度时保留旧任务的档位推断。
  */
 export function tierHeight(width: number, height: number): number {
-  const w = Number.isFinite(width) ? width : 0
+  const rawWidth = Number.isFinite(width) ? width : 0
   const h = Number.isFinite(height) ? height : 0
+  const w = rawWidth > 0 && h > 0 ? Math.max(rawWidth, h) : rawWidth
   if (w >= 3400) return 2160
   if (w >= 2300) return 1440
   if (w >= 1700) return 1080

@@ -34,6 +34,17 @@ test('actual lower resolution and regular fps replace the selected 4K/60 specs',
   expect(completedFilename(naming({ episodeTitle: '节目' }), media())).not.toContain('.节目.2026')
 })
 
+test('portrait 4K specials name the measured resolution and keep SDR out of the suffix', () => {
+  const n = naming({ title: '毛雪汪', season: 0, episode: 171, year: 2021,
+    episodeTitle: '购物车：便携养生好物分享' })
+  const specs = media({ width: 2160, height: 3840, fps: 60000 / 1001,
+    audio: { status: 'confirmed', codec: 'eac3', channels: 2 } })
+  expect(completedFilename(n, specs))
+    .toBe('毛雪汪.S00E171.购物车.便携养生好物分享.2021.2160p.TX.WEB-DL.60fps.HEVC.DDP.2.0-WF.mkv')
+  expect(completedFilename(n, media({ width: 1080, height: 1920, fps: 25 })))
+    .toEndWith('.2021.1080p.TX.WEB-DL.HEVC.AAC.2.0-WF.mkv')
+})
+
 test('IQ movies and episodes use the platform tag and actual default audio without guessed premium markers', () => {
   const source = sourceTag('iq')
   expect(source).toBe('IQ')

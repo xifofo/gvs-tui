@@ -30,6 +30,53 @@ test('1080p/25fps video cannot satisfy selected 4K/60fps/HDR specs', () => {
   expect(() => assertTencentSpecs({ width: 3840, height: 1608, fps: 25, hdr: false }, {}, 2160)).not.toThrow()
 })
 
+test('portrait 10-bit BT.709 video remains SDR and cannot satisfy selected HDR', () => {
+  const specs = tencentSpecsFromFFmpeg('  Stream #0:0[0x100]: Video: hevc (Main 10) ([36][0][0][0] / 0x0024), yuv420p10le(tv, bt709), 2160x3840 [SAR 1:1 DAR 9:16], 60 fps, 60 tbr, 90k tbn, start 0.050000')
+  expect(specs).toEqual({ width: 2160, height: 3840, fps: 60, hdr: false })
+  expect(() => assertTencentSpecs(specs, { width: 3840, height: 2160, fps: 60, hdr: 'sdr' })).not.toThrow()
+  expect(() => assertTencentSpecs(specs, { width: 2160, height: 3840, fps: 60, hdr: 'hdr' })).toThrow('所选 HDR 未在实际视频中确认')
+})
+
+test('landscape batch specs accept the portrait 4K/25fps shopping clips', () => {
+  const portrait = { width: 2160, height: 3840, fps: 25, hdr: false }
+  expect(() => assertTencentSpecs(portrait, { width: 3840, height: 2160, fps: 25, hdr: 'sdr' })).not.toThrow()
+  expect(() => assertTencentSpecs(portrait, { width: 2160, height: 3840, fps: 25, hdr: 'sdr' })).not.toThrow()
+  expect(() => assertTencentSpecs({ ...portrait, width: 3840, height: 2160 }, { width: 2160, height: 3840 })).not.toThrow()
+  expect(() => assertTencentSpecs(portrait, {}, 2160)).not.toThrow()
+  expect(() => assertTencentSpecs(portrait, { width: 3840 })).not.toThrow()
+  expect(() => assertTencentSpecs(portrait, { height: 2160 })).not.toThrow()
+  expect(() => assertTencentSpecs({ ...portrait, width: 1608 }, { width: 3840, height: 1608 })).not.toThrow()
+})
+
+test('ordered edges still reject lower resolution, missing short-edge pixels and lower fps', () => {
+  const selected = { width: 3840, height: 2160, fps: 60, hdr: 'sdr' }
+  for (const [width, height] of [[1920, 1080], [1080, 1920], [4320, 1920]]) {
+    expect(() => assertTencentSpecs({ width: width!, height: height!, fps: 60, hdr: false }, selected)).toThrow('分辨率实际')
+  }
+  expect(() => assertTencentSpecs({ width: 1080, height: 1920, fps: 60, hdr: false }, {}, 2160)).toThrow('分辨率实际')
+  expect(() => assertTencentSpecs({ width: 2160, height: 3840, fps: 25, hdr: false }, selected)).toThrow('帧率实际 25fps，要求 60fps')
+  expect(() => assertTencentSpecs({ width: 2160, height: 3840, fps: 59.94, hdr: false }, selected)).not.toThrow()
+  try {
+    assertTencentSpecs({ width: 1080, height: 1920, fps: 60, hdr: false }, selected)
+  } catch (e) {
+    expect(String(e)).not.toContain('HDR 未确认')
+  }
+})
+
+test('only video PQ, HLG and Dolby Vision signaling confirm HDR', () => {
+  for (const transfer of ['smpte2084', 'arib-std-b67']) {
+    const text = `  Stream #0:0: Video: hevc (Main 10), yuv420p10le(tv, bt2020nc/bt2020/${transfer}), 2160x3840, 59.94 fps`
+    const specs = tencentSpecsFromFFmpeg(text)
+    expect(specs?.hdr).toBe(true)
+    expect(() => assertTencentSpecs(specs, { width: 3840, height: 2160, fps: 60, hdr: 'hdr' })).not.toThrow()
+  }
+  const video = '  Stream #0:0: Video: hevc (Main 10), yuv420p10le(tv, bt709), 2160x3840, 60 fps'
+  expect(tencentSpecsFromFFmpeg(`${video}\n    Side data:\n      DOVI configuration record: version: 1.0, profile: 8`)?.hdr).toBe(true)
+  expect(tencentSpecsFromFFmpeg(`${video}\n    Side data:\n      Dolby Vision configuration record`)?.hdr).toBe(true)
+  expect(tencentSpecsFromFFmpeg(`${video}\n    Metadata:\n      title: Dolby Vision smpte2084`)?.hdr).toBe(false)
+  expect(tencentSpecsFromFFmpeg(`Input #0 from '/tmp/dolby vision.mkv':\n${video}\n  Stream #0:1: Audio: aac\n    Metadata:\n      title: dovi smpte2084`)?.hdr).toBe(false)
+})
+
 test.skipIf(process.env.GVS_MEDIA_TESTS !== '1')('real MKV with longer audio fails packet-based completion', async () => {
   const ffmpeg = lookBundledFFmpeg() || 'ffmpeg'
   const dir = mkdtempSync(join(tmpdir(), 'gvs-tencent-duration-'))
