@@ -116,7 +116,7 @@ test('IQ series TMDB matching keeps the platform season and episode numbers acro
       ['正式剧名', 2023, 900002, 2, 1], ['正式剧名', 2023, 900002, 2, 2],
     ])
     expect(r.snapshot.confirmation?.name).toContain('正式剧名.S02E01.雨夜重逢.2023.')
-    expect(r.snapshot.confirmation?.directory).toEndWith('正式剧名 (2023) {tmdb-900002}/Season 02')
+    expect(r.snapshot.confirmation?.directory).toEndWith(join('正式剧名 (2023) {tmdb-900002}', 'Season 02'))
     const restored = JSON.parse(JSON.stringify(x.pending[1]))
     expect(completedFilename(jobNaming(restored, x.cfg), { status: 'unavailable' })).toContain('正式剧名.S02E02.携手同行.2023.')
   } finally { x.simulated = true }
@@ -151,7 +151,7 @@ test('a matched final season can use TMDB S04 for the batch while retaining all 
   r.handleKey('enter')
   expect(x.pending.map((t: any) => [t.vid, t.season, t.episode])).toEqual([['ep10', 4, 10], ['ep11', 4, 11]])
   expect(r.snapshot.confirmation?.name).toContain('诛仙.S04E10.诛仙.最终季.第10话.2022.')
-  expect(r.snapshot.confirmation?.directory).toEndWith('诛仙 (2022) {tmdb-206484}/Season 04')
+  expect(r.snapshot.confirmation?.directory).toEndWith(join('诛仙 (2022) {tmdb-206484}', 'Season 04'))
   const restored = JSON.parse(JSON.stringify(x.pending[1]))
   expect(completedFilename(jobNaming(restored, x.cfg), { status: 'probed', height: 2160, codec: 'HEVC' })).toContain('.S04E11.')
   r.handleKey('t')
@@ -1032,7 +1032,7 @@ test('TUI group season selection keeps parent TMDB binding and platform episode 
   expect(x.pending.map((t: any) => [t.tmdbId, t.vid, t.season, t.episode])).toEqual([
     [75787, 'fox-one', 13, 1], [75787, 'fox-two', 13, 2],
   ])
-  expect(r.snapshot.confirmation?.directory).toEndWith('狐妖小红娘 (2015) {tmdb-75787}/Season 13')
+  expect(r.snapshot.confirmation?.directory).toEndWith(join('狐妖小红娘 (2015) {tmdb-75787}', 'Season 13'))
   expect(r.snapshot.confirmation?.name).toContain('狐妖小红娘.S13E01.')
   expect(r.snapshot.confirmation?.name).not.toContain('E168')
   const saved = JSON.parse(JSON.stringify(x.pending[1]))

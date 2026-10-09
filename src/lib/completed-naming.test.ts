@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { tencentActualVersion, type MediaSpecs } from './actual-version.ts'
 import { finalizeCompletedName, renameCompletedFile, reserveOutputPath, tencentNamingEvidence, usesMeasuredNaming, youkuNamingEvidence } from './completed-naming.ts'
 import { completedFilename, filename, folder, sourceTag, type Naming } from './name.ts'
@@ -66,7 +66,7 @@ test('long Chinese subtitles retain the measured suffix without creating directo
 })
 
 test('S00 folder is preserved; old tasks and other platforms do not opt into new naming', () => {
-  expect(folder(naming({ season: 0 }), '/library')).toBe('/library/节目 (2026)/Season 00')
+  expect(folder(naming({ season: 0 }), '/library')).toBe(join('/library', '节目 (2026)', 'Season 00'))
   expect(usesMeasuredNaming({ provider: 'tencent' })).toBe(false)
   expect(usesMeasuredNaming({ provider: 'youku', namingVersion: 1 })).toBe(true)
   expect(usesMeasuredNaming({ provider: 'iq', namingVersion: 1 })).toBe(true)
@@ -134,7 +134,7 @@ test('reserved collision names remain within the filename budget for partial mux
     const initial = join(root, '中'.repeat(77) + '.mkv')
     writeFileSync(initial, 'existing')
     const reserved = reserveOutputPath(initial)
-    expect(Buffer.byteLength(reserved.split('/').pop()! + '.partial')).toBeLessThanOrEqual(255)
+    expect(Buffer.byteLength(basename(reserved) + '.partial')).toBeLessThanOrEqual(255)
     expect(readFileSync(initial, 'utf8')).toBe('existing')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
