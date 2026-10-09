@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type { SessionCommand, ProviderSessionView } from '@shared/api'
 import { gvs, store, toast, errText } from '../store'
 const allowed = (p: string) => (store.state?.providers || []).some(v => v === p)
@@ -7,26 +7,58 @@ const busy = ref(false)
 const views = reactive<Record<string, ProviderSessionView>>({})
 const cookie = ref(''), phone = ref(''), code = ref(''), profile = ref(''), pin = ref('')
 const iqUsername = ref(''), iqPassword = ref(''), iqAreaCode = ref('')
+const iqStatusError = ref('')
+const accountScope = computed(() => store.state?.accountScope || ((store.state?.settings.host || '') + ':' + (store.state?.settings.keyMasked || '')))
+const iqSummary = computed(() => iqStatusError.value || views.iq?.summary || store.state?.accounts.find(a => a.provider === 'iq')?.summary)
+let revision = 0
 const mode = computed(() => store.state?.settings.hamiClient || 'tv')
 const hami = computed(() => views['hamivideo:' + mode.value])
 async function command(c: SessionCommand) {
+  const current = revision
   busy.value = true
   try {
     const v = await gvs('providerSession', c)
+    if (current !== revision) return
     views[c.provider + (c.provider === 'hamivideo' ? ':' + (c.op.startsWith('web_') ? 'web' : 'tv') : '')] = v
+    if (c.provider === 'iq') iqStatusError.value = ''
     toast(v.summary, v.authenticated ? 'ok' : 'muted')
-  } catch (e) { toast(errText(e), 'err') }
-  finally { busy.value = false; cookie.value = ''; code.value = ''; pin.value = ''; iqPassword.value = ''; if (c.op === 'web_send_code') phone.value = '' }
+  } catch (e) { if (current === revision) toast(errText(e), 'err') }
+  finally {
+    if (current === revision) {
+      busy.value = false
+      // Read-only status queries must not erase inputs the user is preparing.
+      if (!['status', 'web_status'].includes(c.op)) { cookie.value = ''; code.value = ''; pin.value = ''; iqPassword.value = ''; if (c.op === 'web_send_code') phone.value = '' }
+    }
+  }
+}
+async function checkIQStatus() {
+  if (busy.value) return
+  const current = revision
+  busy.value = true
+  iqStatusError.value = ''
+  try {
+    const v = await gvs('providerSession', { provider: 'iq', op: 'status' })
+    if (current === revision) views.iq = v
+  } catch (e) {
+    if (current === revision) iqStatusError.value = '未能检查 IQ 会话：' + errText(e)
+  } finally { if (current === revision) busy.value = false }
 }
 async function setMode(event: Event) {
   const hamiClient = (event.target as HTMLSelectElement).value as 'tv' | 'web'
   try { await gvs('saveSettings', { hamiClient }) } catch (e) { toast(errText(e), 'err') }
 }
-watch(() => store.state?.accountScope || ((store.state?.settings.host || '') + ':' + (store.state?.settings.keyMasked || '')), () => {
+watch(accountScope, () => {
+  revision++
+  busy.value = false
+  iqStatusError.value = ''
   for (const key of Object.keys(views)) delete views[key]
   cookie.value = ''; phone.value = ''; code.value = ''; pin.value = ''
   iqUsername.value = ''; iqPassword.value = ''; iqAreaCode.value = ''
 })
+watch(() => store.state?.configured && !store.state.connecting && allowed('iq') && (!store.state.tunnel.enabled || store.state.tunnel.ok) ? accountScope.value : '', scope => {
+  if (scope) void checkIQStatus()
+}, { immediate: true })
+onBeforeUnmount(() => { revision++ })
 </script>
 
 <template>
@@ -45,7 +77,7 @@ watch(() => store.state?.accountScope || ((store.state?.settings.host || '') + '
       <button class="btn sm" :disabled="busy || !views.iq?.userCode" @click="command({provider:'iq',op:'poll'})">检查授权</button>
       <button class="btn sm" :disabled="busy" @click="command({provider:'iq',op:'logout'})">退出</button>
     </div>
-    <p v-if="views.iq" aria-live="polite">{{ views.iq.summary }}</p>
+    <p v-if="iqSummary" aria-live="polite">{{ iqSummary }}</p>
     <p v-if="views.iq?.userCode">TV 激活码：{{ views.iq.userCode }}</p>
     <input v-if="views.iq?.url" class="input" :value="views.iq.url" readonly aria-label="IQ 官方验证页面" />
     <details><summary>使用已有 Web Cookie</summary>

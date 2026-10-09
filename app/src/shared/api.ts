@@ -8,6 +8,7 @@ export const PROVIDERS = PROVIDER_IDS
 export type Provider = (typeof PROVIDERS)[number]
 
 export const PROVIDER_NAME = PROVIDER_LABELS
+export { supportsTmdb } from '../../../src/lib/providers'
 
 export type { SessionCommand, ProviderSessionView } from '../../../src/lib/provider-session'
 import type { SessionCommand, ProviderSessionView } from '../../../src/lib/provider-session'
@@ -31,6 +32,7 @@ export type SettingsView = {
   /** 临时目录：下载分片、解密、封装的中间文件。空 = 自动（放在下载目录所在盘的 .gvs-tmp，完成后直接改名，不跨盘复制） */
   tmpDir: string
   releaseGroup: string
+  includeEpisodeTitle: boolean
   tmdbKey: string
   tmdbLang: string
   threads: number
@@ -166,6 +168,8 @@ export type ProbeResult = {
 }
 
 export type TmdbHit = { id: number; name: string; title: string; year: number; overview: string; kind: 'movie' | 'show' }
+export type { TmdbSeason, TmdbSeasonList } from '../../../src/lib/tmdb-types'
+import type { TmdbSeasonList } from '../../../src/lib/tmdb-types'
 
 export type EnqueueRequest = {
   token: number
@@ -173,9 +177,11 @@ export type EnqueueRequest = {
   episodes: EpisodeView[]
   quality: number
   audioIds: string[]
-  /** 默认播放的已选音轨；省略时自动选择已选音轨中的最高档。 */
+  /** 默认播放的已选音轨；省略时按 DTS、杜比 / 全景声、AAC 顺序自动选择。 */
   defaultAudioId?: string
   tmdb: TmdbHit | null
+  /** Explicit season from the matched TMDB show's list; episode IDs/numbers stay unchanged. */
+  tmdbSeason?: number
 }
 
 export type JobView = {
@@ -201,7 +207,7 @@ export type JobView = {
   busy?: boolean
 }
 
-export type NamingPreview = { folder: string; file: string }
+export type NamingPreview = { folder: string; file: string; note?: string }
 
 export type QRImage = { title: string; image: string }
 export type QRStart = { images: QRImage[]; hint: string }
@@ -240,6 +246,7 @@ export interface GvsApi {
   probe(provider: Provider, episodes: EpisodeView[]): Promise<ProbeResult>
   namingPreview(req: EnqueueRequest): Promise<NamingPreview>
   tmdbSearch(title: string, tv: boolean): Promise<TmdbHit[]>
+  tmdbSeasons(id: number): Promise<TmdbSeasonList>
   enqueue(req: EnqueueRequest): Promise<number>
   jobs(): Promise<JobView[]>
   retryJob(id: number): Promise<void>

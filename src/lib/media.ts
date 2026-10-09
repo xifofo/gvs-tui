@@ -1509,28 +1509,44 @@ export async function youkuAudioURLs(data: Record<string, unknown>, want: string
   return urls
 }
 
-export function youkuVideoPlaylist(data: Record<string, unknown>, want: string): string {
+/** Resolve the requested row, or the actual fallback video, once for URL and delivery. */
+function youkuVideoSelection(data: Record<string, unknown>, want: string): { playlist: string; streamType: string } {
   if (want && Array.isArray(data.streams)) {
     for (const s of data.streams) {
       if (!isObj(s)) continue
       if (asString(s.stream_type) !== want) continue
       if (asString(s.media_type).toLowerCase() === 'audio') continue
       const u = asString(s.playlist_url)
-      if (u) return u
+      if (u) return { playlist: u, streamType: asString(s.stream_type) }
     }
   }
-  if (isObj(data.video)) return asString(data.video.playlist_url) || asString(data.video.url)
-  return ''
+  if (isObj(data.video)) {
+    const playlist = asString(data.video.playlist_url) || asString(data.video.url)
+    const streamType = asString(data.video.stream_type)
+    if (streamType) return { playlist, streamType }
+    // Some gateways expose the fallback identity only in the URL-bound catalog row.
+    const types = (Array.isArray(data.streams) ? data.streams.filter(isObj) : [])
+      .filter(s => asString(s.media_type).toLowerCase() !== 'audio' && playlist &&
+        (s.playlist_url === playlist || s.url === playlist))
+      .map(s => asString(s.stream_type)).filter(Boolean)
+    return { playlist, streamType: new Set(types).size === 1 ? types[0]! : want }
+  }
+  return { playlist: '', streamType: want }
+}
+
+export function youkuVideoPlaylist(data: Record<string, unknown>, want: string): string {
+  return youkuVideoSelection(data, want).playlist
 }
 
 
 /**
- * 帧享 HQ（cmfv + 独立 audio playlist）才分轨下载。
+ * 帧享 HQ（cmfv + 独立 audio playlist）才分轨下载。依据实际选中的地址，
+ * 批量任务可能选了 TV 档位、但当前集只返回 HQ，不能继续按旧档位判断。
  * 酷喵 TV / App 等 HLS：视频 m3u8 自带音轨，不要强拉独立音轨或 --drop-audio。
  */
 export function youkuUsesSeparateAudio(data: Record<string, unknown>, quality = ''): boolean {
   const delivery = asString(data.audio_delivery).toLowerCase()
-  const st = (quality || (isObj(data.video) ? asString(data.video.stream_type) : '')).toLowerCase()
+  const st = youkuVideoSelection(data, quality).streamType.toLowerCase()
   const hq = st.startsWith('cmfv')
   if (delivery === 'muxed' && !hq) return false
   if (!hq) return false

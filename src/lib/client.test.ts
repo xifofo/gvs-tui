@@ -122,6 +122,24 @@ test('Electron business calls bind, submit measured events and stop before retry
   expect(requests).toHaveLength(before)
 })
 
+test('search continues when the gateway has no tencent report action', async () => {
+  const actions: string[] = []
+  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const request = JSON.parse(String(init?.body))
+    actions.push(request.action)
+    if (request.action === 'report') {
+      return Response.json({ code: 400, msg: 'INVALID_PARAM: tencent action "report" (see capabilities)' }, { status: 400 })
+    }
+    return Response.json({ code: 0, data: { list: [{ title: '剧' }] } })
+  }, { preconnect: fetch.preconnect }))
+  const client = new GwClient('https://gateway.example', 'key', () => ({ tencentMode: 'tv', tencentObservations: true }) as FileConfig)
+  const first = await client.invoke('tencent', 'search', { q: '剧名' })
+  const second = await client.invoke('tencent', 'search', { q: '另一部' })
+  expect(first).toEqual({ list: [{ title: '剧' }] })
+  expect(second).toEqual({ list: [{ title: '剧' }] })
+  expect(actions).toEqual(['report', 'search', 'search'])
+})
+
 test('a fresh process loads the saved gateway proxy without any proxy environment variable', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-gateway-proxy-'))
   const requests: string[] = []

@@ -24,6 +24,7 @@ const form = reactive({
   outDir: '',
   tmpDir: '',
   releaseGroup: '',
+  includeEpisodeTitle: true,
   tmdbKey: '',
   tmdbLang: '',
   threads: 4,
@@ -339,8 +340,21 @@ const plat = (p: Provider) => hasProvider(p)
             <div class="sc"><input v-model="form.releaseGroup" class="input" style="width: 200px" @change="save({ releaseGroup: form.releaseGroup }, 'rg')" /></div>
           </div>
 
+          <div class="srow">
+            <div class="sl">
+              <span class="st">文件名包含单集标题</span>
+              <span class="sd">在季集号后加入平台单集标题，默认开启。关闭后省略这段标题；仅影响新建任务，电影不受影响。</span>
+            </div>
+            <div class="sc">
+              <label class="toggle">
+                <input v-model="form.includeEpisodeTitle" type="checkbox" aria-label="文件名包含单集标题" :disabled="saving === 'episode-title'" @change="save({ includeEpisodeTitle: form.includeEpisodeTitle }, 'episode-title')" />
+                <span class="track"><span class="knob" /></span>
+              </label>
+            </div>
+          </div>
+
           <div class="srow wrap">
-            <div class="sl"><span class="st">TMDB API Key</span><span class="sd">填了 Key，优酷/腾讯下载时会自动匹配 TMDB，按 Jellyfin/Plex 的习惯命名。</span></div>
+            <div class="sl"><span class="st">TMDB API Key</span><span class="sd">填了 Key，优酷、腾讯和 IQ 海外版下载时会自动匹配 TMDB，按 Jellyfin/Plex 的习惯命名。</span></div>
             <div class="field-full"><input v-model="form.tmdbKey" class="input mono" autocomplete="off" @change="save({ tmdbKey: form.tmdbKey }, 'tk')" /></div>
           </div>
 

@@ -7,8 +7,16 @@ import { parseSeriesTitle } from './series-title.ts'
 export function parseEpisodes(data: Record<string, unknown>): Episode[] {
   const official = Array.isArray(data.episode_groups)
   const sources = [data, data.meta, data.raw, data.show].filter(isObj)
-  const seasonOf = (row: Record<string, unknown>) => anyInt(row.seasonNumber) || anyInt(row.season_number) || anyInt(row.season) || undefined
-  const season = sources.map(seasonOf).find(n => n && n > 0)
+  const seasonOf = (row: Record<string, unknown>): number | undefined => {
+    for (const key of ['seasonNumber', 'season_number', 'season']) {
+      const value = row[key]
+      if (value === undefined || value === null || value === '' || typeof value === 'boolean') continue
+      const number = Number(value)
+      if (Number.isSafeInteger(number) && number >= 0) return number
+    }
+    return undefined
+  }
+  const season = sources.map(seasonOf).find(n => n !== undefined)
     ?? sources.map(row => parseSeriesTitle(firstStr(row, 'title', 'name')).season).find(Boolean)
   const eps: Episode[] = []
   const seen = new Set<string>()
@@ -24,7 +32,7 @@ export function parseEpisodes(data: Record<string, unknown>): Episode[] {
     if (!official && extra && duration < 600) continue
     const n = anyInt(it.ep) || anyInt(it.number) || anyInt(it.episodeNumber) || Number.parseInt(String(it.stage ?? ''), 10)
     eps.push({ vid, title, number: n > 0 ? n : i + 1, selected: false,
-      duration: duration || undefined, group, season: seasonOf(it) || season,
+      duration: duration || undefined, group, season: seasonOf(it) ?? season,
       collection: official ? group || '正片' : undefined })
     seen.add(vid)
   }

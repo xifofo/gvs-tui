@@ -11,6 +11,8 @@ export type FileConfig = {
   gatewayProxy?: string
   outDir: string
   releaseGroup: string
+  /** Include the platform's episode title in new task filenames; omitted legacy configs default on. */
+  includeEpisodeTitle?: boolean
   tmdbKey: string
   tmdbLang: string
   /** Optional HTTP(S) proxy used only for TMDB requests. */
@@ -181,6 +183,7 @@ export function defaultConfig(): FileConfig {
     gatewayProxy: '',
     outDir: '',
     releaseGroup: 'ADWeb',
+    includeEpisodeTitle: true,
     tmdbKey: '',
     tmdbLang: 'zh-CN',
     tmdbProxy: '',
@@ -218,6 +221,7 @@ export function loadConfig(): FileConfig {
   cfg.host = (cfg.host || 'http://127.0.0.1:8080').replace(/\/+$/, '')
   const outChanged = ensureOutDir(cfg)
   if (!cfg.releaseGroup) cfg.releaseGroup = 'ADWeb'
+  cfg.includeEpisodeTitle = cfg.includeEpisodeTitle !== false
   if (!cfg.hongguoFmt) cfg.hongguoFmt = 'mkv'
   if (!cfg.huangguoFmt) cfg.huangguoFmt = 'mkv'
   delete (cfg as unknown as Record<string, unknown>).ffmpeg

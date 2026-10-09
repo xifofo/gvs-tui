@@ -2,10 +2,11 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JobHub, tencentCipher, tencentMirrors, bindYoukuAudioTracksToTask, cleanupOutputCaches, jobTitle, muxTrackTitle, patchJob, trackVid, youkuAudioFetchPlan, youkuDRM, type DlTask } from './jobs.ts'
+import { JobHub, tencentCipher, tencentMirrors, bindYoukuAudioTracksToTask, cleanupOutputCaches, jobNaming, jobTitle, muxTrackTitle, patchJob, trackVid, youkuAudioFetchPlan, youkuDRM, type DlTask } from './jobs.ts'
 import { youkuAudioPlaylist, youkuUsesSeparateAudio, youkuVideoPlaylist } from './media.ts'
-import type { FileConfig } from './config.ts'
+import { defaultConfig, type FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
+import { completedFilename, filename, folder } from './name.ts'
 
 function task(partial: Partial<DlTask>): DlTask {
   return {
@@ -77,6 +78,28 @@ test('phase change clears stale progress text', () => {
 test('show job title still uses E01', () => {
   expect(jobTitle(task({ title: '危机初现' }))).toBe('第九区 E01 危机初现 4K')
   expect(jobTitle(task({ title: '第九区' }))).toBe('第九区 E01 4K')
+})
+
+test('episode-title switch is pinned to the task and controls both legacy and measured names, not display titles or folders', () => {
+  const cfg = { ...defaultConfig(), releaseGroup: 'WF', includeEpisodeTitle: false }
+  const specs = { status: 'probed' as const, width: 3840, height: 1608, codec: 'hevc', fps: 25,
+    dynamicRange: 'SDR', audio: { status: 'confirmed' as const, codec: 'eac3', channels: 2 } }
+  for (const [provider, platform] of [['youku', 'YOUKU'], ['tencent', 'TX'], ['iq', 'IQ']]) {
+    const base = task({ provider, kind: 'show', namingVersion: 1, title: '朱门盛景，终究一场梦', series: '一瓯春',
+      year: 2026, episode: 29, group: 'WF', height: 2160, codec: 'HEVC' })
+    const on = { ...base, includeEpisodeTitle: true }
+    const off = JSON.parse(JSON.stringify({ ...base, includeEpisodeTitle: false })) as DlTask
+    const onNaming = jobNaming(on, cfg), offNaming = jobNaming(off, { ...cfg, includeEpisodeTitle: true })
+    expect(completedFilename(onNaming, specs)).toBe(`一瓯春.S01E29.朱门盛景.终究一场梦.2026.2160p.${platform}.WEB-DL.HEVC.DDP.2.0-WF.mkv`)
+    expect(completedFilename(offNaming, specs)).toBe(`一瓯春.S01E29.2026.2160p.${platform}.WEB-DL.HEVC.DDP.2.0-WF.mkv`)
+    expect(filename(onNaming)).toContain('.S01E29.朱门盛景.终究一场梦.')
+    expect(filename(offNaming)).toContain('.S01E29.2026.')
+    expect(jobTitle(off)).toBe(jobTitle(on))
+    expect(folder(offNaming, '/library')).toBe(folder(onNaming, '/library'))
+    expect(completedFilename(jobNaming({ ...base, namingVersion: undefined }, cfg), specs)).toBe(completedFilename(onNaming, specs))
+    expect(completedFilename(jobNaming({ ...off, kind: 'movie' }, cfg), specs))
+      .toBe(completedFilename(jobNaming({ ...on, kind: 'movie' }, cfg), specs))
+  }
 })
 
 test('youku playlists use stream playlist_url not CMAF segments', () => {
@@ -183,14 +206,37 @@ test('youku separate audio only for 帧享 HQ cmfv with playlist', () => {
   expect(youkuUsesSeparateAudio(tv, 'hls5hd3')).toBe(false)
   expect(youkuUsesSeparateAudio(tv, 'hls5hd4_sdr_hfr_hbr_bit10_hq')).toBe(false)
 
-  // selecting HLS quality on a response that still advertises separate delivery
-  expect(youkuUsesSeparateAudio({ ...hq, audio_delivery: 'separate' }, 'hls5hd3')).toBe(false)
+  // If the requested HLS row is missing, the actual fallback is the HQ video.
+  expect(youkuUsesSeparateAudio(hq, 'hls5hd3')).toBe(true)
+  // A present HLS row keeps its embedded audio despite leftover HQ inventory.
+  expect(youkuUsesSeparateAudio({ ...hq, streams: [
+    { stream_type: 'hls5hd3', media_type: 'video', playlist_url: 'https://hls.m3u8' },
+  ] }, 'hls5hd3')).toBe(false)
 
   const invOnly = {
     video: { stream_type: 'cmfv5hd4_sdr_hfr_hbr_bit10_hq' },
     audio_tracks: [{ stream_type: 'cmfa1hd3' }],
   }
   expect(youkuUsesSeparateAudio(invOnly, 'cmfv5hd4_sdr_hfr_hbr_bit10_hq')).toBe(false)
+})
+
+test('Youku episode fallback uses the actual HQ address and downloads its default audio', () => {
+  const hq = 'cmfv5hd4_sdr_hbr_bit10_hq'
+  const data = {
+    video: { stream_type: hq, playlist_url: 'https://hq-video.m3u8' },
+    audio_delivery: 'separate',
+    audio_tracks: [{ stream_type: 'cmfa1hd3', playlist_url: 'https://default-aac.m3u8', default: true }],
+  }
+  expect(youkuVideoPlaylist(data, 'mp5hd4')).toBe('https://hq-video.m3u8')
+  expect(youkuUsesSeparateAudio(data, 'mp5hd4')).toBe(true)
+  // Old batches with no selected audio rows use the current episode's default.
+  expect(youkuAudioPlaylist(data, '')).toBe('https://default-aac.m3u8')
+  expect(youkuUsesSeparateAudio({ ...data, audio_delivery: undefined }, 'mp5hd4')).toBe(true)
+  expect(youkuUsesSeparateAudio({ ...data, video: { playlist_url: 'https://hq-video.m3u8' }, streams: [
+    { stream_type: hq, media_type: 'video', playlist_url: 'https://hq-video.m3u8' },
+    { stream_type: 'mp5hd4', media_type: 'video', playlist_url: '' },
+  ] }, 'mp5hd4')).toBe(true)
+  expect(youkuUsesSeparateAudio({ ...data, video: { stream_type: 'mp5hd4', playlist_url: 'https://muxed.m3u8' } }, hq)).toBe(false)
 })
 
 test('multi-ep batch does not cross-wire first episode audio onto later episodes', () => {

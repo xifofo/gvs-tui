@@ -123,3 +123,26 @@ describe('download directory', () => {
     }
   })
 })
+
+test('episode-title naming defaults on in old configs and persists an explicit off/on choice', () => {
+  const appdata = mkdtempSync(join(tmpdir(), 'gvs-name-setting-'))
+  const previous = process.env.APPDATA
+  process.env.APPDATA = appdata
+  try {
+    expect(defaultConfig().includeEpisodeTitle).toBe(true)
+    const file = join(appdata, 'gvs', 'tui.json')
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ outDir: join(appdata, 'library') }))
+    const cfg = loadConfig()
+    expect(cfg.includeEpisodeTitle).toBe(true)
+    saveConfig({ ...cfg, includeEpisodeTitle: false })
+    expect(JSON.parse(readFileSync(file, 'utf8')).includeEpisodeTitle).toBe(false)
+    expect(loadConfig().includeEpisodeTitle).toBe(false)
+    saveConfig({ ...cfg, includeEpisodeTitle: true })
+    expect(loadConfig().includeEpisodeTitle).toBe(true)
+  } finally {
+    if (previous === undefined) delete process.env.APPDATA
+    else process.env.APPDATA = previous
+    rmSync(appdata, { recursive: true, force: true })
+  }
+})

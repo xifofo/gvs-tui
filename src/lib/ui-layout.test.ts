@@ -24,6 +24,8 @@ test('confirmed file paths wrap without losing characters, selected audio ignore
   expect(lines.join('')).toContain(snapshot.confirmation!.directory)
   expect(lines.join('')).toContain(snapshot.confirmation!.name)
   expect(lines).toContain('电影 · 2026')
+  const withNote = confirmationLines({ ...snapshot.confirmation!, note: '封装后按实际规格补全文件名。' }, 58)
+  expect(withNote.join('')).toContain('封装后按实际规格补全文件名。')
   const audio = demoSnapshot('quality-audio')
   expect(audio.audios![audio.audioIndex]!.label).toBe('DTS:X')
   expect(selectedAudioText(audio.audios!)).toBe('国语 AAC / 国语 杜比全景声')

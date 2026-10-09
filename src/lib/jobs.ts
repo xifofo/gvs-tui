@@ -35,6 +35,9 @@ import { actualVersionText, tencentActualVersion, type ActualVersion } from './a
 import { verifyTencentCoverage, verifyTencentSpecs } from './tencent-output.ts'
 import { tencentChoiceSelection } from './tencent-quality-selection.ts'
 import { finishedVersionRecord, saveVersionRecord } from './gvs-record.ts'
+import { finalizeCompletedName, reserveOutputPath, tencentNamingEvidence, usesMeasuredNaming, youkuNamingEvidence, type NamingEvidence } from './completed-naming.ts'
+import { defaultAudioIndex } from './audio-selection.ts'
+import type { MediaSpecs } from './actual-version.ts'
 
 export type DlTask = {
   provider: string
@@ -52,6 +55,11 @@ export type DlTask = {
   caption?: string
   /** Exact selected Tencent format/persona, retained across pause and retry. */
   tencentQuality?: TencentQualitySelection
+  /** New tasks opt into measured naming; old saved queues intentionally omit this version. */
+  namingVersion?: 1
+  namingEvidence?: NamingEvidence
+  /** Pinned at task creation so pause/retry keeps the same name. Legacy tasks include titles. */
+  includeEpisodeTitle?: boolean
   /** Audio tracks to mux in (空格勾选的那些）；空 = 只封平台默认音轨。 */
   audioTracks?: Array<{ id: string; label: string; lang: string; vid?: string; codec?: string; isDefault?: boolean }>
   group: string
@@ -282,7 +290,7 @@ export function jobNaming(t: DlTask, cfg: FileConfig): Naming {
     year: t.year,
     season: t.season,
     episode: t.episode,
-    episodeTitle: t.title,
+    episodeTitle: t.includeEpisodeTitle === false ? undefined : t.title,
     height: t.height,
     codec: t.codec || 'H264',
     edition: t.edition,
@@ -317,6 +325,7 @@ async function runTask(
   const log = (msg: string) => runLog(`job ${id} ${t.provider} ${msg}`)
   let dir = ''
   let out = ''
+  let ownsOutput = false
   let succeeded = false
   let actualVersion: ActualVersion | undefined
   try {
@@ -337,6 +346,7 @@ async function runTask(
     dir = t.provider === 'douyin' ? cfg.outDir : folder(n, cfg.outDir)
     mkdirSync(dir, { recursive: true })
     out = join(dir, filename(n))
+    if (usesMeasuredNaming(t)) { out = reserveOutputPath(out); ownsOutput = true }
     // All intermediates live in one deterministic per-task folder so a resume
     // finds its `.partN` / RE scratch, and so the user can put that folder on
     // another volume instead of filling the system drive.
@@ -350,7 +360,7 @@ async function runTask(
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
       case 'iq':
-        await downloadIQ(cli,cfg,t,out,work,emit,signal)
+        note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
         break
       case 'mewatch': case 'hamivideo':
         await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
@@ -367,6 +377,7 @@ async function runTask(
       case 'tencent':
         note = await dlTencent(cli, cfg, t, out, mkvmerge, emit, retryNote, work, signal, audioLanguageFallback, version => {
           actualVersion = version
+          if (usesMeasuredNaming(t)) t.namingEvidence = tencentNamingEvidence(version)
           log(actualVersionText(version))
         })
         break
@@ -377,6 +388,14 @@ async function runTask(
         throw new Error(`demo 尚未接 ${t.provider} 下载管线`)
     }
     signal?.throwIfAborted()
+    let finishedMedia: MediaSpecs | undefined
+    if (usesMeasuredNaming(t)) {
+      emit('命名', 0.99, '读取实际视频规格和默认音轨')
+      const named = await finalizeCompletedName(out, n, t.namingEvidence, signal)
+      out = named.output
+      finishedMedia = named.media
+      if (named.note) { note = [note, named.note].filter(Boolean).join('；'); log(named.note) }
+    }
     if ((t.provider === 'hongguo' && cfg.hongguoNfo) || (t.provider === 'huangguo' && cfg.huangguoNfo)) {
       writeTvShowNFO(dirname(dir), n.title, t.plot, 0)
       writeEpisodeNFO(out, t.title, Math.max(t.season, 1), t.episode, '')
@@ -384,7 +403,7 @@ async function runTask(
     if (actualVersion) {
       emit('记录版本', 0.99, actualVersionText(actualVersion))
       try {
-        const finished = await finishedVersionRecord(out, actualVersion, signal)
+        const finished = await finishedVersionRecord(out, actualVersion, signal, finishedMedia)
         actualVersion = finished
         saveVersionRecord(out, finished)
       } catch {
@@ -416,6 +435,10 @@ async function runTask(
     }
     emitEvt({ id, status: '失败', pct: lastPct, log: '', err: e instanceof Error ? e.message : String(e), done: true })
   } finally {
+    if (!succeeded && ownsOutput && out) {
+      // Remove only our empty reservation; retain any completed/partial media for diagnosis.
+      try { if (statSync(out).size === 0) unlinkSync(out) } catch { /* not created */ }
+    }
     // Success cleans up its scratch; a failure keeps it so a retry can resume.
     if (succeeded) {
       try { await discardJobWork(cfg, t) } catch (err) { log(`清理工作目录失败：${(err as Error).message}`) }
@@ -688,8 +711,8 @@ async function dlTencent(
     const v = isObj(data.video) ? data.video : {}
     runLog(`tencent stream selection requested=${t.quality.split('|')[0]} format=${selection.formatId || '-'} actual=${picked.version.actual?.formatId || '-'} match=${picked.version.matchesSelection} width=${Number(v.width ?? data.width) || 0} height=${Number(v.height ?? data.height) || 0} duration=${Number(v.duration ?? data.duration) || 0}`)
     if (picked.version.matchesSelection === 'different') throw new Error('腾讯返回的实际版本与所选版本不同，已停止下载；请重新取流或选择可用版本')
-    if (selection.group === 'encode' && picked.version.matchesSelection !== 'same')
-      throw new Error('腾讯未返回所选编码版本的独立地址，已停止下载；请更新网关或重新选择可用版本')
+    // Missing rendition metadata is not a confirmed mismatch. Keep it unknown;
+    // the existing post-download checks verify the actual video specifications and coverage.
     const cdn = picked.url && /\.m3u8/i.test(picked.url) ? await firstLivePlaylist(tencentMirrors(data, picked.url), referer('tencent'), signal) : picked.url
     if (cdn) onVersion?.(cdn === picked.url ? picked.version :
       tencentActualVersion(data, cdn, picked.version.addressSource, picked.version.selected, t.vid, refreshes))
@@ -778,6 +801,7 @@ async function dlTencent(
       repairs.push(message)
       runLog(`tencent audio repair vid=${t.vid} ${message}`)
     }, audioLanguageFallback))
+    if (usesMeasuredNaming(t)) t.namingEvidence = { ...t.namingEvidence, muxAudio: { index: defaultAudioIndex(mux), count: mux.length } }
     done = true
     return [note, ...repairs].filter(Boolean).join('；')
   } finally {
@@ -911,6 +935,7 @@ async function dlYouku(
     const playlist = youkuVideoPlaylist(payload, t.quality)
     if (!playlist) throw new Error('优酷 play 没有 playlist_url')
     const separateAudio = youkuUsesSeparateAudio(payload, t.quality)
+    const videoAlreadyDownloaded = completedTracks.has(videoPath)
     emit('下载', 0.05, playlist.split(/[?#]/)[0]?.split('/').pop() ?? '')
     // 帧享 HQ：视频分轨下载并 drop 内嵌音；非 HQ（酷喵 TV/App）：保留视频 m3u8 自带音轨。
     await pull(
@@ -922,6 +947,7 @@ async function dlYouku(
       separateAudio ? 0.62 : 0.8,
       separateAudio ? 'video' : 'muxed',
     )
+    if (!videoAlreadyDownloaded && usesMeasuredNaming(t)) t.namingEvidence = youkuNamingEvidence(payload, playlist)
     if (!separateAudio) {
       // soft-skip：不强制独立音轨，避免缺 URL 失败或误复用 HQ 音轨。
       return
@@ -972,7 +998,14 @@ async function dlYouku(
     const mp4box = await ensureMP4Box()
     const audioInfo = await Promise.all(muxInputs.map(input => readMp4Tracks(mp4box, input.path, signal)))
     const dts = tracks.some(isDtsAudio) || audioInfo.some(list => list.some(t => /^dts[cehlxy]$/.test(t.codec)))
-    if (dts) out = out.slice(0, out.length - extname(out).length) + '.mp4'
+    if (dts && extname(out) !== '.mp4') {
+      const mp4 = out.slice(0, out.length - extname(out).length) + '.mp4'
+      if (usesMeasuredNaming(t)) {
+        const reserved = reserveOutputPath(mp4)
+        if (statSync(out).size === 0) unlinkSync(out)
+        out = reserved
+      } else out = mp4
+    }
     emit('校验', 0.85, dts ? '检查 MP4 轨道和时间戳（DTS 使用 MP4Box）' : '检查音轨完整解码')
     const ffmpeg = await ensureFFmpeg()
     const validate = async (path: string) => {
@@ -1007,6 +1040,7 @@ async function dlYouku(
       else await mkvmergeRemux(mkvmerge, videoPath, partial, muxProgress, signal, audioLanguageFallback)
       signal?.throwIfAborted()
       moveFileSync(partial, out)
+      if (usesMeasuredNaming(t) && muxInputs.length) t.namingEvidence = { ...t.namingEvidence, muxAudio: { index: defaultAudioIndex(muxInputs), count: muxInputs.length } }
       succeeded = true
       return out
     } catch (e) {
@@ -1014,6 +1048,10 @@ async function dlYouku(
       throw youkuMediaError(e)
     }
   } finally {
+    if (!succeeded && usesMeasuredNaming(t)) {
+      // The detected DTS container may have changed out after the caller's reservation.
+      try { if (statSync(out).size === 0) unlinkSync(out) } catch { /* no reservation remains */ }
+    }
     // Failed muxes retain original tracks for diagnosis/retry. Developers can
     // opt into retaining successful downloads too, without editing config.
     if (succeeded && process.env.GVS_KEEP_INTERMEDIATES !== '1') {

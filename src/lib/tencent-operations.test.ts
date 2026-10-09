@@ -72,6 +72,19 @@ describe('Tencent local operation observations', () => {
     expect(event.outcome).toBe('error')
   })
 
+  test('a gateway without the report action keeps the search local and does not bind again', async () => {
+    const calls: Record<string, unknown>[] = []
+    const tracker = new TencentOperations(async () => {
+      calls.push({ report_type: 'bind' })
+      throw new Error('INVALID_PARAM: tencent action "report" (see capabilities)')
+    }, () => {})
+    const search = await tracker.begin('search', { q: '剧名' })
+    expect(tracker.boundInput(search, { q: '剧名' })).toEqual({ q: '剧名' })
+    await tracker.finish(search, { list: [] })
+    await tracker.begin('detail', { cid: 'cover1' })
+    expect(calls).toHaveLength(1)
+  })
+
   test('unrelated actions never trigger binding or observations', async () => {
     const { tracker, calls } = setup()
     expect(await tracker.begin('account', {})).toBeUndefined()

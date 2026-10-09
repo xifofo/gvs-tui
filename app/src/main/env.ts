@@ -5,14 +5,28 @@
 //   - 记下代理地址，仅供隧道 WebSocket 使用；
 //   - 删掉 HTTP(S)_PROXY，子进程（ffmpeg / N_m3u8DL-RE）和 Node fetch 都直连；
 //   - 网关 HTTP 走 net.fetch（见 shims/proxy.ts），天然跟随系统代理。
+//   - IQ 账号认证读取系统/PAC 代理，显式 CONNECT；登录可分流而不必开启 TUN。
 import { session } from 'electron'
 import { dirname, join } from 'node:path'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import WsSocket from 'ws'
 import { configPath } from '@tui/config.ts'
+import { runLog } from '@tui/runlog.ts'
+import { setTunnelFetchRoute } from '@tui/tunnel.ts'
+import { createIQAuthRoute } from './iq-auth-proxy'
+import { fetchIQAuthProxy } from './iq-auth-transport'
 import { isProxyEnvKey } from './shims/proxy'
 
 let envProxy = ''
+
+/** IQ login follows system/PAC routing even when Clash TUN is disabled. */
+export function installIQAuthProxy(): void {
+  setTunnelFetchRoute(createIQAuthRoute({
+    fetch: fetchIQAuthProxy,
+    resolveProxy: url => session.defaultSession.resolveProxy(url),
+    log: runLog,
+  }))
+}
 
 export function captureProxyEnv(): void {
   for (const [k, v] of Object.entries(process.env)) {

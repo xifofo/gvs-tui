@@ -2,7 +2,9 @@ import { dots } from './name.ts'
 import { fetchTmdb, normalizeHttpProxy } from './proxy.ts'
 import { runLog } from './runlog.ts'
 import { isObj } from './util.ts'
-import { parseSeriesTitle } from './series-title.ts'
+import { tmdbTitleQueries } from './series-title.ts'
+import type { TmdbSeason, TmdbSeasonList } from './tmdb-types.ts'
+export type { TmdbSeason, TmdbSeasonList } from './tmdb-types.ts'
 
 export type TmdbResult = {
   id: number
@@ -98,20 +100,108 @@ function createTmdbRequest(fetcher: TmdbFetch, timeoutMs: number) {
 
 export function createTmdbSearch(fetcher: TmdbFetch = fetchTmdb, timeoutMs = 10_000) {
   const request = createTmdbRequest(fetcher, timeoutMs)
-  return (apiKey: string, lang: string, query: string, options: TmdbOptions = {}): Promise<TmdbResult[]> => {
-    if (!query.trim()) return Promise.reject(new Error('缺少用于 TMDB 搜索的片名'))
+  return async (apiKey: string, lang: string, query: string, options: TmdbOptions = {}): Promise<TmdbResult[]> => {
+    if (!query.trim()) throw new Error('缺少用于 TMDB 搜索的片名')
     // Missing platform categories must not lock a movie into the TV endpoint.
-    return request(apiKey, 'search/multi', { language: lang || 'zh-CN', query: parseSeriesTitle(query).title, include_adult: 'false' }, out => {
-      if (!isObj(out) || !Array.isArray(out.results)) throw new Error('invalid TMDB response')
-      const rows = (out as SearchResponse).results!.filter(h => h.media_type === 'movie' || h.media_type === 'tv').slice(0, 8)
-      return rows.map(h => {
-        const movie = h.media_type === 'movie'
-        const date = (movie ? h.release_date : h.first_air_date) || ''
-        const name = (movie ? h.title : h.name) || ''
-        return { id: h.id, name, title: h.title || '', year: Number.parseInt(date.slice(0, 4), 10) || 0,
-          overview: h.overview || '', englishDots: dots(h.original_name || h.original_title || name), kind: movie ? 'movie' : 'show' }
-      })
-    }, options)
+    for (const title of tmdbTitleQueries(query)) {
+      const hits = await request(apiKey, 'search/multi', { language: lang || 'zh-CN', query: title, include_adult: 'false' }, out => {
+        if (!isObj(out) || !Array.isArray(out.results)) throw new Error('invalid TMDB response')
+        const rows = (out as SearchResponse).results!.filter(h => h.media_type === 'movie' || h.media_type === 'tv').slice(0, 8)
+        return rows.map((h): TmdbResult => {
+          const movie = h.media_type === 'movie'
+          const date = (movie ? h.release_date : h.first_air_date) || ''
+          const name = (movie ? h.title : h.name) || ''
+          return { id: h.id, name, title: h.title || '', year: Number.parseInt(date.slice(0, 4), 10) || 0,
+            overview: h.overview || '', englishDots: dots(h.original_name || h.original_title || name), kind: movie ? 'movie' : 'show' }
+        })
+      }, options)
+      if (hits.length) return hits
+    }
+    return []
+  }
+}
+
+/** Season zero is a real TMDB season. Never infer "final" from the last row. */
+export function createTmdbSeasons(fetcher: TmdbFetch = fetchTmdb, timeoutMs = 10_000) {
+  const request = createTmdbRequest(fetcher, timeoutMs)
+  const cache = new Map<string, { expires: number; promise: Promise<TmdbSeasonList> }>()
+  return (apiKey: string, lang: string, id: number, options: TmdbOptions = {}): Promise<TmdbSeasonList> => {
+    if (!Number.isSafeInteger(id) || id <= 0) return Promise.reject(new Error('无效的 TMDB ID'))
+    const language = lang || 'zh-CN'
+    const key = JSON.stringify([apiKey.trim(), language, id, options.proxy || ''])
+    const hit = cache.get(key)
+    if (hit && hit.expires > Date.now()) return hit.promise
+    const promise = (async (): Promise<TmdbSeasonList> => {
+      const ordinary = await request(apiKey, `tv/${id}`, { language }, out => {
+        if (!isObj(out) || out.id !== id || !Array.isArray(out.seasons)) throw new Error('invalid TMDB seasons')
+        const seasons = new Map<number, TmdbSeason>()
+        for (const row of out.seasons) {
+          if (!isObj(row) || !Number.isSafeInteger(row.season_number) || Number(row.season_number) < 0 || Number(row.season_number) > 999) continue
+          const number = Number(row.season_number)
+          if (seasons.has(number)) continue
+          seasons.set(number, { number, name: typeof row.name === 'string' ? row.name : number === 0 ? '特别篇' : `第 ${number} 季`,
+            episodeCount: Number.isSafeInteger(row.episode_count) && Number(row.episode_count) >= 0 ? Number(row.episode_count) : 0,
+            airDate: typeof row.air_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.air_date) ? row.air_date : '' })
+        }
+        return [...seasons.values()].sort((a, b) => a.number - b.number)
+      }, options)
+      const result: TmdbSeasonList = { seasons: ordinary, warning: '' }
+      try {
+        const groups = await request(apiKey, `tv/${id}/episode_groups`, { language }, out => {
+          if (!isObj(out) || out.id !== id || !Array.isArray(out.results)) throw new Error('invalid TMDB episode groups')
+          const unique = new Map<string, { id: string; name: string }>()
+          for (const row of out.results) {
+            if (!isObj(row) || typeof row.id !== 'string' || !/^[a-f\d]{24}$/i.test(row.id)) continue
+            if (!unique.has(row.id)) unique.set(row.id, { id: row.id, name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : '未命名分组' })
+          }
+          return [...unique.values()]
+        }, options)
+        // Preserve the API's group order while limiting concurrent requests.
+        const grouped: TmdbSeason[][] = new Array(groups.length)
+        let next = 0
+        await Promise.all(Array.from({ length: Math.min(3, groups.length) }, async () => {
+          while (next < groups.length) {
+            const index = next++
+            const group = groups[index]!
+            try {
+              grouped[index] = await request(apiKey, `tv/episode_group/${group.id}`, { language }, out => {
+                if (!isObj(out) || out.id !== group.id || !Array.isArray(out.groups)) throw new Error('invalid TMDB episode group')
+                const rows = new Map<number, TmdbSeason>()
+                for (const row of out.groups) {
+                  if (!isObj(row) || !Number.isSafeInteger(row.order) || Number(row.order) < 0 || Number(row.order) > 999 || !Array.isArray(row.episodes)) continue
+                  const number = Number(row.order)
+                  if (rows.has(number)) continue
+                  const episodes = row.episodes.filter(isObj)
+                  const dates = episodes.map(ep => ep.air_date).filter((d): d is string => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)).sort()
+                  rows.set(number, { number, name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : `第 ${number} 季`,
+                    episodeCount: episodes.length, airDate: dates[0] || '', groupId: group.id, groupName: group.name })
+                }
+                return [...rows.values()].sort((a, b) => a.number - b.number)
+              }, options)
+            } catch {
+              grouped[index] = []
+              result.warning = '部分剧集分组读取失败，可重试；已读取的季号仍可选。'
+            }
+          }
+        }))
+        result.seasons.push(...grouped.flat())
+      } catch {
+        result.warning = '剧集分组读取失败，可重试；也可选择普通季号或沿用平台季号。'
+      }
+      return result
+    })().then(value => {
+      // An immediate user retry must be able to recover missing optional groups.
+      if (value.warning && cache.get(key) === entry) cache.delete(key)
+      entry.expires = Date.now() + 10 * 60_000
+      return value
+    }, error => {
+      if (cache.get(key) === entry) cache.delete(key)
+      throw error
+    })
+    const entry = { expires: Infinity, promise }
+    cache.set(key, entry)
+    if (cache.size > 128) cache.delete(cache.keys().next().value!)
+    return promise
   }
 }
 
@@ -163,3 +253,4 @@ export function createTmdbDetails(fetcher: TmdbFetch = fetchTmdb, timeoutMs = 10
 
 export const tmdbSearch = createTmdbSearch()
 export const tmdbDetails = createTmdbDetails()
+export const tmdbSeasons = createTmdbSeasons()

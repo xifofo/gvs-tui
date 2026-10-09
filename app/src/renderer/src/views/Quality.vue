@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import type { AudioView, EnqueueRequest, NamingPreview, TmdbHit } from '@shared/api'
+import type { AudioView, EnqueueRequest, NamingPreview, TmdbHit, TmdbSeason } from '@shared/api'
+import { supportsTmdb } from '@shared/api'
 import { resolveDefaultAudioId } from '@shared/audio-selection'
 import { defaultTmdbHit } from '@shared/tmdb-selection'
 import Icon from '../components/Icon.vue'
@@ -17,11 +18,18 @@ const tmdbHits = ref<TmdbHit[]>([])
 const tmdbLoading = ref(false)
 const tmdbError = ref('')
 const tmdbOpen = ref(false)
+const seasons = ref<TmdbSeason[]>([])
+const selectedSeason = ref('')
+const seasonsLoading = ref(false)
+const seasonsError = ref('')
+const seasonsWarning = ref('')
+let seasonsSeq = 0
 const naming = ref<NamingPreview | null>(null)
 const starting = ref(false)
 const manualKind = ref(false)
 let tmdbSeq = 0
 const isMovie = computed(() => d.value?.kind === 'movie')
+const canMatchTmdb = computed(() => supportsTmdb(d.value?.provider))
 
 const quality = computed(() => probe.value?.qualities[qIndex.value] ?? null)
 const audios = computed<AudioView[]>(() => {
@@ -116,7 +124,7 @@ function toggleAudio(a: AudioView) {
 
 async function loadTmdb() {
   const v = d.value
-  if (!v || !store.state?.settings.tmdbKey || (v.provider !== 'youku' && v.provider !== 'tencent')) return
+  if (!v || !store.state?.settings.tmdbKey || !canMatchTmdb.value) return
   const seq = ++tmdbSeq
   tmdbLoading.value = true
   tmdbError.value = ''
@@ -132,7 +140,63 @@ async function loadTmdb() {
   }
 }
 
-onUnmounted(() => { ++tmdbSeq })
+onUnmounted(() => { ++tmdbSeq; ++seasonsSeq; ++namingSeq })
+
+watch(tmdb, () => {
+  ++seasonsSeq
+  seasons.value = []
+  selectedSeason.value = ''
+  seasonsLoading.value = false
+  seasonsError.value = ''
+  seasonsWarning.value = ''
+  if (tmdb.value?.kind === 'show') void loadSeasons()
+}, { flush: 'sync' })
+
+async function loadSeasons() {
+  const hit = tmdb.value
+  if (!hit || hit.kind !== 'show') return
+  const seq = ++seasonsSeq
+  seasonsLoading.value = true
+  seasonsError.value = ''
+  seasonsWarning.value = ''
+  try {
+    const result = await gvs('tmdbSeasons', hit.id)
+    if (seq !== seasonsSeq || tmdb.value !== hit) return
+    const rows = [...result.seasons]
+    const previous = selectedSeasonRow.value
+    if (previous && !rows.some(row => seasonKey(row) === selectedSeason.value)) {
+      if (result.warning) rows.push(previous)
+      else {
+        selectedSeason.value = ''
+        toast('所选季号已不在 TMDB 列表，已改为沿用平台季号')
+      }
+    }
+    seasons.value = rows
+    seasonsWarning.value = result.warning
+  } catch (e) {
+    if (seq === seasonsSeq) seasonsError.value = errText(e)
+  } finally {
+    if (seq === seasonsSeq) seasonsLoading.value = false
+  }
+}
+
+const seasonCode = (number: number) => `S${String(number).padStart(2, '0')}`
+const seasonLabel = (season: TmdbSeason) => [season.name, seasonCode(season.number), season.episodeCount ? `${season.episodeCount} 集` : '', season.airDate.slice(0, 4)].filter(Boolean).join(' · ')
+const seasonKey = (season: TmdbSeason) => season.groupId ? `${season.groupId}:${season.number}` : String(season.number)
+const selectedSeasonRow = computed(() => seasons.value.find(season => seasonKey(season) === selectedSeason.value))
+const seasonLists = computed(() => {
+  const lists = new Map<string, { key: string; label: string; seasons: TmdbSeason[] }>()
+  for (const season of seasons.value) {
+    const key = season.groupId || 'ordinary'
+    let list = lists.get(key)
+    if (!list) {
+      list = { key, label: season.groupId ? `剧集分组：${season.groupName}` : '普通季列表', seasons: [] }
+      lists.set(key, list)
+    }
+    list.seasons.push(season)
+  }
+  return [...lists.values()]
+})
 
 function setKind(kind: 'movie' | 'show') {
   const v = d.value
@@ -166,13 +230,14 @@ const request = computed<EnqueueRequest | null>(() => {
     audioIds: [...audioIds.value],
     defaultAudioId: defaultAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
+    tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
   }
 })
 
 let namingSeq = 0
 watch(
-  request,
-  async (r) => {
+  [request, () => store.state?.settings.includeEpisodeTitle],
+  async ([r]) => {
     const seq = ++namingSeq
     if (!r) return (naming.value = null)
     try {
@@ -236,7 +301,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
 </script>
 
 <template>
-  <div class="page">
+  <div class="page" :class="{ 'quality-page': store.probing || (probe && !store.probeError) }">
     <button type="button" class="back" @click="back('detail')"><Icon name="back" :size="16" />{{ d?.title ?? '返回' }}</button>
     <div class="h1-row">
       <h1 class="h1">选择画质</h1>
@@ -269,7 +334,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
           </div>
         </fieldset>
       </div>
-      <aside class="card hard out">
+      <aside class="card hard out out-loading">
         <h2 class="h2s">输出</h2>
 
         <div class="blk"><Skeleton w="72" h="13" /><Skeleton w="100%" h="38" r="8" /></div>
@@ -318,7 +383,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
               </div>
             </div>
           </div>
-          <div class="muted small">自动以已选音轨的最高档为默认，也可手动指定；整批下载沿用此选择。</div>
+          <div class="muted small">已选音轨默认优先 DTS，其次杜比 / 全景声，再选 AAC；也可手动指定，整批下载沿用此选择。</div>
           <div v-if="hasDts" class="muted small">选了 DTS 音轨，会用 MP4Box 封装成 MP4</div>
         </fieldset>
         <fieldset class="fs">
@@ -337,67 +402,92 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
       </div>
 
       <aside class="card hard out">
-        <h2 class="h2s">输出</h2>
+        <div class="out-content">
+          <h2 class="h2s">输出</h2>
 
-        <div v-if="d?.provider === 'youku' || d?.provider === 'tencent'" class="blk">
-          <span class="lab">内容类型</span>
-          <div class="kind-options" role="group" aria-label="内容类型">
-            <button type="button" class="btn sm" :class="{ primary: isMovie }" :aria-pressed="isMovie" @click="changeKind('movie')">电影</button>
-            <button type="button" class="btn sm" :class="{ primary: !isMovie }" :aria-pressed="!isMovie" @click="changeKind('show')">剧集</button>
+          <div v-if="canMatchTmdb" class="blk">
+            <span class="lab">内容类型</span>
+            <div class="kind-options" role="group" aria-label="内容类型">
+              <button type="button" class="btn sm" :class="{ primary: isMovie }" :aria-pressed="isMovie" @click="changeKind('movie')">电影</button>
+              <button type="button" class="btn sm" :class="{ primary: !isMovie }" :aria-pressed="!isMovie" @click="changeKind('show')">剧集</button>
+            </div>
           </div>
+
+          <div v-if="store.state?.settings.tmdbKey && canMatchTmdb" class="blk">
+            <span class="lab">TMDB 匹配</span>
+            <div v-if="tmdbLoading" class="dim small row"><span class="spin" />正在查 TMDB…</div>
+            <div v-else-if="tmdbError" class="warn-box">TMDB：{{ tmdbError }} <button type="button" class="linkish" @click="loadTmdb">重试</button></div>
+            <template v-else>
+              <div class="match" :class="{ none: !tmdb }">
+                <Icon v-if="tmdb" name="check" :size="16" :stroke="2.5" />
+                <span>{{ tmdb ? `${tmdb.name}${tmdb.year ? ` (${tmdb.year})` : ''}` : tmdbHits.length ? '不使用 TMDB' : '未找到 TMDB 条目' }}</span>
+                <button v-if="tmdbHits.length" type="button" class="linkish" @click="tmdbOpen = !tmdbOpen">{{ tmdbOpen ? '收起' : '更换' }}</button>
+                <button v-else type="button" class="linkish" @click="loadTmdb">重试</button>
+              </div>
+              <div v-if="tmdbOpen" class="hits">
+                <button v-for="h in tmdbHits" :key="`${h.kind}:${h.id}`" type="button" class="hit" :class="{ on: tmdb?.id === h.id && tmdb?.kind === h.kind }" @click="selectTmdb(h)">
+                  {{ h.name }}<span class="muted">{{ h.kind === 'movie' ? '电影' : '剧集' }} {{ h.year || '' }}</span>
+                </button>
+                <button type="button" class="hit" :class="{ on: !tmdb }" @click="selectTmdb(null)">不使用 TMDB</button>
+              </div>
+            </template>
+          </div>
+
+          <div v-if="tmdb?.kind === 'show'" class="blk">
+            <label for="tmdb-season" class="lab">输出季号</label>
+            <div v-if="seasonsLoading" class="dim small row"><span class="spin" />正在读取 TMDB 季列表…</div>
+            <div v-else-if="seasonsError" class="warn-box">季列表：{{ seasonsError }} <button type="button" class="linkish" @click="loadSeasons">重试</button></div>
+            <div v-else-if="seasonsWarning" class="warn-box">{{ seasonsWarning }} <button type="button" class="linkish" @click="loadSeasons">重试</button></div>
+            <select id="tmdb-season" v-model="selectedSeason" class="season-select" :disabled="seasonsLoading">
+              <option :value="''">沿用平台季号</option>
+              <optgroup v-for="list in seasonLists" :key="list.key" :label="list.label">
+                <option v-for="season in list.seasons" :key="seasonKey(season)" :value="seasonKey(season)">{{ seasonLabel(season) }}</option>
+              </optgroup>
+            </select>
+            <span class="small muted">整批使用所选季号，集号沿用平台；目录和文件名预览同步更新。</span>
+            <span v-if="selectedSeasonRow?.groupId" class="small muted">采用「{{ selectedSeasonRow.groupName }}」分组，保留平台集号，不换算总集数。</span>
+            <span v-if="!seasonsLoading && !seasonsError && !seasons.length" class="small muted">TMDB 暂无季列表，可沿用平台季号下载。</span>
+          </div>
+
+          <div v-if="naming" class="blk">
+            <span class="lab">文件名预览</span>
+            <div class="name mono">{{ sep(naming.folder) }}/<br /><span>{{ naming.file }}</span></div>
+            <span v-if="naming.note" class="small muted">{{ naming.note }}</span>
+          </div>
+
+          <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="go('settings')">
+            <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
+          </button>
+          <button type="button" class="dir mono tmp" :title="tmpFull" @click="go('settings')">
+            <Icon name="file" :size="16" />临时文件：{{ tmpText }}
+          </button>
         </div>
 
-        <div v-if="store.state?.settings.tmdbKey && (d?.provider === 'youku' || d?.provider === 'tencent')" class="blk">
-          <span class="lab">TMDB 匹配</span>
-          <div v-if="tmdbLoading" class="dim small row"><span class="spin" />正在查 TMDB…</div>
-          <div v-else-if="tmdbError" class="warn-box">TMDB：{{ tmdbError }} <button type="button" class="linkish" @click="loadTmdb">重试</button></div>
-          <template v-else>
-            <div class="match" :class="{ none: !tmdb }">
-              <Icon v-if="tmdb" name="check" :size="16" :stroke="2.5" />
-              <span>{{ tmdb ? `${tmdb.name}${tmdb.year ? ` (${tmdb.year})` : ''}` : tmdbHits.length ? '不使用 TMDB' : '未找到 TMDB 条目' }}</span>
-              <button v-if="tmdbHits.length" type="button" class="linkish" @click="tmdbOpen = !tmdbOpen">{{ tmdbOpen ? '收起' : '更换' }}</button>
-              <button v-else type="button" class="linkish" @click="loadTmdb">重试</button>
-            </div>
-            <div v-if="tmdbOpen" class="hits">
-              <button v-for="h in tmdbHits" :key="`${h.kind}:${h.id}`" type="button" class="hit" :class="{ on: tmdb?.id === h.id && tmdb?.kind === h.kind }" @click="selectTmdb(h)">
-                {{ h.name }}<span class="muted">{{ h.kind === 'movie' ? '电影' : '剧集' }} {{ h.year || '' }}</span>
-              </button>
-              <button type="button" class="hit" :class="{ on: !tmdb }" @click="selectTmdb(null)">不使用 TMDB</button>
-            </div>
-          </template>
+        <div class="out-actions">
+          <div v-if="totalSize" class="sum"><span class="dim">预计占用</span><span class="mono">约 {{ human(totalSize) }} · {{ count }} {{ noun }}</span></div>
+
+          <button type="button" class="btn primary big" :disabled="starting || !quality || tmdbLoading" @click="start">
+            <span v-if="starting" class="spin" /><Icon v-else name="download" />开始下载 {{ count }} {{ noun }}
+          </button>
         </div>
-
-        <div v-if="naming" class="blk">
-          <span class="lab">文件名预览</span>
-          <div class="name mono">{{ sep(naming.folder) }}/<br /><span>{{ naming.file }}</span></div>
-        </div>
-
-        <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="go('settings')">
-          <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
-        </button>
-        <button type="button" class="dir mono tmp" :title="tmpFull" @click="go('settings')">
-          <Icon name="file" :size="16" />临时文件：{{ tmpText }}
-        </button>
-
-        <div v-if="totalSize" class="sum"><span class="dim">预计占用</span><span class="mono">约 {{ human(totalSize) }} · {{ count }} {{ noun }}</span></div>
-
-        <button type="button" class="btn primary big" :disabled="starting || !quality || tmdbLoading" @click="start">
-          <span v-if="starting" class="spin" /><Icon v-else name="download" />开始下载 {{ count }} {{ noun }}
-        </button>
       </aside>
     </div>
   </div>
 </template>
 
 <style scoped>
+.quality-page { overflow: hidden; }
 .back { margin-bottom: -8px; }
 .kind-options { display: flex; gap: 8px; }
-.cols { display: flex; gap: 28px; align-items: flex-start; }
-.left { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.season-select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }
+.season-select:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.cols { flex: 1; min-height: 0; display: flex; gap: 28px; align-items: flex-start; }
+.left { flex-grow: 1; min-width: 0; min-height: 0; height: 100%; overflow-y: auto; padding: 4px 8px 8px 4px; display: flex; flex-direction: column; gap: 20px; }
+.left > * { flex-shrink: 0; }
 .fs { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .small { font-size: 13px; font-weight: 400; }
-/* Keep hidden inputs inside their visible labels so focusing them only scrolls the page. */
+/* Keep hidden inputs inside their visible labels so focusing them scrolls the quality list. */
 .opt, .achip { position: relative; }
 .opt {
   padding: 9px 16px; background: var(--card); border: 1.5px solid var(--line); border-radius: 10px; display: flex; align-items: center; gap: 14px; cursor: pointer;
@@ -432,7 +522,11 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .audio-default:hover { border-color: var(--ink); color: var(--ink); }
 .audio-default.active { border-color: var(--ink); background: var(--paper-2); color: var(--ink); font-weight: 700; }
 .audio-default:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
-.out { width: 340px; flex-shrink: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px; position: sticky; top: 0; }
+.out { width: 340px; flex-shrink: 0; max-height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.out-content { min-height: 0; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.out-content > * { flex-shrink: 0; }
+.out-actions { flex-shrink: 0; padding: 16px 20px 20px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
+.out-loading { padding: 20px; gap: 16px; overflow-y: auto; }
 .h2s { font-size: 17px; font-weight: 700; }
 .blk { display: flex; flex-direction: column; gap: 6px; }
 .lab { font-size: 13px; color: var(--ink-3); }
@@ -451,5 +545,5 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .tmp { color: var(--ink-3); font-size: 12px; }
 .sk-opt { cursor: default; gap: 14px; }
 .sk-opt .ot { flex-grow: 1; gap: 6px; }
-.sum { display: flex; justify-content: space-between; font-size: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.sum { display: flex; justify-content: space-between; font-size: 14px; }
 </style>

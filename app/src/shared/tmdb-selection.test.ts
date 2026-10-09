@@ -13,6 +13,12 @@ test('a later season matches the series premiere, even when the platform reports
   expect(defaultTmdbHit([{ ...show, kind: 'movie' }], '大王饶命 第2季', 2023, 'show')).toBe(null)
 })
 
+test('a final season matches the base series despite its later release year, with ambiguous remakes left unselected', () => {
+  const show: TmdbHit = { id: 206484, name: '诛仙', title: '', year: 2022, overview: '', kind: 'show' }
+  expect(defaultTmdbHit([show], '诛仙 最终季', 2026, 'show')).toEqual(show)
+  expect(defaultTmdbHit([show, { ...show, id: 2, year: 2026 }], '诛仙 最终季', 2026, 'show')).toBe(null)
+})
+
 test('an exact movie match survives an unknown/default-TV platform type', () => {
   expect(defaultTmdbHit([movie], '爸爸是外星人', 0, 'show')).toEqual(movie)
   expect(defaultTmdbHit([movie], '爸爸是外星人', 2024, 'show')?.kind).toBe('movie')

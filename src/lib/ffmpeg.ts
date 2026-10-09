@@ -194,7 +194,11 @@ export async function validateAudio(ffmpeg: string, path: string, signal?: Abort
     await run(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-xerror', '-err_detect', 'explode', '-i', path, '-map', '0:a', '-f', 'null', '-'], undefined, signal)
   } catch (e) {
     if (signal?.aborted) throw signal.reason ?? e
-    throw new Error(`音轨解码校验失败，未生成成品：${e instanceof Error ? e.message : String(e)}`)
+    const message = e instanceof Error ? e.message : String(e)
+    if (/Stream map.*matches no streams|Failed to set value '0:a' for option 'map'/i.test(message)) {
+      throw new Error('音轨校验失败：下载的文件中没有音频轨道，未生成成品；分轨视频需要同时取得独立音轨', { cause: e })
+    }
+    throw new Error(`音轨解码校验失败，未生成成品：${message}`)
   }
 }
 

@@ -11,6 +11,12 @@ export type TencentOperation = {
 const id = (v: unknown): string | undefined => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(v) ? v : undefined
 const actions = new Set(['search', 'detail', 'resolve', 'play'])
 
+/** The gateway has no `tencent/report` action. Observation must not block search or playback. */
+function reportUnsupported(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /INVALID_PARAM/i.test(message) && /["']report["']/i.test(message)
+}
+
 /** Local observations, not simulated Android telemetry or Tencent signatures. */
 export class TencentOperations {
   private root?: Root
@@ -21,6 +27,8 @@ export class TencentOperations {
   private transferPending: Promise<void> = Promise.resolve()
   private transferBusy = false
   private transferClosed = false
+  /** `false` after this gateway rejects `tencent/report`; later calls stay local. */
+  private reportSupported?: boolean
 
   constructor(private readonly call: ReportCall, private readonly log: (s: string) => void, private readonly jobID = '', root?: Root, private readonly scope = '', private readonly source: 'tui_process' | 'electron_process' = 'tui_process') { this.root = root }
 
@@ -34,22 +42,30 @@ export class TencentOperations {
     if (action === 'search' || !this.root) this.root = { flow: randomUUID() }
     const root = this.root
     if (root.rejected) throw new Error('Tencent operation stopped after rejection; start a new user operation')
-    if (!root.pending) root.pending = this.call({ session_type: 'tv', report_type: 'bind', flow_id: root.flow }).then(data => {
+    if (this.reportSupported === false) root.observationSources = []
+    else if (!root.pending) root.pending = this.call({ session_type: 'tv', report_type: 'bind', flow_id: root.flow }).then(data => {
       if (typeof data.binding !== 'string' || !data.binding) throw new Error('Tencent report binding unavailable')
+      this.reportSupported = true
       root.binding = data.binding
       root.observationSources = Array.isArray(data.observation_sources)
         ? data.observation_sources.filter((value): value is string => typeof value === 'string')
         : ['tui_process']
       return root.binding
+    }).catch(error => {
+      if (!reportUnsupported(error)) throw error
+      this.reportSupported = false
+      root.observationSources = []
+      this.log(`tencent_event action=bind phase=bind flow=${root.flow} status=local_only_gateway_action_unsupported`)
+      return ''
     })
-    await root.pending
+    if (root.pending) await root.pending
     const op: TencentOperation = { root, id: randomUUID(), action, vid: id(input.vid), cid: id(input.cid), started: performance.now(), cpu: process.cpuUsage() }
     await this.record(op, 'start')
     return op
   }
 
   boundInput(op: TencentOperation | undefined, input: Record<string, unknown>): Record<string, unknown> {
-    return op ? { ...input, session_type: 'tv', report_binding: op.root.binding } : input
+    return op?.root.binding ? { ...input, session_type: 'tv', report_binding: op.root.binding } : input
   }
 
   async finish(op: TencentOperation | undefined, data?: Record<string, unknown>, error?: unknown): Promise<void> {
