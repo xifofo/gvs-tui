@@ -4,13 +4,13 @@ import { probeOptions } from './quality.ts'
 import type { GwClient } from './client.ts'
 import { defaultConfig } from './config.ts'
 
-test('domestic quality keeps exact source selectors and uses returned dimensions', async () => {
+test('domestic quality keeps source names, exact selectors and returned dimensions', async () => {
   const data = { formats: [
-    { id: '600|100|25', width: 3840, height: 1636, bid: 600, br: 100, fr: 25, codec: 'h265', size: 1000, drm: 5 },
+    { id: '600|100|25', name: '帧绮映画 4K', width: 3840, height: 1636, bid: 600, br: 100, fr: 25, codec: 'h265', size: 1000, drm: 5 },
     { id: '500|100|25', bid: 500, br: 100, fr: 25, codec: 'h264', drm: 0 },
   ] }
   const options = iqcnOptions(data)
-  expect(options.qualities[0]).toMatchObject({ id: '600|100|25', stream: '600|100|25', label: '2160P', width: 3840, height: 1636 })
+  expect(options.qualities[0]).toMatchObject({ id: '600|100|25', stream: '600|100|25', label: '帧绮映画 4K', width: 3840, height: 1636 })
   expect(options.qualities[1]!.height).toBe(0)
   expect(iqcnSelection(options.qualities[0]!.stream!)).toEqual({ bid: '600', br: '100', fr: '25' })
   const cli = { invoke: async (p: string, a: string, input: unknown) => {
