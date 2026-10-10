@@ -141,7 +141,7 @@ export function restoreIQCNLocal(source: string, destination: string, material: 
 
 const localRuntime: IQCNLocalRuntime = { fetch: (url, init) => fetch(url, init), restore: restoreIQCNLocal }
 
-export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, index: number, expected: number, material: IQCNProcessing, work: string, signal?: AbortSignal, runtime = localRuntime): Promise<Buffer> {
+export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, index: number, expected: number, material: IQCNProcessing, work: string, signal?: AbortSignal, runtime = localRuntime, initial?: Record<string, unknown>): Promise<Buffer> {
   if (!Number.isSafeInteger(expected) || expected <= 0 || expected > MAX_SEGMENT) throw new Error('爱奇艺国内版分片大小无效或超过 64 MiB')
   const id = randomUUID(), raw = join(work, `iqcn-${id}.source`), clear = join(work, `iqcn-${id}.clear`)
   let firstError = ''
@@ -151,7 +151,9 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
       signal?.throwIfAborted()
       let descriptor: Record<string, unknown>
       try {
-        descriptor = await iqcnSegmentDescriptor(cli, { planId, index, ...(refresh ? { refresh: '1' } : {}) }, signal)
+        descriptor = refresh === 0 && initial
+          ? initial
+          : await iqcnSegmentDescriptor(cli, { planId, index, ...(refresh ? { refresh: '1' } : {}) }, signal)
       } catch (error) {
         if (firstError) throw new Error(`${firstError}；刷新分片地址失败`)
         throw error

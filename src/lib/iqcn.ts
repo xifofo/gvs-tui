@@ -98,7 +98,12 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     const started = Date.now()
     emit('本地下载与处理', 0.02, `分片 0/${segments.length}`)
     await orderedDownload({ sizes, threads, signal,
-      pull: (index, abort) => downloadIQCNLocalSegment(cli, planId, index, sizes[index]!, material, work, abort, local),
+      pull: (index, abort) => {
+        const segment = segments[index]!
+        const initial = Array.isArray(segment.urls) && segment.urls.length
+          ? { transport: 'local-v1', index, bytes: sizes[index]!, urls: segment.urls } : undefined
+        return downloadIQCNLocalSegment(cli, planId, index, sizes[index]!, material, work, abort, local, initial)
+      },
       write: (bytes, index) => {
         appendFileSync(transport, bytes)
         completedBytes += bytes.length
