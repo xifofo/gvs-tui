@@ -15,6 +15,7 @@ import { iqcnAudios, selectIQCNAudios, prepareIQCNAudio, downloadIQCNAudio, type
 import { runLog } from './runlog.ts'
 import { prepareIQCNSubtitles } from './iqcn-subtitles.ts'
 import { defaultIQSubtitleIndex } from './iq-subtitles.ts'
+import { iqcnEpisodeRendition } from './iqcn-rendition.ts'
 
 /** Domestic selection uses source BID/bitrate/frame rate, never guessed tiers. */
 export function iqcnOptions(data: Record<string, unknown>): StreamOptions {
@@ -59,7 +60,13 @@ export function assertIQCNCoverage(tracks: TrackTiming[], expectedSeconds = 0): 
 
 export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal, runtime?: IQCNLocalRuntime, threads = 1): Promise<string> {
   signal?.throwIfAborted()
-  const plan = await cli.invoke('iqcn', 'streams', { tvid: task.vid, ...iqcnSelection(task.quality), transport: 'local-v1' }, {}, { timeoutMs: 150000 })
+  let selection = iqcnSelection(task.quality)
+  if (selection.vid) {
+    const catalog = await cli.invoke('iqcn', 'probe', { tvid: task.vid }, {}, { timeoutMs: 150000 })
+    signal?.throwIfAborted()
+    selection = iqcnEpisodeRendition(catalog, task.vid, selection, task.codec)
+  }
+  const plan = await cli.invoke('iqcn', 'streams', { tvid: task.vid, ...selection, transport: 'local-v1' }, {}, { timeoutMs: 150000 })
   const video = isObj(plan.video) ? plan.video : {}
   const segments = Array.isArray(video.segments) ? video.segments.filter(isObj) : []
   const planId = asString(plan.planId)

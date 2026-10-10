@@ -19,6 +19,16 @@ afterEach(() => {
   else process.env.GVS_PROXY = originalProxy
 })
 
+test('gateway rate rejection preserves status, machine code and Retry-After for descriptor retry', async () => {
+  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async () =>
+    Response.json({ code: 429, error_code: 'RATE_LIMITED', msg: '操作太频繁，请稍等片刻再试。' }, { status: 429, headers: { 'Retry-After': '2' } }),
+  { preconnect: fetch.preconnect }))
+  const client = new GwClient('https://gateway.example', 'test-key')
+  await expect(client.invoke('iqcn', 'download-segment', { planId: 'fixture', index: 8 })).rejects.toMatchObject({
+    httpStatus: 429, errorCode: 'RATE_LIMITED', retryAfterMs: 2000,
+  })
+})
+
 test('gateway API uses the saved proxy for authentication and takes edits on the next request', async () => {
   const routes: unknown[] = []
   fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {

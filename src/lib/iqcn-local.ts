@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type { GwClient } from './client.ts'
 import { tuiBinDir } from './tool-paths.ts'
 import { asString, isObj } from './util.ts'
+import { iqcnSegmentDescriptor } from './iqcn-control.ts'
 
 export type IQCNProcessing = { version: number; ticket: string; identity: string }
 type LocalResult = { version: number; bytes: number; restored: boolean; clearCandidate: boolean }
@@ -13,6 +14,20 @@ export type IQCNLocalRuntime = {
   restore: (source: string, destination: string, material: IQCNProcessing, signal?: AbortSignal) => Promise<LocalResult>
 }
 const MAX_SEGMENT = 64 * 1024 * 1024
+
+/** Only fixed messages emitted by our helper may enter diagnostics. */
+export function iqcnRestoreReason(stderr: string): string {
+  const reasons: Record<string, string> = {
+    'invalid local processing material': 'material_invalid',
+    'local segment restoration failed': 'restore_failed',
+    'local segment restoration incomplete': 'restore_incomplete',
+    'cannot open local segment': 'input_open_failed',
+    'local segment exceeds size limit or cannot be read': 'input_read_failed',
+    'cannot create local output': 'output_create_failed',
+    'cannot write local output': 'output_write_failed',
+  }
+  return reasons[stderr.trim()] ?? 'helper_failed'
+}
 
 export function iqcnProcessing(plan: Record<string, unknown>): IQCNProcessing {
   const value = isObj(plan.localProcessing) ? plan.localProcessing : {}
@@ -81,7 +96,7 @@ export function restoreIQCNLocal(source: string, destination: string, material: 
   const binary = process.env.GVS_IQCN_LOCAL || join(tuiBinDir(), process.platform === 'win32' ? 'iqcn-local.exe' : 'iqcn-local')
   return new Promise((resolve, reject) => {
     const child = spawn(binary, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
-    let output = '', done = false
+    let output = '', diagnostic = '', done = false
     let failure: Error | undefined
     let exited = false
     const finish = (err?: Error, value?: LocalResult) => {
@@ -107,11 +122,11 @@ export function restoreIQCNLocal(source: string, destination: string, material: 
       output += chunk.toString()
       if (output.length > 4096) finish(new Error('本地分片处理返回异常'))
     })
-    child.stderr.resume() // The helper emits no secrets; keep user errors stable.
+    child.stderr.on('data', (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString()).slice(0, 4096) })
     child.on('close', code => {
       exited = true
       if (failure) return finish(failure)
-      if (code !== 0) return finish(new Error('爱奇艺国内版本地分片还原失败'))
+      if (code !== 0) return finish(new Error(`爱奇艺国内版本地分片还原失败（${iqcnRestoreReason(diagnostic)}，exit=${code ?? 'signal'}）`))
       try {
         const value = JSON.parse(output) as LocalResult
         if (value.version !== 1 || !Number.isSafeInteger(value.bytes) || value.bytes <= 0 || value.bytes > MAX_SEGMENT || (!value.restored && !value.clearCandidate)) throw new Error()
@@ -136,7 +151,7 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
       signal?.throwIfAborted()
       let descriptor: Record<string, unknown>
       try {
-        descriptor = await cli.invoke('iqcn', 'download-segment', { planId, index, ...(refresh ? { refresh: '1' } : {}) }, {}, { timeoutMs: 150000 })
+        descriptor = await iqcnSegmentDescriptor(cli, { planId, index, ...(refresh ? { refresh: '1' } : {}) }, signal)
       } catch (error) {
         if (firstError) throw new Error(`${firstError}；刷新分片地址失败`)
         throw error
@@ -159,7 +174,16 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
     }
     if (!downloaded) throw new Error(firstError || '爱奇艺国内版分片直连失败')
     signal?.throwIfAborted()
-    const report = await runtime.restore(raw, clear, material, signal)
+    let report: LocalResult
+    try { report = await runtime.restore(raw, clear, material, signal) }
+    catch (error) {
+      signal?.throwIfAborted()
+      // Do not echo arbitrary runtime errors (they may contain paths or material).
+      const match = /（([a-z_]+)，exit=(\d+|signal)）$/.exec(error instanceof Error ? error.message : '')
+      const reason = match && ['material_invalid', 'restore_failed', 'restore_incomplete', 'input_open_failed', 'input_read_failed', 'output_create_failed', 'output_write_failed', 'helper_failed'].includes(match[1]!)
+        ? `${match[1]}, exit=${match[2]}` : 'helper_failed'
+      throw new Error(`爱奇艺国内版本地分片还原失败（分片 ${index + 1}，${expected} 字节，${reason}）`)
+    }
     signal?.throwIfAborted()
     const bytes = readFileSync(clear)
     if ((!report.restored && !report.clearCandidate) || report.version !== 1 || report.bytes !== bytes.length || bytes.length !== expected) throw new Error('爱奇艺国内版本地分片还原或长度校验失败')

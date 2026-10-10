@@ -8,6 +8,7 @@ import { normalizeIQCookie } from './iq.ts'
 import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
 import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
 import { userMessage } from './user-message.ts'
+import { retryAfterMillis } from './iqcn-control.ts'
 export type KeyInfo = {
   id: string
   name: string
@@ -176,8 +177,12 @@ export class GwClient {
       diagnostic(undefined, e)
       if (!(e instanceof TencentRiskStop)) await tracker?.finish(operation, undefined, e).catch(() => {})
       const msg = e instanceof Error ? e.message : String(e)
+      const metadata = e as { httpStatus?: unknown; errorCode?: unknown }
+      const httpStatus = Number(metadata?.httpStatus)
+      const safeCode = typeof metadata?.errorCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(metadata.errorCode) ? metadata.errorCode : '-'
+      const reason = provider === 'iqcn' ? ` http=${Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : '-'} error_code=${safeCode}` : ''
       runLog(
-        `invoke ${provider}/${action} ${summarizeInput(input)}${headerNote ? ` hdr=${headerNote}` : ''} ${Date.now() - t0}ms fail ${truncate(msg, 160)}`,
+        `invoke ${provider}/${action} ${summarizeInput(input)}${headerNote ? ` hdr=${headerNote}` : ''} ${Date.now() - t0}ms fail${reason} ${truncate(msg, 160)}`,
       )
       throw e
     }
@@ -224,7 +229,7 @@ export class GwClient {
     if (!res.ok || env.code !== 0) {
       const message = limitError(typeof env.msg === 'string' ? env.msg : '') || `http ${res.status}`
       const error = env.error_code === 'RELOGIN_REQUIRED' || RELOGIN_RE.test(message) ? new ReloginRequired(message) : new Error(message)
-      throw Object.assign(error, { httpStatus: res.status, code: env.code, errorCode: env.error_code || '', userMessage: userMessage({ message, error_code: env.error_code }) })
+      throw Object.assign(error, { httpStatus: res.status, code: env.code, errorCode: env.error_code || '', retryAfterMs: retryAfterMillis(res.headers.get('Retry-After')), userMessage: userMessage({ message, error_code: env.error_code }) })
     }
     return env
   }
