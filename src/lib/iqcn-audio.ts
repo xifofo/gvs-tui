@@ -18,7 +18,11 @@ function audioChoiceID(row: Record<string, unknown>): string {
 
 function audioSourcePriority(row: Record<string, unknown>): number {
   const format = asString(row.ff).toLowerCase()
-  return (row.has_independent_files === true ? 100 : 0) + (format === 'dash' ? 20 : !format ? 10 : 0) + (row.selected === true ? 1 : 0)
+  // The local-audio-v1 dispatcher accepts AMP4, not DASH .m4s objects.
+  // Prefer only within the same language/codec/quality/channel choice.
+  const embedded = Number(row.ct) === 1 && row.has_independent_files !== true
+  return (embedded ? 1000 : 0) + (format === (embedded ? 'dash' : 'amp4') ? 300 : 20)
+    + (row.has_independent_files === true ? 100 : 0) + (row.selected === true ? 1 : 0)
 }
 
 export function iqcnAudios(data: Record<string, unknown>): Audio[] {
@@ -69,7 +73,7 @@ async function boundedFetch(url: string, fetcher: Fetcher, signal?: AbortSignal)
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
     const res = await fetcher(url, { signal: active, redirect: 'manual' })
-    if (res.status !== 200 || !res.body) { await res.body?.cancel(); throw new Error('音轨源站响应失败') }
+    if (res.status !== 200 || !res.body) { await res.body?.cancel(); throw new Error(`音轨 HTTP ${res.status}`) }
     reader = res.body.getReader()
     const chunks: Buffer[] = []
     let size = 0
@@ -83,9 +87,11 @@ async function boundedFetch(url: string, fetcher: Fetcher, signal?: AbortSignal)
     }
     if (!size) throw new Error('音轨对象为空')
     return Buffer.concat(chunks)
-  } catch {
+  } catch (error) {
     signal?.throwIfAborted()
-    throw new Error('爱奇艺音轨直连下载失败')
+    if (timeout.aborted) throw new Error('音轨直连超时')
+    const message = error instanceof Error ? error.message : ''
+    throw new Error(/^音轨 HTTP \d{3}$/.test(message) || ['音轨对象超过大小限制', '音轨对象为空'].includes(message) ? message : '爱奇艺音轨直连下载失败')
   } finally { await reader?.cancel().catch(() => {}); reader?.releaseLock() }
 }
 
@@ -103,6 +109,7 @@ export async function prepareIQCNAudio(cli: GwClient, planId: string, audioId: s
     if (!isObj(value) || value.index !== index) throw new Error('音轨分段顺序无效')
     const url = new URL(asString(value.dispatch))
     if (url.protocol !== 'https:' || url.hostname !== 'data.video.ptqy.gitv.tv' || url.port || url.username || url.password || url.hash || !url.pathname.startsWith('/videos/v0/')) throw new Error('音轨调度地址无效')
+    if (!url.pathname.toLowerCase().endsWith('.amp4')) throw new Error('所选独立音轨未返回可下载的 AMP4 文件，请刷新音轨列表或更新网关')
     return url
   })
   return { planId, audioId, info, embedded: false, parts }
@@ -124,22 +131,28 @@ export async function downloadIQCNAudio(cli: GwClient, planId: string, audioId: 
       pull: async (index, abort) => {
         const dispatch = parts[index]!
         let last: unknown
+        let stage = 'dispatch'
         for (let attempt = 0; attempt < 2; attempt++) {
           abort.throwIfAborted()
           try {
+            stage = 'dispatch'
             const body = await boundedFetch(dispatch.href, fetcher, abort)
             if (body.length > 65536) throw new Error('音轨调度响应过大')
             const data = JSON.parse(body.toString())
             if (String(data.e) !== '0') throw new Error('音轨调度失败')
             const url = new URL(asString(data.l))
             if (url.protocol !== 'https:' || !url.hostname.endsWith('.ptqy.gitv.tv') || url.username || url.password || url.port || url.hash || url.pathname !== dispatch.pathname) throw new Error('音轨调度返回了其他文件')
+            stage = 'media'
             const raw = await boundedFetch(url.href, fetcher, abort)
+            stage = 'decompress'
             const bytes = raw[0] === 0x1f && raw[1] === 0x8b ? gunzipSync(raw, { maxOutputLength: LIMIT }) : raw
             if (!bytes.length) throw new Error('音轨对象为空')
             return bytes
           } catch (error) { abort.throwIfAborted(); last = error }
         }
-        throw new Error('所选音轨分段下载失败', { cause: last })
+        const message = last instanceof Error ? last.message : ''
+        const safe = /^音轨 HTTP \d{3}$/.test(message) || ['音轨直连超时', '音轨对象超过大小限制', '音轨对象为空', '音轨调度失败', '音轨调度返回了其他文件', '音轨调度响应过大'].includes(message) ? message : `${stage} 失败`
+        throw new Error(`所选音轨分段下载失败（第 ${index + 1}/${parts.length} 段，${safe}）`)
       },
       write: bytes => { appendFileSync(destination, bytes) },
     })

@@ -1,5 +1,6 @@
 import { test, expect } from 'bun:test'
-import { mkdtempSync, existsSync } from 'node:fs'
+import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs'
+import { gzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { iqcnAudios, selectIQCNAudios, prepareIQCNAudio, downloadIQCNAudio } from './iqcn-audio.ts'
@@ -19,7 +20,7 @@ test('DASH and AMP4 become three unique choices without transport labels', () =>
   const rows = iqcnAudios({ audios: duplicateCatalog })
   expect(rows).toHaveLength(3)
   expect(new Set(rows.map(row => row.id)).size).toBe(3)
-  expect(rows.map(row => row.vid)).toEqual(['aac-dash', 'dolby-dash', 'standard-dash'])
+  expect(rows.map(row => row.vid)).toEqual(['aac-amp4', 'dolby-amp4', 'standard-dash'])
   expect(rows.filter(row => row.isDefault || row.selected)).toHaveLength(1)
   expect(rows.map(row => row.label).join(' ')).not.toMatch(/DASH|AMP4/i)
   const reversed = iqcnAudios({ audios: [...duplicateCatalog].reverse() })
@@ -30,15 +31,16 @@ test('old duplicate selections bind once to current episode sources and keep one
   const requested = duplicateCatalog.map(row => ({ id: `iqcn:${row.language_id}:${row.ct}:${row.bid}:${row.cf}`, isDefault: row.cf === 'dolby' }))
   const rows = selectIQCNAudios({ audios: duplicateCatalog.map(row => ({ ...row, aid: `next-${row.aid}` })) }, requested)
   expect(rows).toHaveLength(3)
-  expect(rows.map(row => row.vid)).toEqual(['next-aac-dash', 'next-dolby-dash', 'next-standard-dash'])
+  expect(rows.map(row => row.vid)).toEqual(['next-aac-amp4', 'next-dolby-amp4', 'next-standard-dash'])
   expect(rows.filter(row => row.isDefault).map(row => row.codec)).toEqual(['DOLBY'])
 })
 
-test('available independent files outrank transport preference without deleting AMP4-only tracks', () => {
+test('downloadable AMP4 is preferred within a choice, including when DASH advertises files', () => {
   const rows = iqcnAudios({ audios: [duplicateCatalog[4], { ...duplicateCatalog[1], has_independent_files: true, selected: true }] })
   expect(rows).toHaveLength(1)
   expect(rows[0]!.vid).toBe('dolby-amp4')
   expect(iqcnAudios({ audios: [duplicateCatalog[1]] })[0]!.vid).toBe('dolby-amp4')
+  expect(iqcnAudios({ audios: [duplicateCatalog[0], duplicateCatalog[5]] })[0]!.vid).toBe('aac-amp4')
 })
 
 test('different languages, qualities and channel/content types are not collapsed', () => {
@@ -85,7 +87,7 @@ test('wrong audio identity never starts a CDN request', async () => {
 test('dispatcher cannot redirect local audio download to another host or file', async () => {
   for (const target of ['https://example.com/videos/v0/a', 'https://audio.ptqy.gitv.tv/other']) {
     const dest = join(mkdtempSync(join(tmpdir(), 'iqcn-audio-reject-')), 'audio.m4a')
-    const cli = { invoke: async () => ({ transport: 'local-audio-v1', audioId: 'chosen', parts: [{ index: 0, dispatch: 'https://data.video.ptqy.gitv.tv/videos/v0/a' }] }) } as unknown as GwClient
+    const cli = { invoke: async () => ({ transport: 'local-audio-v1', audioId: 'chosen', parts: [{ index: 0, dispatch: 'https://data.video.ptqy.gitv.tv/videos/v0/a.amp4' }] }) } as unknown as GwClient
     let media = false
     await expect(downloadIQCNAudio(cli, 'plan', 'chosen', dest, 8, undefined, async url => {
       if (!url.startsWith('https://data.video.ptqy.gitv.tv/')) media = true
@@ -94,4 +96,36 @@ test('dispatcher cannot redirect local audio download to another host or file', 
     expect(media).toBe(false)
     expect(existsSync(dest)).toBe(false)
   }
+})
+
+test('DASH m4s is rejected during preflight before starting any video/media download', async () => {
+  const cli = { invoke: async () => ({ transport: 'local-audio-v1', audioId: 'chosen', parts: [
+    { index: 0, dispatch: 'https://data.video.ptqy.gitv.tv/videos/v0/file.m4s' },
+  ] }) } as unknown as GwClient
+  await expect(prepareIQCNAudio(cli, 'plan', 'chosen')).rejects.toThrow('AMP4')
+})
+
+test('AMP4 gzip objects are decoded and concatenated in source order', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'iqcn-audio-order-')), dest = join(dir, 'audio.m4a')
+  const cli = { invoke: async () => ({ transport: 'local-audio-v1', audioId: 'chosen', parts: [0, 1].map(index => ({
+    index, dispatch: `https://data.video.ptqy.gitv.tv/videos/v0/${index}.amp4`,
+  })) }) } as unknown as GwClient
+  try {
+    await downloadIQCNAudio(cli, 'plan', 'chosen', dest, 2, undefined, async url => {
+      const u = new URL(url)
+      if (u.hostname === 'data.video.ptqy.gitv.tv') return Response.json({ e: '0', l: `https://cdn.ptqy.gitv.tv${u.pathname}?signed=value` })
+      if (u.pathname.endsWith('0.amp4')) { await Bun.sleep(20); return new Response(gzipSync(Buffer.from('first'))) }
+      return new Response(Buffer.from('second'))
+    })
+    expect(readFileSync(dest, 'utf8')).toBe('firstsecond')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('audio failure identifies segment and HTTP status without signed URLs', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'iqcn-audio-http-')), dest = join(dir, 'audio.m4a')
+  const cli = { invoke: async () => ({ transport: 'local-audio-v1', audioId: 'chosen', parts: [{ index: 0, dispatch: 'https://data.video.ptqy.gitv.tv/videos/v0/a.amp4?secret=value' }] }) } as unknown as GwClient
+  try {
+    await expect(downloadIQCNAudio(cli, 'plan', 'chosen', dest, 1, undefined, async () => new Response('', { status: 405 }))).rejects.toThrow('第 1/1 段，音轨 HTTP 405')
+    expect(existsSync(dest)).toBe(false)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })

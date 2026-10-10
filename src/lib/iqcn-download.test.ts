@@ -40,13 +40,13 @@ test('domestic job restores segments and muxes unique tracks without a runtime d
       return { planId: 'fixture-plan', transport: 'local-v1', localProcessing: { version: 1, ticket: 'fixture', identity: 'fixture' }, video: { segments: parts.map(p => ({ contentlength: p.length })) }, audios: audioCatalog, subtitles: [{ index: 0, language_id: 1, formats: ['srt'] }] }
     }
     if (action === 'audio') {
-      const track = audioCatalog.findIndex(a => a.aid === input.audioId)
-      expect(track).toBeGreaterThanOrEqual(0)
-      expect(track).toBeLessThan(3)
+      const selectedIndex = audioCatalog.findIndex(a => a.aid === input.audioId)
+      expect([2, 3, 4]).toContain(selectedIndex)
+      const track = selectedIndex === 2 ? 2 : selectedIndex - 3
       expect(restored).toBe(0)
       requestedAudios.push(String(input.audioId))
       if (track === 2) return { transport: 'local-audio-v1', audioId: input.audioId, embedded: true, language_id: 1, name: '普通话', codec: 'aac' }
-      return { transport: 'local-audio-v1', audioId: input.audioId, language_id: 1, name: '普通话', codec: audioCatalog[track]!.cf,
+      return { transport: 'local-audio-v1', audioId: input.audioId, language_id: 1, name: '普通话', codec: audioCatalog[selectedIndex]!.cf,
         parts: [0, 1].map(index => ({ index, dispatch: `https://data.video.ptqy.gitv.tv/videos/v0/${track}-${index}.amp4` })) }
     }
     if (action === 'download-finish') { released = true; return {} }
@@ -92,7 +92,7 @@ test('domestic job restores segments and muxes unique tracks without a runtime d
   expect(restored).toBe(2)
   expect(released).toBe(true)
   expect(existsSync(dest)).toBe(true)
-  expect(requestedAudios).toEqual(['current-aac', 'current-dolby', 'current-standard'])
+  expect(requestedAudios).toEqual(['amp4-aac', 'amp4-dolby', 'current-standard'])
   expect(stages).not.toContain('校验视频')
   const metadata = spawnSync(ffmpeg, ['-hide_banner', '-i', dest], { windowsHide: true, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }).stderr.toString()
   const audioLines = metadata.split('\n').filter(line => /Stream #.*Audio:/.test(line))
