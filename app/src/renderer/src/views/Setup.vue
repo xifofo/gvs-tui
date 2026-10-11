@@ -24,6 +24,7 @@ async function pickDir() {
 }
 
 async function connect() {
+  if (busy.value || store.state?.connecting) return
   busy.value = true
   error.value = ''
   try {
@@ -86,10 +87,10 @@ const plats = [
             <button type="button" class="btn" @click="pickDir">更改</button>
           </div>
         </label>
-        <div v-if="error" class="error-box">{{ error }}</div>
-        <button type="submit" class="btn primary big" :disabled="busy">
-          <span v-if="busy" class="spin" />
-          <span>{{ busy ? '连接中…' : '连接' }}</span>
+        <div v-if="error || store.state?.keyError" class="error-box" role="alert">{{ error || store.state?.keyError }}</div>
+        <button type="submit" class="btn primary big" :disabled="busy || store.state?.connecting">
+          <span v-if="busy || store.state?.connecting" class="spin" />
+          <span>{{ busy || store.state?.connecting ? '连接中…' : '连接' }}</span>
           <Icon v-if="!busy" name="arrow" />
         </button>
         <div class="note"><Icon name="check" :size="15" :stroke="2.5" style="color: var(--ok)" />连上后会自动建立隧道，优酷、腾讯请求从本机出网</div>

@@ -7,7 +7,9 @@ import { defaultTmdbHit } from '@shared/tmdb-selection'
 import Icon from '../components/Icon.vue'
 import Skeleton from '../components/Skeleton.vue'
 import IQCNAudioPicker from '../components/IQCNAudioPicker.vue'
-import { back, errText, go, gvs, human, openQuality, store, toast } from '../store'
+import { back, errText, go, gvs, human, openQuality, openSettings, store, toast } from '../store'
+
+defineOptions({ name: 'QualityView' })
 
 const d = computed(() => store.detail)
 const probe = computed(() => store.probe)
@@ -96,6 +98,7 @@ const embeddedNote = computed(() =>
     .join('、'),
 )
 const pickedCount = computed(() => audios.value.filter((a) => a.embedded || audioIds.value.includes(a.id)).length)
+const audioSummary = computed(() => audios.value.filter(a => a.embedded || audioIds.value.includes(a.id)).map(a => [a.lang, a.label].filter(Boolean).join(' ')).join('、'))
 function pickAll() {
   audioIds.value = audios.value.filter((a) => !a.embedded).map((a) => a.id)
   reconcileDefaultAudio()
@@ -258,7 +261,7 @@ const noun = computed(() => isMovie.value ? '个版本' : '集')
 
 async function start() {
   const r = request.value
-  if (!r || tmdbLoading.value) return
+  if (starting.value || !r || !quality.value || tmdbLoading.value) return
   starting.value = true
   try {
     const n = await gvs('enqueue', r)
@@ -353,13 +356,24 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
       <div class="left">
         <div v-if="probe.warning" class="warn-box">{{ probe.warning }}</div>
         <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
+        <fieldset class="fs video-options">
+          <legend>视频画质</legend>
+          <label v-for="q in probe.qualities" :key="q.index" class="opt" :class="{ on: q.index === qIndex }">
+            <input v-model="qIndex" type="radio" name="quality" :value="q.index" class="sr-only" />
+            <span class="radio"><span v-if="q.index === qIndex" /></span>
+            <span class="ot"><span class="on-t">{{ qname(q) }}</span><span v-if="streamCode(q)" class="mono muted code">{{ streamCode(q) }}</span></span>
+            <span class="spec dim">{{ spec(q) }}</span>
+          </label>
+        </fieldset>
         <div v-if="embeddedOnly" class="abox aline">
           <span class="atitle">音轨</span>
           <span class="muted">随视频内嵌{{ embeddedNote ? `：${embeddedNote}` : '，无需选择' }}</span>
         </div>
-        <IQCNAudioPicker v-else-if="d?.provider === 'iqcn' && audios.length" :audios="audios" :selected-ids="audioIds" :default-id="defaultAudioId"
+        <details v-else-if="audios.length" class="audio-options">
+        <summary><span class="atitle">音轨 <span class="muted small">已选 {{ pickedCount }}</span></span><span class="audio-summary">{{ audioSummary || '选择音轨' }}</span><span class="muted small">调整</span></summary>
+        <IQCNAudioPicker v-if="d?.provider === 'iqcn'" :audios="audios" :selected-ids="audioIds" :default-id="defaultAudioId"
           @toggle="toggleAudio" @set-default="setDefaultAudio" @all="pickAll" @only-default="pickDefault" />
-        <fieldset v-else-if="audios.length" class="fs abox">
+        <fieldset v-else class="fs abox">
           <legend class="sr-only">音轨</legend>
           <div class="alegend">
             <span class="atitle">音轨</span>
@@ -391,24 +405,15 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
           <div class="muted small">已选音轨默认优先 DTS，其次杜比 / 全景声，再选 AAC；也可手动指定，整批下载沿用此选择。</div>
           <div v-if="hasDts" class="muted small">选了 DTS 音轨，会用 MP4Box 封装成 MP4</div>
         </fieldset>
-        <fieldset class="fs">
-          <legend>视频</legend>
-          <label v-for="q in probe.qualities" :key="q.index" class="opt" :class="{ on: q.index === qIndex }">
-            <input v-model="qIndex" type="radio" name="quality" :value="q.index" class="sr-only" />
-            <span class="radio"><span v-if="q.index === qIndex" /></span>
-            <span class="ot">
-              <span class="on-t">{{ qname(q) }}</span>
-              <span v-if="streamCode(q)" class="mono muted code">{{ streamCode(q) }}</span>
-            </span>
-            <span class="spec dim">{{ spec(q) }}</span>
-          </label>
-        </fieldset>
+        </details>
 
       </div>
 
       <aside class="card hard out">
         <div class="out-content">
-          <h2 class="h2s">输出</h2>
+          <h2 class="h2s">下载确认</h2>
+          <div class="selection-summary"><strong>{{ quality ? qname(quality) : '请选择画质' }}</strong><span class="muted small">{{ audioSummary || embeddedNote || '随视频音轨' }}</span><span class="muted small">{{ count }} {{ noun }} · 整批沿用当前选择</span></div>
+          <details class="output-options"><summary>命名与刮削</summary><div class="output-options-body">
 
           <div v-if="canMatchTmdb" class="blk">
             <span class="lab">内容类型</span>
@@ -460,10 +465,11 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
             <span v-if="naming.note" class="small muted">{{ naming.note }}</span>
           </div>
 
-          <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="go('settings')">
+          </div></details>
+          <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">
             <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
           </button>
-          <button type="button" class="dir mono tmp" :title="tmpFull" @click="go('settings')">
+          <button type="button" class="dir mono tmp" :title="tmpFull" @click="openSettings('download')">
             <Icon name="file" :size="16" />临时文件：{{ tmpText }}
           </button>
         </div>
@@ -486,7 +492,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
 .kind-options { display: flex; gap: 8px; }
 .season-select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }
 .season-select:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
-.cols { flex: 1; min-height: 0; display: flex; gap: 28px; align-items: flex-start; }
+.cols { flex: 1; min-height: 0; display: flex; gap: 22px; align-items: flex-start; }
 .left { flex-grow: 1; min-width: 0; min-height: 0; height: 100%; overflow-y: auto; padding: 4px 8px 8px 4px; display: flex; flex-direction: column; gap: 20px; }
 .left > * { flex-shrink: 0; }
 .fs { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -498,12 +504,12 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
   padding: 9px 16px; background: var(--card); border: 1.5px solid var(--line); border-radius: 10px; display: flex; align-items: center; gap: 14px; cursor: pointer;
 }
 .opt:hover { border-color: var(--ink-3); }
-.opt.on { border-color: var(--ink); box-shadow: var(--shadow-orange); }
+.opt.on { border-color: var(--orange-text); background: var(--orange-soft); }
 .opt:focus-within { outline: 2px solid var(--orange); outline-offset: 2px; }
 .radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .radio span { width: 10px; height: 10px; border-radius: 50%; background: var(--orange); }
 .ot { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.on-t { font-size: 16px; font-weight: 700; }
+.on-t { font-size: 14px; font-weight: 600; }
 .code { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spec { margin-left: auto; font-size: 13px; white-space: nowrap; }
 .abox { padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; gap: 10px; }
@@ -527,7 +533,25 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .audio-default:hover { border-color: var(--ink); color: var(--ink); }
 .audio-default.active { border-color: var(--ink); background: var(--paper-2); color: var(--ink); font-weight: 700; }
 .audio-default:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
-.out { width: 340px; flex-shrink: 0; max-height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.out { width: 300px; flex-shrink: 0; max-height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.audio-options { order: -1; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+.audio-options > summary { display: flex; align-items: center; gap: 12px; padding: 13px 16px; cursor: pointer; list-style: none; }
+.audio-summary { flex: 1; min-width: 0; color: var(--ink-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audio-options .abox { border: 0; border-top: 1px solid var(--line); }
+.output-options > summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 10px 0; }
+.output-options-body { display: flex; flex-direction: column; gap: 16px; padding: 8px 0; }
+.selection-summary { display: flex; flex-direction: column; gap: 8px; line-height: 1.5; }
+.selection-summary strong { font-size: 14px; font-weight: 600; }
+.warn-box { order: -2; }
+.spec { font-variant-numeric: tabular-nums; }
+@media (max-width: 1180px) {
+  .cols { gap: 16px; }
+  .out { width: 268px; }
+  .opt { flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; }
+  .spec { width: 100%; margin-left: 32px; font-size: 12px; }
+  .out-content { padding: 16px; }
+  .out-actions { padding: 16px; }
+}
 .out-content { min-height: 0; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
 .out-content > * { flex-shrink: 0; }
 .out-actions { flex-shrink: 0; padding: 16px 20px 20px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }

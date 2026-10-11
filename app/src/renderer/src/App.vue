@@ -14,10 +14,11 @@ import Downloads from './views/Downloads.vue'
 import Settings from './views/Settings.vue'
 
 function onKey(e: KeyboardEvent) {
+  if (e.defaultPrevented || e.isComposing) return
   if (store.view !== 'detail' && store.view !== 'quality') return
   if (modalOpen()) return
-  if (e.key === 'Escape') back('search')
-  else if (e.altKey && e.key === 'ArrowLeft') back('search')
+  if (e.key === 'Escape' && (e.target as HTMLElement)?.closest('input, textarea, select, [contenteditable="true"]')) return
+  if (e.key === 'Escape' || (e.altKey && e.key === 'ArrowLeft')) { e.preventDefault(); back('search') }
 }
 onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
@@ -32,7 +33,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <TopBar />
       <div class="body">
         <Transition name="page" mode="out-in" :duration="140">
-          <KeepAlive :include="['DiscoverView']">
+          <KeepAlive :include="['DiscoverView', 'QualityView']">
             <Discover v-if="store.view === 'discover'" key="discover" />
             <Search v-else-if="store.view === 'search'" key="search" />
             <Detail v-else-if="store.view === 'detail'" key="detail" />

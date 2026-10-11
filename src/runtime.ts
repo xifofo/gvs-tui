@@ -73,7 +73,7 @@ import {
   setRunLogDisabled,
 } from './lib/runlog.ts'
 import { completedFilename, filename, folder, dots, tierHeight } from './lib/name.ts'
-import { confirmationLines, episodeRanges, settingGroup, settingInfoLines, viewMetrics, HELP_LINES } from './lib/ui-layout.ts'
+import { confirmationLines, detailListRows, episodeRanges, settingGroup, settingInfoLines, viewMetrics, HELP_LINES } from './lib/ui-layout.ts'
 import { JOB_PAGE_SIZE } from './lib/view.ts'
 import { anyInt, asBool, asString, firstStr, isObj } from './lib/util.ts'
 import { ensureTools } from './lib/tools.ts'
@@ -1521,7 +1521,8 @@ export class Runtime {
           this.cursor,
           k === 'j' ? 'down' : k === 'k' ? 'up' : k,
           n,
-          viewMetrics(this.viewport.width, this.viewport.height).gridRows * perRow,
+          detailListRows(viewMetrics(this.viewport.width, this.viewport.height).bodyHeight,
+            { detail: this.detailInfo ?? undefined, episodes: this.eps, episodeGroups: groups }) * perRow,
           perRow,
         ),
       )

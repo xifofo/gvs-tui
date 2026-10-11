@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { PROVIDER_NAME } from '@shared/api'
 import mark from '../assets/gvs-mark.svg'
-import { go, gvs, section, store, type View } from '../store'
+import { go, gvs, openSettings, section, store, type View } from '../store'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
 
@@ -15,6 +15,11 @@ const nav: Array<{ view: View; label: string; icon: string }> = [
 
 const active = (n: (typeof nav)[number]) => section() === n.view
 const activeJobs = computed(() => store.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length)
+const accountSummary = computed(() => {
+  const accounts = store.state?.accounts ?? []
+  const ready = accounts.filter(a => a.tone === 'ok').length
+  return `${ready} / ${accounts.length} 已就绪`
+})
 const toneColor: Record<string, string> = { ok: 'var(--side-ok)', warn: 'var(--side-warn)', err: '#ff8a7a', muted: 'var(--side-muted)' }
 const host = computed(() => {
   try {
@@ -50,28 +55,31 @@ const tunnel = computed(() => {
     </nav>
 
     <div v-if="store.state?.accounts.length" class="plats">
-      <div class="plats-h">平台</div>
+      <button type="button" class="accounts-link" @click="openSettings('account')"><Icon name="gear" :size="17" /><span>平台账号</span><span class="account-count">{{ accountSummary }}</span></button>
+      <details class="account-details">
+      <summary>查看账号状态</summary>
       <button
         v-for="a in store.state.accounts"
         :key="a.provider"
         type="button"
         class="plat"
         :title="a.summary"
-        @click="go('settings')"
+        @click="openSettings('account')"
       >
         <PlatformLogo :provider="a.provider" :size="18" />
         <span>{{ PROVIDER_NAME[a.provider] }}</span>
         <span class="st" :style="{ color: toneColor[a.tone] }"><span class="dot" :style="{ background: toneColor[a.tone] }" />{{ a.short }}</span>
       </button>
+      </details>
     </div>
 
     <button v-if="store.update?.status === 'ready'" type="button" class="upd ready" @click="gvs('installUpdate')">
       <Icon name="refresh" :size="16" /><span>新版本 {{ store.update.version }} 已就绪<br /><b>点此重启安装</b></span>
     </button>
-    <button v-else-if="store.update?.status === 'downloading'" type="button" class="upd" @click="go('settings')">
+    <button v-else-if="store.update?.status === 'downloading'" type="button" class="upd" @click="openSettings('about')">
       <Icon name="download" :size="16" /><span>正在下载新版本 {{ store.update.percent }}%</span>
     </button>
-    <button v-else-if="store.update?.status === 'available'" type="button" class="upd" @click="go('settings')">
+    <button v-else-if="store.update?.status === 'available'" type="button" class="upd" @click="openSettings('about')">
       <Icon name="download" :size="16" /><span>有新版本 {{ store.update.version }}</span>
     </button>
 
@@ -87,13 +95,13 @@ const tunnel = computed(() => {
 
 <style scoped>
 .side {
-  width: 232px; height: 100%; flex-shrink: 0; background: var(--side); color: var(--side-fg);
+  width: 208px; height: 100%; flex-shrink: 0; background: var(--side); color: var(--side-fg);
   padding: 22px 14px 18px; display: flex; flex-direction: column; gap: 24px; overflow-y: auto;
 }
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 6px; }
 .brand-t { display: flex; flex-direction: column; gap: 2px; }
 .name { font-family: var(--font-display); font-size: 22px; font-weight: 800; letter-spacing: .5px; line-height: 1; }
-.sub { font-size: 11px; color: var(--side-muted); }
+.sub { font-size: 9px; color: var(--side-muted); white-space: nowrap; }
 .nav { display: flex; flex-direction: column; gap: 4px; }
 .nav-i {
   height: 44px; padding: 0 14px; border-radius: 8px; border: 0; background: transparent; color: var(--side-fg);
@@ -107,6 +115,10 @@ const tunnel = computed(() => {
 }
 .nav-i.on .badge { background: var(--ink); color: var(--paper); }
 .plats { display: flex; flex-direction: column; gap: 2px; }
+.accounts-link { display: flex; align-items: center; gap: 8px; padding: 12px 10px; border: 0; border-radius: 8px; background: var(--side-2); color: var(--side-fg); cursor: pointer; font-size: 13px; }
+.account-count { margin-left: auto; font-size: 11px; color: var(--side-muted); }
+.account-details summary { padding: 12px 10px; color: var(--side-muted); cursor: pointer; font-size: 12px; }
+.account-details .plat { padding: 0 8px; font-size: 12px; }
 .plats-h { padding: 0 14px 6px; font-size: 12px; color: var(--side-muted); letter-spacing: 1px; }
 .plat {
   height: 34px; padding: 0 14px; display: flex; align-items: center; gap: 10px; font-size: 14px;

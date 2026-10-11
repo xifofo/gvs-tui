@@ -8,7 +8,7 @@ import Skeleton from '../components/Skeleton.vue'
 import { back, openQuality, store } from '../store'
 
 const d = computed(() => store.detail)
-const collection = ref('')
+const collection = computed({ get: () => store.detailCollection, set: value => { store.detailCollection = value } })
 const collections = computed(() => {
   const names = [...new Set((d.value?.episodes ?? []).map(e => e.collection).filter((g): g is string => !!g))]
   return names.includes('正片') ? ['正片', ...names.filter(g => g !== '正片')] : names
@@ -17,11 +17,12 @@ const eps = computed(() => (d.value?.episodes ?? []).filter(e => !collection.val
 const duplicateNumbers = computed(() => new Set(eps.value.map(e => e.number)).size < eps.value.length)
 const picked = computed(() => new Set(store.picked))
 const range = ref('')
+const rangeError = ref('')
 const anchor = ref(-1)
 watch(d, () => {
   range.value = ''
   anchor.value = -1
-  collection.value = d.value?.episodes.find(e => e.vid === d.value?.focusVid)?.collection ?? collections.value[0] ?? ''
+  if (!collections.value.includes(collection.value)) collection.value = d.value?.episodes.find(e => store.picked.includes(e.vid) || e.vid === d.value?.focusVid)?.collection ?? collections.value[0] ?? ''
 }, { immediate: true })
 
 function switchCollection(name: string) {
@@ -54,15 +55,21 @@ function toggle(i: number, e: MouseEvent) {
 }
 
 function applyRange() {
+  rangeError.value = ''
+  const input = range.value.trim().replace(/\s*([-~–])\s*/g, '$1')
+  if (!input) { rangeError.value = '输入集数范围，例如 1-12、15'; return }
   const nums = new Set<number>()
-  for (const part of range.value.split(/[,，\s]+/)) {
+  for (const part of input.split(/[,，\s]+/)) {
     const m = /^(\d+)(?:\s*[-~–]\s*(\d+))?$/.exec(part.trim())
-    if (!m) continue
+    if (!m) { rangeError.value = '范围格式不正确，例如 1-12、15'; return }
     const a = Number(m[1])
     const b = m[2] ? Number(m[2]) : a
+    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || a < 0 || b < 0 || Math.abs(b-a) > 5000) { rangeError.value = '集数范围过大或无效'; return }
     for (let n = Math.min(a, b); n <= Math.max(a, b) && n - Math.min(a, b) < 5000; n++) nums.add(n)
   }
-  setPicked(eps.value.filter((e) => nums.has(e.number)).map((e) => e.vid))
+  const ids = eps.value.filter((e) => nums.has(e.number)).map((e) => e.vid)
+  if (!ids.length) { rangeError.value = '当前栏目没有这些集数，已保留原选择'; return }
+  setPicked(ids)
 }
 
 const all = () => setPicked(eps.value.map((e) => e.vid))
@@ -127,7 +134,6 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
     <div v-else-if="store.detailError" class="error-box">{{ store.detailError }}</div>
     <template v-else-if="d">
       <div class="hero">
-        <span v-if="d.poster" class="hero-bg" :style="{ backgroundImage: `url(${d.poster})` }" aria-hidden="true" />
         <div class="wrap"><Poster class="poster" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" /></div>
         <div class="info">
           <div class="src dim"><PlatformLogo :provider="d.provider" :size="18" /><span>{{ PROVIDER_NAME[d.provider] }}</span><span v-if="d.category">· {{ d.category }}</span></div>
@@ -150,7 +156,8 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
           <div v-if="!isMovie && eps.length > 1" class="tools">
             <form class="range" @submit.prevent="applyRange">
               <label for="range" class="small dim">范围</label>
-              <input id="range" v-model="range" class="mono" placeholder="1-12" @blur="range && applyRange()" />
+              <input id="range" v-model="range" class="mono" placeholder="1-12" :aria-invalid="!!rangeError" @input="rangeError = ''" />
+              <button type="submit" class="btn sm">应用范围</button>
             </form>
             <button type="button" class="btn sm" @click="all">全选</button>
             <button type="button" class="btn sm" @click="invert">反选</button>
@@ -158,6 +165,7 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
           </div>
         </div>
 
+        <p v-if="rangeError" class="error-box" role="alert">{{ rangeError }}</p>
         <div v-if="collections.length > 1" class="collection-tabs" role="tablist" aria-label="节目栏目">
           <button v-for="name in collections" :key="name" type="button" role="tab"
             class="btn sm" :class="{ primary: collection === name }" :aria-selected="collection === name"
@@ -213,19 +221,12 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
 <style scoped>
 .back { margin-bottom: -8px; }
 .hero { display: flex; gap: 28px; position: relative; }
-.hero-bg {
-  position: absolute; inset: -20px -32px auto; height: 300px; z-index: 0; pointer-events: none;
-  background-size: cover; background-position: center 20%; filter: blur(48px) saturate(1.3); opacity: .35;
-  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .5) 55%, transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, .5) 55%, transparent 100%);
-}
-.hero > *:not(.hero-bg) { position: relative; z-index: 1; }
 .wrap { flex-shrink: 0; }
-.poster { width: 172px; height: 244px; box-shadow: 6px 6px 0 var(--ink); }
-.poster-sk { box-shadow: 6px 6px 0 var(--ink); }
+.poster { width: 142px; height: 202px; }
+.poster-sk { width: 142px; height: 202px; }
 .info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding-top: 4px; }
 .src { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-.title { font-family: var(--font-display); font-size: 44px; font-weight: 800; letter-spacing: -.5px; line-height: 1.05; }
+.title { font-family: var(--font-display); font-size: 32px; font-weight: 700; letter-spacing: -.5px; line-height: 1.2; }
 .meta { font-size: 15px; }
 .desc { font-size: 14px; line-height: 1.7; color: var(--ink-2); max-width: 720px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .desc.open { -webkit-line-clamp: unset; }
@@ -234,7 +235,7 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
 .eps-h { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .h2s { font-size: 17px; font-weight: 700; }
 .small { font-size: 13px; }
-.tools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.tools { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .range { height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; display: flex; align-items: center; gap: 8px; }
 .range:focus-within { border-color: var(--ink); }
 .range input { width: 80px; border: 0; outline: 0; font-size: 14px; background: transparent; }
@@ -249,16 +250,16 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 8px; padding: 2px; }
 .ep { min-height: 64px; padding: 8px 12px; display: flex; gap: 12px; align-items: center; text-align: left; border-radius: 6px; border: 1.5px solid var(--line); background: var(--card); cursor: pointer; min-width: 0; }
 .ep:hover { border-color: var(--ink); }
-.ep.on { background: var(--orange); border-color: var(--ink); font-weight: 700; }
+.ep.on { background: var(--orange-soft); border-color: var(--orange-text); font-weight: 600; }
 .editions { display: flex; flex-direction: column; gap: 8px; }
 .edition { height: 50px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); display: flex; align-items: center; gap: 12px; cursor: pointer; font-size: 15px; text-align: left; }
 .edition.on { border-color: var(--ink); }
 .box { width: 20px; height: 20px; border-radius: 5px; border: 2px solid var(--ink); display: flex; align-items: center; justify-content: center; }
 .edition.on .box { background: var(--orange); }
 .et { font-weight: 500; flex-grow: 1; }
-/* sticky 以滚动容器的内容盒为界：抵掉 .page 的 40px 底内边距，才能贴住窗口底边 */
+/* Align the sticky action row with the page's bottom padding. */
 .foot {
-  position: sticky; bottom: -40px; margin: 0 -20px -18px; padding: 14px 20px 18px; background: var(--card);
+  position: sticky; bottom: -32px; margin: 0 -20px -18px; padding: 14px 20px 18px; background: var(--card);
   border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; display: flex; align-items: center; gap: 16px;
 }
 .foot .n { font-size: 18px; }

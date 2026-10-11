@@ -33,7 +33,8 @@ const HELP: Group[] = [
     id: 'discover',
     title: '发现页',
     rows: [
-      ['1-7', '切平台：1 优酷  2 腾讯  3 红果  4 黄果  5 抖音  6 mewatch  7 Hami'],
+      ['1–3', '1 优酷 · 2 腾讯 · 3 红果'],
+      ['4–6', '4 黄果 · 5 抖音 · 6 爱奇艺国内版'],
       ['← →', '换栏目；只有一个栏目时切推荐/榜单'],
       ['tab', '推荐 / 榜单'],
       ['⏎', '打开选中的节目'],
@@ -42,10 +43,10 @@ const HELP: Group[] = [
   },
   {
     id: 'download',
-    title: '下载：选集 › 画质 › 匹配 › 确认（确认页回车才入队）',
+    title: '下载：选集 › 画质 › 匹配 › 确认',
     rows: [
       ['空格', '勾选当前集；⇧方向 从当前集连选'],
-      ['a  c', '全选 · 清空'],
+      ['a  c  i', '全选 · 清空 · 展开简介'],
       ['← →', '画质页切到音轨，空格勾选要封装的音轨'],
       ['⏎  s  r', '匹配页：采用 · 跳过 · 重试'],
     ],
@@ -57,7 +58,7 @@ const HELP: Group[] = [
       ['F1-F4', '帮助 · 搜索 · 任务 · 设置'],
       ['esc', '返回上一步（不会入队）'],
       ['^C', '退出'],
-      ['^1-7', 'Windows Terminal 会吃掉 Alt+数字，用 Ctrl+数字切平台'],
+      ['^1–6', 'Ctrl+数字切平台；搜索 Tab 切全部平台'],
     ],
   },
 ]
@@ -79,7 +80,7 @@ function groupLines(group: Group, width: number): StyledText[] {
   return [ruleLine(group.title, width), ...group.rows.map(([keys, desc]) => keyLine(keys, desc, width))]
 }
 
-/** Single column: 18 lines, exactly the total the shell's cursor walks. */
+/** Compact rows keep every shortcut readable even in a 60-column terminal. */
 const lines = computed<StyledText[]>(() => {
   const out: StyledText[] = []
   HELP.forEach((group, index) => {

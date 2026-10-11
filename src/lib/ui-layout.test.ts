@@ -1,9 +1,23 @@
 import { expect, test } from 'bun:test'
 import { demoSnapshot } from './demo'
 import { displayWidth } from './text'
-import { confirmationLines, episodeRanges, fitHints, qualityColumns, selectedAudioText, viewMetrics } from './ui-layout'
+import { confirmationLines, detailListRows, episodeRanges, fitHints, qualityColumns, selectedAudioText, viewMetrics } from './ui-layout'
 import { patchJob } from './jobs'
 import { qualitiesFromTencentFormats, qualityCaptionText } from './quality'
+
+test('detail page budgets include the actual synopsis, groups and movie list spacing', () => {
+  const state = demoSnapshot('detail')
+  state.detail = { ...state.detail! }
+  expect(detailListRows(14, state)).toBe(8)
+  state.episodeGroups = ['正片', '预告']
+  expect(detailListRows(14, state)).toBe(7)
+  expect(detailListRows(20, state)).toBe(13)
+  state.detail!.kind = 'movie'
+  expect(detailListRows(14, state)).toBe(8)
+  state.detail!.desc = '   '
+  expect(detailListRows(14, state)).toBe(9)
+  expect(detailListRows(3, state)).toBe(1)
+})
 
 test('responsive quality columns reserve readable labels and stay within the pane', () => {
   const rows = demoSnapshot('quality-tencent').qualities!
