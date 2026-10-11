@@ -263,3 +263,9 @@ export function writeConcatList(paths: string[], listPath: string): void {
   }).join('\n')
   writeFileSync(listPath, `${body}\n`)
 }
+
+export async function ffmpegConcat(ffmpeg: string, paths: string[], output: string, signal?: AbortSignal): Promise<void> {
+  const list = output + '.concat.txt'
+  writeConcatList(paths,list)
+  await run(ffmpeg,['-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',list,'-map','0','-c','copy',output],{out:output,inputs:paths},signal)
+}

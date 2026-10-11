@@ -62,6 +62,29 @@ onBeforeUnmount(() => { revision++ })
 </script>
 
 <template>
+  <div v-if="allowed('migu')" class="provider-account">
+    <h3>咪咕视频</h3>
+    <p>使用咪咕视频 App 扫码一次，自动检查 TV 权益，合并显示 TV 4K 和 App HDR Vivid 画质。</p>
+    <div class="controls">
+      <button class="btn sm" :disabled="busy" @click="store.qr='migu'">咪咕扫码登录</button>
+      <button class="btn sm" :disabled="busy" @click="command({provider:'migu',op:'status'})">咪咕账号状态</button>
+      <button class="btn sm" :disabled="busy" @click="command({provider:'migu',op:'logout'})">咪咕退出登录</button>
+    </div>
+    <p v-if="views.migu" aria-live="polite">{{ views.migu.summary }}</p>
+  </div>
+  <div v-if="allowed('mgtv')" class="provider-account">
+    <h3>芒果 TV · App 扫码登录</h3>
+    <p>使用芒果 TV App 扫码，网关按当前 Key 保存账号会话。</p>
+    <div class="controls"><button class="btn sm" :disabled="busy" @click="store.qr = 'mgtv'">芒果扫码登录</button><button class="btn sm" :disabled="busy" @click="command({provider:'mgtv',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'mgtv',op:'logout'})">退出</button></div>
+    <p v-if="views.mgtv" aria-live="polite">{{ views.mgtv.summary }}</p>
+  </div>
+  <div v-if="allowed('bilibili')" class="provider-account">
+    <h3>哔哩哔哩 · Web Cookie</h3>
+    <p>匿名可用。高画质可导入本人 Web Cookie Header；只在网关内存保存，重启需重新导入。</p>
+    <textarea v-model="cookie" class="input" autocomplete="off" spellcheck="false" aria-label="本人 B 站 Web Cookie" placeholder="SESSDATA=…; bili_jct=…" />
+    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'bilibili',op:'import',cookie})">验证并导入 B 站 Cookie</button><button class="btn sm" :disabled="busy" @click="command({provider:'bilibili',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'bilibili',op:'logout'})">退出</button></div>
+    <p v-if="views.bilibili" aria-live="polite">{{ views.bilibili.summary }}</p>
+  </div>
   <div v-if="allowed('iqcn')" class="provider-account">
     <h3>爱奇艺国内版 · 扫码登录</h3>
     <p>用爱奇艺 App 扫码确认，账号会话由网关按当前 Key 保存。</p>

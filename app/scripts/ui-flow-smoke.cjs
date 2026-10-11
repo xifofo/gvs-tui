@@ -29,7 +29,7 @@ async function flow(viewport) {
   fs.writeFileSync(path.join(dir, 'progress.log'), '')
   const win = currentWindow = new BrowserWindow({
     ...viewport, useContentSize: true, frame: false, show: false,
-    webPreferences: { preload: path.join(__dirname, 'ui-flow-smoke-preload.cjs'), partition: `ui-flow-${tag}`, contextIsolation: true, nodeIntegration: false, sandbox: true, offscreen: true },
+    webPreferences: { preload: path.join(__dirname, 'ui-flow-smoke-preload.cjs'), partition: `ui-flow-${tag}`, contextIsolation: true, nodeIntegration: false, sandbox: true, offscreen: true, backgroundThrottling: false },
   })
   win.webContents.session.webRequest.onBeforeRequest((details, callback) => {
     const cancel = /^(https?|wss?):/i.test(details.url)
@@ -67,9 +67,12 @@ async function flow(viewport) {
   }
   async function capture(name) {
     progress('capture ' + name)
-    await run('document.fonts.ready.then(() => true)')
+    await run('Promise.race([document.fonts.ready.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 3000))])')
+    progress('fonts settled ' + name)
     await sleep(100)
-    fs.writeFileSync(path.join(dir, name + '.png'), (await win.webContents.capturePage()).toPNG())
+    win.webContents.invalidate()
+    const screen = await Promise.race([win.webContents.capturePage({stayHidden:true}),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Screenshot timed out: '+name)),15000))])
+    fs.writeFileSync(path.join(dir, name + '.png'), screen.toPNG())
     await assert(`${name}: no horizontal page overflow`, js(() => {
       const overflow = [document.documentElement, document.body, ...document.querySelectorAll('main, .page, .downloads')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => ({ element: e.tagName + '.' + e.className, clientWidth: e.clientWidth, scrollWidth: e.scrollWidth }))
       return { passed: overflow.length === 0, overflow }
@@ -276,6 +279,41 @@ async function flow(viewport) {
     }
     await capture(`09-settings-${i + 1}`)
   }
+  // New provider entry points use the same renderer flow; media execution is
+  // verified separately against generated loopback fixtures.
+  for (const [provider, label] of [['mgtv','芒果 TV'],['bilibili','哔哩哔哩'],['migu','咪咕视频']]) {
+    await textButton('发现','nav[aria-label="主导航"]')
+    await click(`button.pill[aria-label="${label}"]`)
+    await waitFor(js(p=>window.__uiFlowFixture.snapshot().calls.some(c=>c.method==='browse' && c.args[0]===p),provider),'new provider browse')
+    await run(js(()=>document.querySelector('main .item, main .rl').click()))
+    await waitFor(js(()=>!!document.querySelector('button[aria-label^="第 1 集"]')),'provider episodes')
+    await click('button[aria-label^="第 2 集"]')
+    await textButton('下一步：选画质',undefined,true)
+    await waitFor('!!document.querySelector("input[name=quality]")','provider quality')
+    await assert(label+' has its own probe identity',js(p=>window.__uiFlowFixture.snapshot().calls.filter(c=>c.method==='probe').at(-1)?.args[0]===p,provider))
+    await capture('10-'+provider+'-quality')
+    await textButton('开始下载',undefined,true)
+    await waitFor(js(p=>window.__uiFlowFixture.snapshot().calls.filter(c=>c.method==='enqueue').at(-1)?.args[0].detail.provider===p,provider),'provider enqueue')
+    await assert(label+' preserves selected episode',js(p=>{const r=window.__uiFlowFixture.snapshot().calls.filter(c=>c.method==='enqueue').at(-1)?.args[0];return r?.detail.provider===p && r.episodes.length===1 && r.episodes[0].number===2},provider))
+  }
+  await textButton('设置','nav[aria-label="主导航"]')
+  await textButton('平台账号','nav[aria-label="设置分类"]')
+  await textButton('芒果扫码登录')
+  await waitFor('!!document.querySelector("[role=dialog] img")','mango QR')
+  await assert('MGTV uses official app QR dialog', 'document.querySelector("[role=dialog]")?.getAttribute("aria-label") === "扫码登录芒果 TV"')
+  await capture('11-mgtv-login')
+  await click('button[aria-label="关闭"]')
+  for (const [button,title,terminal] of [['咪咕扫码登录','扫码登录咪咕视频','unified']]) {
+    await textButton(button)
+    await waitFor('!!document.querySelector("[role=dialog] img")','Migu QR')
+    await assert('Migu has one QR entry',js(title=>document.querySelector('[role=dialog]')?.getAttribute('aria-label')===title && window.__uiFlowFixture.snapshot().calls.filter(c=>c.method==='providerSession').at(-1)?.args[0].provider==='migu' && !document.body.innerText.includes('咪视界 TV 扫码'),title))
+    await capture('11-migu-'+terminal+'-login')
+    await click('button[aria-label="关闭"]')
+  }
+  await run(js(()=>{const e=document.querySelector('textarea[aria-label="本人 B 站 Web Cookie"]');e.value='SESSDATA=OFFLINE_ONLY';e.dispatchEvent(new Event('input',{bubbles:true}))}))
+  await textButton('验证并导入 B 站 Cookie')
+  await waitFor('document.body.innerText.includes("B 站 Web 会话已验证")','Bili import status')
+  await assert('Bilibili import clears transient Cookie without saving preferences',js(()=>document.querySelector('textarea[aria-label="本人 B 站 Web Cookie"]').value === '' && !JSON.stringify(window.__uiFlowFixture.snapshot().settings).includes('OFFLINE_ONLY')))
   const fixture = await run('window.__uiFlowFixture.snapshot()')
   fs.writeFileSync(path.join(dir, 'ipc-calls.json'), JSON.stringify(fixture.calls, null, 2))
   win.destroy()

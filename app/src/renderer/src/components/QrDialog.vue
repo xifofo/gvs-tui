@@ -7,7 +7,7 @@ import PlatformLogo from './PlatformLogo.vue'
 import { useDialogFocus } from '../dialog-focus'
 
 const kind = store.qr!
-const title = kind === 'iqcn' ? '扫码登录爱奇艺国内版' : kind === 'youku' ? '扫码登录优酷' : '扫码登录腾讯视频'
+const title = kind === 'migu' ? '扫码登录咪咕视频' : kind === 'mgtv' ? '扫码登录芒果 TV' : kind === 'iqcn' ? '扫码登录爱奇艺国内版' : kind === 'youku' ? '扫码登录优酷' : '扫码登录腾讯视频'
 const start = ref<QRStart | null>(null)
 const status = ref<QRPoll>({ done: false, message: '正在获取二维码…', tone: 'muted' })
 const error = ref('')
@@ -25,11 +25,16 @@ async function load() {
   start.value = null
   status.value = { done: false, message: '正在获取二维码…', tone: 'muted' }
   try {
-    const response = kind === 'iqcn' ? await gvs('iqcnQrStart') : kind === 'youku' ? await gvs('youkuQrStart') : await gvs('tencentQrStart')
+    let response: QRStart
+    if (kind === 'mgtv' || kind === 'migu') {
+      const view = await gvs('providerSession',{provider:kind,op:'start'})
+      if (!view.qrDataUrl) throw new Error('网关没有返回二维码图片')
+      response = {images:[{title:kind==='migu' ? '咪咕视频 App 扫码' : '芒果 TV App 扫码',image:view.qrDataUrl}],hint:view.summary}
+    } else response = kind === 'iqcn' ? await gvs('iqcnQrStart') : kind === 'youku' ? await gvs('youkuQrStart') : await gvs('tencentQrStart')
     if (!active || current !== generation) return
     start.value = response
     status.value = { done: false, message: '等待扫码…', tone: 'muted' }
-    timer = setInterval(poll, kind === 'iqcn' ? 2000 : kind === 'youku' ? 1500 : 3500)
+    timer = setInterval(poll, kind === 'mgtv' || kind === 'migu' ? 3000 : kind === 'iqcn' ? 2000 : kind === 'youku' ? 1500 : 3500)
   } catch (e) {
     if (active && current === generation) error.value = errText(e)
   }
@@ -40,7 +45,11 @@ async function poll() {
   const current = generation
   busy = true
   try {
-    const r = kind === 'iqcn' ? await gvs('iqcnQrPoll') : kind === 'youku' ? await gvs('youkuQrPoll') : await gvs('tencentQrPoll')
+    let r: QRPoll
+    if (kind === 'mgtv' || kind === 'migu') {
+      const view = await gvs('providerSession',{provider:kind,op:'poll'})
+      r = {done:view.authenticated,message:view.summary,tone:view.authenticated ? 'ok' : ['expired','denied'].includes(view.state) ? 'warn' : 'muted'}
+    } else r = kind === 'iqcn' ? await gvs('iqcnQrPoll') : kind === 'youku' ? await gvs('youkuQrPoll') : await gvs('tencentQrPoll')
     if (!active || current !== generation) return
     status.value = r
     if (r.done) {

@@ -27,6 +27,9 @@ export type Naming = {
 
 export function sourceTag(provider: string): string {
   switch (provider) {
+    case 'mgtv': return 'MGTV'
+    case 'bilibili': return 'BILI'
+    case 'migu': return 'MIGU'
     case 'youku': return 'YK'
     case 'tencent': return 'TX'
     case 'iq': return 'IQ'

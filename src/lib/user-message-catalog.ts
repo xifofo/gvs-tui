@@ -1,6 +1,51 @@
 // Generated from gateway/internal/usermsg/catalog.json; run scripts/sync-user-messages.mjs.
 export const errorCatalog = [
   {
+    "pattern": "migu (?:mobile|TV) login required|mgtv.*login required|bilibili.*(?:login required|cookie required|Cookie header required|Cookie is not logged in|upstream code -101)",
+    "code": "VIDEO_LOGIN_REQUIRED",
+    "message": "请在平台账号设置中登录后重试；咪咕扫码一次后自动检查TV能力，B站请导入本人网页登录信息。"
+  },
+  {
+    "pattern": "migu (?:mobile|TV) session (?:no longer accepted|rejected)|bilibili.*(?:invalid cookie|session expired|cookie.*expired)|mgtv.*(?:session expired|login expired)",
+    "code": "VIDEO_SESSION_EXPIRED",
+    "message": "该平台登录状态已失效，请在账号设置中重新登录；B站需重新导入本人网页登录信息。"
+  },
+  {
+    "pattern": "migu .*?(?:protocol file|playKeyFile|VideoX material|signing configuration|signing file)|migu invalid (?:mobile|TV) (?:protocol|RSA)|mgtv.*not configured",
+    "code": "VIDEO_PROTOCOL_NOT_READY",
+    "message": "该平台的服务配置尚未完成，请联系管理员处理；无需重复扫码或购买套餐。"
+  },
+  {
+    "pattern": "migu .*?(?:quality unavailable|downgraded requested quality)|bilibili.*(?:quality unavailable|codec unavailable)|mgtv.*(?:quality unavailable|requested quality|quality outside selectable catalogue|did not honor forceAVC)|咪咕所选画质已不可用",
+    "code": "VIDEO_QUALITY_UNAVAILABLE",
+    "message": "所选画质暂不可下载，请刷新画质列表并选择可用档位；本次失败不扣取流次数。"
+  },
+  {
+    "pattern": "migu .*?(?:ClothHat|protected|dynamic response encryption)|encrypted ClothHat|该媒体受保护",
+    "code": "VIDEO_PROTECTED_STREAM",
+    "message": "该视频版本暂不支持下载，请选择其他可用画质；重复尝试不会解除限制。"
+  },
+  {
+    "pattern": "migu .*?(?:loginId does not belong|authorization source mismatch|QR.*expired)|mgtv.*unknown login session|咪咕二维码已过期",
+    "code": "VIDEO_QR_INVALID",
+    "message": "二维码已过期或不属于当前账号连接，请使用同一访问密钥重新获取二维码，再用对应视频App扫码。"
+  },
+  {
+    "pattern": "bilibili.*no supported playable streams",
+    "code": "VIDEO_STREAM_UNAVAILABLE",
+    "message": "本次没有可下载的视频版本，请在官方客户端确认内容可播放，再刷新画质列表；仍不可用时请联系客服。"
+  },
+  {
+    "pattern": "bilibili.*upstream code -412",
+    "code": "VIDEO_RISK_LIMITED",
+    "message": "B站暂时限制了当前网络的请求，请暂停重试，在官方客户端确认访问正常后再试。"
+  },
+  {
+    "pattern": "migu .*?(?:different episode|missing mobile detail)|咪咕分集列表不完整|取流返回了不同分集",
+    "code": "VIDEO_EPISODE_MISMATCH",
+    "message": "分集信息不完整或与所选内容不一致，请重新打开作品并选择分集；不要混用手机和TV的内容编号。"
+  },
+  {
     "pattern": "请填写 HTTP/HTTPS 代理地址|代理地址格式",
     "code": "PROXY_INVALID",
     "message": "代理地址格式不正确，请填写 HTTP/HTTPS 代理地址后重试；不使用代理时可留空。"

@@ -19,7 +19,11 @@ bun run start
 
 `start` 自动编译当前源码后启动，直接使用仓库的 `bin/`，避免拉到新代码却仍运行旧 dist。第一次填自己的网关 Base URL、API Key 并登录平台。配置在用户目录 `gvs/tui.json`，不会提交到 Git。源站 Cookie / yk_sign 由网关加密托管，本文件只保存网关地址、key 与下载偏好。更新时执行：
 
-平台按 Key 权限显示：优酷 `1`、腾讯 `2`、红果 `3`、黄果 `4`、抖音 `5`（黄果是聚合源：AI 站 / 视频站 / 旧 API）。
+平台按 Key 权限显示：优酷 `1`、腾讯 `2`、红果 `3`、黄果 `4`、抖音 `5`、爱奇艺国内版 `6`、芒果 TV `7`、哔哩哔哩 `8`；搜索页 Tab 可切换所有有权限的平台（含其它平台）。
+
+芒果 TV 支持官方榜单、搜索、链接、完整分集分页、App 扫码登录和 HLS 本机下载；扫码入口在平台设置中。画质目录名称保留源站标签，实际动态范围与编码以下载后探测为准。B 站支持热门、搜索、BV/AV 多 P、ss/ep 番剧和 b23.tv；可独立选择视频编码与音轨，本机合并 MKV。匿名可用，设置里可验证导入本人 Web Cookie Header；Cookie 由网关按 Key 隔离保存在内存，不写客户端配置，网关重启需重新导入。
+
+两平台均需对应 API Key 权限，API 请求通过本机隧道，媒体直连 CDN。下载会重新取链并核对分集、画质和音轨，拒绝试看、未返回的所选规格及不支持的 DRM；已入队选择在暂停/重试时保留。成品按本机实际规格命名，芒果标记 `MGTV`、B 站标记 `BILI`。
 
 IQ 海外版使用 `iq` 权限，可粘贴 `iq.com/album/...` 或 `iq.com/play/...` 进入作品与分集。
 提供 Web 榜单、搜索、详情和分集。设置中可输入本人账号密码，自动获取 Web Cookie 并换取 TV 会话；
@@ -247,3 +251,11 @@ bun run scripts/repair-youku-audio.ts 'input.mkv' --delay-ms 2000
 本次 E13 开头 4K 样本已由用户在另一台电脑确认同步正常，本机问题来自播放端；成品未加音频延迟。时间戳校验不等同于口型验收，详见 [播放验证记录](docs/YOUKU-PLAYBACK-TEST.md)。
 
 网络对照工具：`bun run scripts/check-youku-transport.ts [VID] [STREAM_TYPE]`。它冻结同一份带签名的播放列表，对比 JS fetch、本机转发、RE 直连、RE 默认代理和不同请求头，每次 RE 测试前复查同一 URL，防止把链接失效误判成客户端差异。仅抓取一个媒体分片；临时目录含短期签名链接，请勿公开其中原始日志。
+
+## 咪咕视频
+
+Ctrl+9 切换咪咕，支持搜索、榜单、手机分享链接、完整分集、画质选择与本机 HLS 下载。“咪咕扫码”只需用咪咕视频 App 扫一次，自动验证 TV 能力。同一集通过源站 assetId 匹配，画质列表合并 TV 4K 与 App 2K HDR Vivid，默认按实际分辨率选最高，也能手动选 HDR Vivid。TV 直达 `tv:单集ID` 保留兼容。
+
+网关需要支持 unified 的 migu Provider 并配置手机/TV 协议材料；会话按 API Key 保存，客户端不持久化 token。统一入口用同一个手机单集 ID 和 mobile:5/tv:8 等来源画质标识取流，切换来源仍共用同集6小时扣次窗口。4K Vivid未验证；受保护、试看及降档流不可下载。API走本机隧道，媒体直连CDN。
+
+相关回归：`bun test src/lib/migu.test.ts src/migu-runtime.test.ts`；本机媒体下载：`bun test scripts/web-video-download.test.ts`。

@@ -1,4 +1,5 @@
 import { probeManifest } from './manifest-provider.ts'
+import { probeWebVideo } from './web-video-providers'
 import { iqOptions } from './iq.ts'
 import type { Audio, Episode, Quality, VipProbe, TencentPlayParams } from '../types.ts'
 import { parseEpisodes } from './episodes.ts'
@@ -321,6 +322,7 @@ export async function probeOptions(
   opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: TencentPlayParams } = {},
 ): Promise<StreamOptions> {
   switch (provider) {
+    case 'mgtv': case 'bilibili': case 'migu': return probeWebVideo((p,a,input) => cli.invoke(p,a,input),provider,vid)
     case 'iqcn': return iqcnOptions(await cli.invoke('iqcn', 'probe', { tvid: vid }, {}, { timeoutMs: 150000 }), vid)
     case 'iq': return iqOptions(await cli.invoke('iq','probe',{vid},cli.extra(cfg,'iq'),{timeoutMs:150000}))
     case 'mewatch': case 'hamivideo': return probeManifest(cli, cfg, provider, vid)
@@ -473,6 +475,7 @@ export function qualityCaptionText(caption?: string, captionProbe?: string): str
 /** 画质表「HDR」列：HDR / HDR10 / SDR。 */
 export function qualityHdrText(hdr?: string): string {
   switch ((hdr || '').toLowerCase()) {
+    case 'dolbyvision': case 'dolby vision': case 'dv': return '杜比视界'
     case 'hdr10':
       return 'HDR10'
     case 'hdr':

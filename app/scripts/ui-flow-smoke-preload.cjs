@@ -4,7 +4,7 @@ const handlers = new Map()
 const calls = []
 const clone = value => JSON.parse(JSON.stringify(value))
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
-const providers = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'mewatch', 'hamivideo', 'iq', 'iqcn']
+const providers = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'mewatch', 'hamivideo', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu']
 const title = '山海回声'
 function poster(index) {
   const colors = ['#45675c', '#537284', '#88705b', '#715c70']
@@ -116,7 +116,11 @@ contextBridge.exposeInMainWorld('gvs', {
       }
       case 'cacheInfo': return { posters: 12 * 1024 * 1024, temp: 0 }
       case 'saveSettings': await delay(250); Object.assign(settings, args[0]); emit('state', state); call.completed = true; return clone(state)
-      case 'providerSession': return { provider: args[0].provider, state: 'ready', authenticated: false, summary: '离线界面模拟' }
+      case 'providerSession':
+        if (args[0].provider === 'migu') return {provider:'migu',state:'pending',authenticated:false,summary:'使用咪咕视频 App 扫码并确认',qrDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',url:'https://passport.migu.cn/qrc/offline',interval:3}
+        if (args[0].provider === 'mgtv' && args[0].op === 'start') return {provider:'mgtv',state:'pending',authenticated:false,summary:'使用芒果 TV App 扫码并确认',qrDataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',url:'https://oauth.mgtv.com/2.0/multicode_login?uid=mock',interval:3}
+        if (args[0].provider === 'bilibili') return {provider:'bilibili',state:'authenticated',authenticated:true,summary:'B 站 Web 会话已验证；网关重启需重新导入'}
+        return { provider: args[0].provider, state: 'ready', authenticated: false, summary: '离线界面模拟' }
       case 'tencentDiagnostics': return []
       case 'checkUpdate': return { ...update, status: 'error', message: 'GitHub 更新检查达到请求限额（403）。请在 60 分钟后重试，或打开官方发布页。', url: 'https://github.com/my-name-is-alan/gvs-tui/releases' }
       case 'installUpdate': return

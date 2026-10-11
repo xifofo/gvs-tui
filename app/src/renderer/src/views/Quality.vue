@@ -282,6 +282,7 @@ const CODEC_NAME: Record<string, string> = { bytevc1: 'H.265', bytevc2: 'H.266',
 /** 码流名给人看：红果的 id 是「1080p|bytevc1|」这种拼接串，去掉空段和标题里已有的部分，编码换成通用名 */
 function streamCode(q: { stream: string; label: string }): string {
   if (d.value?.provider === 'iqcn') return ''
+  if (d.value?.provider === 'bilibili') return CODEC_NAME[q.stream.split('|')[1]?.toLowerCase() || ''] || ''
   const label = q.label.toLowerCase()
   const parts = q.stream.split('|').map((t) => t.trim()).filter((t) => t && !label.includes(t.toLowerCase()))
   return [...new Set(parts.map((t) => CODEC_NAME[t.toLowerCase()] ?? t))].join(' · ')

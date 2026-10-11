@@ -1,4 +1,5 @@
 import { resolveManifest, requireClearDownload } from './manifest-provider.ts'
+import { downloadWebVideo } from './web-video-download'
 import { userMessage } from './user-message.ts'
 import { youkuMediaError } from './media-output.ts'
 import { decryptYoukuTs } from './youku-ts.ts'
@@ -370,6 +371,9 @@ export async function runTask(
     if (n.container === 'mkv' && !mkvmerge) throw new Error('没有 mkvmerge')
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
+      case 'mgtv': case 'bilibili': case 'migu':
+        await writeFinal(out,dest => downloadWebVideo(cli,cfg,t,dest,work,emit,signal))
+        break
       case 'iqcn':
         note = await downloadIQCN(cli, t, out, work, emit, signal, iqcnRuntime, cfg.threads, { reservedOutput: ownsOutput })
         break
@@ -427,7 +431,7 @@ export async function runTask(
         log('版本档案未能保存')
       }
     }
-    if (['youku', 'iq', 'iqcn'].includes(t.provider)) {
+    if (['youku', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(t.provider)) {
       try {
         completedMedia = await finishedMediaRecord(out, signal, finishedMedia)
       } catch {

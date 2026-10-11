@@ -14,7 +14,7 @@ export type NamingEvidence = {
 }
 
 export function usesMeasuredNaming(task: { provider: string; namingVersion?: number }): boolean {
-  return task.namingVersion === 1 && ['youku', 'tencent', 'iq', 'iqcn'].includes(task.provider)
+  return task.namingVersion === 1 && ['youku', 'tencent', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(task.provider)
 }
 
 export function youkuNamingEvidence(data: Record<string, unknown>, downloadedURL: string): NamingEvidence {

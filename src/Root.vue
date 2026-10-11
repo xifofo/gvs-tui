@@ -147,7 +147,7 @@ onKeyDown((event) => {
   // - Alt/⌥+1..7: Mac Option sets event.option; many terminals send ESC+digit as event.meta
   // - Ctrl+1..7: Windows Terminal often steals Alt+digit for tab switching
   // - Never ⌘/super+digit (iTerm/VS Code/Finder window switching)
-  const digit = ['1', '2', '3', '4', '5', '6', '7'].includes(name)
+  const digit = ['1', '2', '3', '4', '5', '6', '7', '8'].includes(name)
   const altLike = !!(event.option || event.meta) && !event.super
   const platformShortcut = digit && (altLike || event.ctrl)
   if (platformShortcut || /^f[1-4]$/.test(name)) {

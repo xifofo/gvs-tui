@@ -8,7 +8,7 @@ import { clip, displayWidth } from '../lib/text.ts'
 import { fg, type StyledText, type TextChunk } from 'vue-termui'
 
 /** Fixed order of the platform tabs; the digit prefix is part of the label. */
-export const PLATFORM_ORDER = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'iqcn'] as const
+export const PLATFORM_ORDER = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'iqcn', 'mgtv', 'bilibili', 'migu'] as const
 
 /** Keep the current tab visible; overflow arrows describe the hidden neighbours. */
 export function tabStrip(labels: string[], active: number, width: number, enabled?: boolean[]): TextChunk[] {

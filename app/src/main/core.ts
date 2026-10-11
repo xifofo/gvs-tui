@@ -4,6 +4,7 @@ import { ProviderSessions, type SessionCommand, type ProviderSessionView } from 
 import { supportsSearch, supportsBrowse, isManifestProvider } from '@tui/providers.ts'
 import { manifestDetail } from '@tui/manifest-detail.ts'
 import { providerLink } from '@tui/manifest-provider.ts'
+import { isWebVideoProvider, webVideoLink, webVideoDetail } from '@tui/web-video-providers'
 import { readTencentDiagnostics, tencentDiagnosticJobID } from '@tui/tencent-diagnostics.ts'
 import { needsTunnel } from '@tui/tunnel-policy.ts'
 import { parseEpisodes as parseEps } from '@tui/episodes.ts'
@@ -558,6 +559,7 @@ export class Core {
     this.checkIQOnConnect()
     if (this.has('iqcn')) void this.providerSession({ provider: 'iqcn', op: 'status' }).catch(() => {})
     if (this.has('hamivideo')) void this.providerSession({ provider: 'hamivideo', op: 'status' }).catch(() => {})
+    for (const p of ['mgtv','bilibili','migu'] as const) if (this.has(p)) void this.providerSession({provider:p,op:'status'}).catch(()=>{})
   }
 
   private async probeDouyin(): Promise<void> {
@@ -684,6 +686,10 @@ export class Core {
 
   private accounts(): AccountView[] {
     return this.providers().map((p): AccountView => {
+      if (p === 'mgtv' || p === 'bilibili' || p === 'migu') {
+        const account = this.providerAccounts.get(p)
+        return {provider:p,short:account?.authenticated ? '已登录' : p === 'bilibili' ? '匿名' : '待登录',summary:account?.summary || (p === 'bilibili' ? '匿名可用，可导入 Web Cookie' : p === 'migu' ? '到账号设置使用咪咕视频 App 扫码' : '到账号设置使用芒果 TV App 扫码'),tone:account?.authenticated ? 'ok' : 'muted'}
+      }
       if (p === 'youku') {
         if (!this.cfg.youkuSign && !this.ykLogin?.ok && !this.ykAcct)
           return { provider: p, short: '未登录', summary: '未登录 · 扫码后可下载会员片源', tone: 'warn' }
@@ -994,7 +1000,7 @@ export class Core {
     if (command.provider === 'iq') {
       this.iqStatusCheck = 'checked'
     }
-    this.providerAccounts.set(command.provider + (command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
+    this.providerAccounts.set(command.provider + (command.provider === 'migu' && command.terminal === 'tv' ? ':tv' : command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
     this.emit.state()
     return view
   }
@@ -1045,6 +1051,8 @@ export class Core {
   }
 
   parseLink(text: string): LinkTarget {
+    const web = webVideoLink(text)
+    if (web) return {kind:web.provider,url:web.url}
     const cnLink = extractIQCNLink(text)
     if (cnLink) return { kind: 'iqcn', url: cnLink }
     const iqLink = extractIQLink(text)
@@ -1085,16 +1093,17 @@ export class Core {
       // 详情页只用到会员/DRM/语言版本；完整多档在进入画质页时的 play 里取。
       input.tier = 'single'
     } else if (provider === 'tencent') input.cid = id
-    const data = isManifestProvider(provider) ? await manifestDetail((p,a,i) => this.invoke(p,a,i), provider, id) : await this.invoke(provider, 'detail', input)
+    const data = isWebVideoProvider(provider) ? await webVideoDetail((p,a,i)=>this.invoke(p,a,i),provider,id) : isManifestProvider(provider) ? await manifestDetail((p,a,i) => this.invoke(p,a,i), provider, id) : await this.invoke(provider, 'detail', input)
     const eps = parseEps(data)
     // 有些老片/短剧详情接口不给海报和片名，卡片上其实已经有，拿它兜底。
     const view = buildDetail(provider, id, data, '', eps, hint)
-    if (provider === 'iqcn') view.focusVid = asString(data.focusVid) || undefined
+    if (provider === 'iqcn' || isWebVideoProvider(provider)) view.focusVid = asString(data.focusVid) || undefined
     await this.applyMovieEditions(view, data)
     return view
   }
 
   async detailFromLink(link: LinkTarget, hint?: DetailHint): Promise<DetailView> {
+    if (link.kind === 'mgtv' || link.kind === 'bilibili' || link.kind === 'migu') return this.detail(link.kind,link.url,hint)
     if (link.kind === 'iqcn') return this.detail('iqcn', link.url, hint)
     if (link.kind === 'iq') return this.detail('iq', link.url, hint)
     if (link.kind === 'mewatch' || link.kind === 'hamivideo') return this.detail(link.kind, link.url, hint)
@@ -1269,7 +1278,7 @@ export class Core {
     const tasks = req.episodes.map((ep, i): DlTask => {
       const t: DlTask = {
         provider: req.detail.provider,
-        namingVersion: ['youku', 'tencent', 'iq', 'iqcn'].includes(req.detail.provider) ? 1 : undefined,
+        namingVersion: ['youku', 'tencent', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(req.detail.provider) ? 1 : undefined,
         includeEpisodeTitle: this.cfg.includeEpisodeTitle !== false,
         title: ep.title,
         series: movie ? req.detail.title : parseSeriesTitle(req.detail.title).title,

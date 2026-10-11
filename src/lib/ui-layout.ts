@@ -107,6 +107,8 @@ export function settingGroup(label: string): string {
   if (label.startsWith('爱奇艺国内版')) return '爱奇艺国内版'
   if (label.startsWith('mewatch')) return 'mewatch'
   if (label.startsWith('Hami')) return 'Hami'
+  if (label.startsWith('芒果')) return '芒果 TV'
+  if (label.startsWith('B 站')) return '哔哩哔哩'
   return '诊断'
 }
 
@@ -171,7 +173,8 @@ export const HELP_LINES = [
   '怎么用',
   '',
   '发现页',
-  '  1-6     切平台：1 优酷  2 腾讯  3 红果  4 黄果  5 抖音  6 爱奇艺国内版',
+  '  1-6     1 优酷  2 腾讯  3 红果  4 黄果  5 抖音  6 爱奇艺国内版',
+  '  7-8     7 芒果 TV  8 哔哩哔哩',
   '  ← →    换栏目；只有一个栏目时，左右切推荐/榜单',
   '  Tab     推荐 / 榜单',
   '  回车    打开    / 搜索    F 筛选    R 刷新',
@@ -188,5 +191,5 @@ export const HELP_LINES = [
   '',
   'F1 帮助   F2 搜索   F3 任务   F4 设置',
   'Esc 返回    Ctrl+C 退出',
-  'Windows Terminal 用 Ctrl+1–6 切平台；搜索页 Tab 可切换全部平台',
+  'Windows Terminal 用 Ctrl+1–9 切平台；搜索页 Tab 可切换全部平台',
 ]

@@ -153,7 +153,7 @@ onBeforeUnmount(() => io?.disconnect())
     <div class="head">
       <h1 class="h1">发现</h1>
       <div class="tabs">
-        <button v-for="p in browsable" :key="p" type="button" class="pill" :class="{ on: p === provider }" @click="pick(p)">
+        <button v-for="p in browsable" :key="p" type="button" class="pill" :class="{ on: p === provider }" :aria-label="PROVIDER_NAME[p]" :aria-pressed="p === provider" @click="pick(p)">
           <PlatformLogo :provider="p" :size="16" />{{ PROVIDER_NAME[p] }}
         </button>
       </div>
