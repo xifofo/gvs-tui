@@ -24,23 +24,28 @@ const notice = ref('')
 const sentinel = ref<HTMLElement | null>(null)
 let gen = 0
 let io: IntersectionObserver | null = null
+const connectionReady = computed(() => !!store.state?.configured && !store.state.connecting && (!store.state.tunnel.enabled || store.state.tunnel.ok))
+const connectionMessage = computed(() => store.state?.connecting ? '正在连接网关…' : store.state?.tunnel.err || '正在建立本机隧道…')
 
 watch(
-  browsable,
-  (list) => {
-    if (!provider.value || !list.includes(provider.value)) void pick(list[0] ?? null)
+  [browsable, connectionReady],
+  ([list, ready], previous) => {
+    if (!ready) { ++gen; loading.value = false; loadingMore.value = false; error.value = ''; return }
+    if (!previous?.[1] || !provider.value || !list.includes(provider.value)) void pick(list.includes(provider.value!) ? provider.value : list[0] ?? null)
   },
   { immediate: true },
 )
 
 async function pick(p: Provider | null) {
+  loadingMore.value = false
+  moreError.value = ''
   provider.value = p
   sections.value = []
   section.value = null
   cards.value = []
   error.value = ''
-  if (!p) return
   const g = ++gen
+  if (!p || !connectionReady.value) { loading.value = false; return }
   loading.value = true
   try {
     const list = await gvs('catalog', p)
@@ -56,6 +61,7 @@ async function pick(p: Provider | null) {
 }
 
 async function choose(s: Section | null) {
+  loadingMore.value = false
   section.value = s
   cards.value = []
   more.value = false
@@ -63,7 +69,7 @@ async function choose(s: Section | null) {
   notice.value = ''
   error.value = ''
   moreError.value = ''
-  if (!s || !provider.value) return
+  if (!s || !provider.value || !connectionReady.value) { ++gen; loading.value = false; return }
   const g = ++gen
   loading.value = true
   try {
@@ -82,7 +88,7 @@ async function choose(s: Section | null) {
 }
 
 async function loadMore() {
-  if (!provider.value || !section.value || !more.value || loadingMore.value) return
+  if (!connectionReady.value || !provider.value || !section.value || !more.value || loadingMore.value) return
   const g = gen
   loadingMore.value = true
   moreError.value = ''
@@ -95,9 +101,9 @@ async function loadMore() {
     more.value = r.more && fresh.length > 0 && r.next !== next.value
     next.value = r.next
   } catch (e) {
-    moreError.value = errText(e)
+    if (g === gen) moreError.value = errText(e)
   } finally {
-    loadingMore.value = false
+    if (g === gen) loadingMore.value = false
   }
 }
 
@@ -182,6 +188,7 @@ onBeforeUnmount(() => io?.disconnect())
       <span>{{ error }}</span>
       <button type="button" class="btn" :disabled="loading" @click="section ? choose(section) : pick(provider)"><Icon name="retry" :size="15" />重试</button>
     </div>
+    <div v-else-if="!connectionReady" class="notice" role="status"><span class="spin" />{{ connectionMessage }}<span class="muted">连接就绪后自动加载</span></div>
     <template v-else-if="loading">
       <ol v-if="rankSkeleton" class="ranklist">
         <li v-for="i in 8" :key="i" class="card rl rl-sk">

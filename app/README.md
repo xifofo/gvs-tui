@@ -24,6 +24,14 @@ HLS 下载速度按分片文件（含正在写入的临时分片）的近期字�
 
 IQ 字幕优先正常简体、繁体，缺少一种时用内置 OpenCC 补齐；两种正常中文字幕都没有时才保留 AI 简繁并按需补齐，转换得到的 AI 字幕继续标注 AI。其他语言只保留正常字幕。封装顺序为简体、繁体、其余语言，简体默认播放；转换保持时间轴和样式，失败时保留原字幕并提示。
 
+## 界面与连接状态
+
+侧栏默认显示账号汇总，完整平台状态可展开查看。画质页将音轨调整、命名与刮削按需展开，下载确认与保存目录持续可见；从目录设置返回会保留当前画质与音轨。选集范围需点击「应用范围」，非法输入保留已有选择。
+
+发现页等待网关和本机隧道就绪再读取栏目，重连后自动加载；不会在隧道尚未建立时提前发出栏目请求。真实连接失败仍显示原因。搜索、详情和画质探测会丢弃已被替换的旧请求结果。
+
+GitHub 更新检查使用持久缓存、ETag 条件请求和超时控制。403/429 按服务端的重试时间退避，并提供同仓官方发布页；公开发布订阅只用于给出页面线索，不据此自动安装。后台检查失败不反复打断操作，手动检查会显示具体原因。安装包继续由 electron-updater 校验完整性。这些措施减少无效请求，不能消除 GitHub 的外部访问限制。
+
 ## 开发
 
 ```bash
@@ -58,8 +66,19 @@ src/main/env.ts        网络环境：隧道和 IQ 海外版接口使用配置�
 src/main/desktop-network.ts  网关 / TMDB 的独立代理会话，不修改默认网络会话
 src/main/shims/        构建时替换 TUI 里依赖 Bun 的 proxy.ts、依赖源码布局的 tool-paths.ts
 src/shared/api.ts      主进程 ↔ 界面契约
-src/renderer/          界面（设计稿：GVS 桌面端设计稿，米白/墨黑/橙色硬阴影）
+src/renderer/          界面（米白/墨黑/橙色，聚焦内容与下载操作）
 ```
+
+离线界面验收使用模拟 IPC 和独立临时 profile，阻断所有网络，不读取真实账号或执行下载：
+
+```powershell
+# 在 app 目录；只构建，不启动生产主进程
+bunx electron-vite build
+bun test src/main/updater-release.test.ts
+Start-Process node_modules/electron/dist/electron.exe -ArgumentList 'scripts/ui-flow-smoke.cjs' -WindowStyle Hidden -Wait
+```
+
+报告和截图写入 `../.build/ui-flow-smoke/current/`，覆盖 1280×800 与 1100×700 的搜索、选集、画质、下载、设置和弹窗交互。构建成功不代表真实网关、账号或更新包已经实网验收。
 
 桌面版可在「设置 → 网关 → 代理地址」或首次连接页填写 HTTP/HTTPS 代理，如 `http://127.0.0.1:7890`；
 端口按自己的代理软件填写，留空使用系统代理与 PAC。地址以 `desktopProxy` 保存在本机配置，重启后继续使用；

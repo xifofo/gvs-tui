@@ -45,6 +45,7 @@ export const store = reactive({
   detailHint: null as DetailHint | null,
   /** 选中的集 vid */
   picked: [] as string[],
+  detailCollection: '',
 
   settingsTab: 'download' as SettingsTab,
   dlFilter: 'all' as 'all' | 'active' | 'paused' | 'failed' | 'done',
@@ -76,15 +77,38 @@ export function toast(message: string, tone: Tone = 'muted'): void {
 
 export const errText = userMessage
 
+let searchGen = 0
+let detailGen = 0
+let probeGen = 0
+
+function leaveView(next: View): void {
+  if (next === store.view) return
+  if (store.view === 'search') { ++searchGen; store.searching = false; store.searchPending = [] }
+  if (store.view === 'detail') { ++detailGen; store.detailLoading = false }
+  if (store.view === 'quality') {
+    ++probeGen
+    if (store.probing && !store.probe) store.probeError = '画质加载已中断，请点击重试继续。'
+    store.probing = false
+  }
+}
+
 export function go(view: View): void {
   if (store.view === view) return
+  leaveView(view)
   store.history.push(store.view)
   if (store.history.length > 30) store.history.shift()
   store.view = view
 }
 
 export function back(fallback: View = 'discover'): void {
-  store.view = store.history.pop() ?? fallback
+  const next = store.history.pop() ?? fallback
+  leaveView(next)
+  store.view = next
+}
+
+export function openSettings(tab: SettingsTab): void {
+  store.settingsTab = tab
+  go('settings')
 }
 
 /** 侧栏高亮：详情/画质页归到进来的那一栏（发现或搜索） */
@@ -101,12 +125,6 @@ export async function runSearch(raw: string): Promise<void> {
   const q = raw.trim()
   if (!q) return
   store.query = q
-  // 粘贴的播放页链接：直接进详情
-  const link = await gvs('parseLink', q)
-  if (link.kind !== 'none') {
-    await openDetailWith(() => gvs('detailFromLink', link))
-    return
-  }
   go('search')
   const gen = ++searchGen
   store.searching = true
@@ -115,6 +133,12 @@ export async function runSearch(raw: string): Promise<void> {
   store.searchPending = []
   const t0 = Date.now()
   try {
+    const link = await gvs('parseLink', q)
+    if (gen !== searchGen) return
+    if (link.kind !== 'none') {
+      await openDetailWith(() => gvs('detailFromLink', link))
+      return
+    }
     const targets = await gvs('searchTargets')
     if (gen !== searchGen) return
     store.searchPending = [...targets]
@@ -134,17 +158,20 @@ export async function runSearch(raw: string): Promise<void> {
   }
 }
 
-let searchGen = 0
-
 async function openDetailWith(load: () => Promise<DetailView>, hint?: DetailHint | null): Promise<void> {
   go('detail')
+  const gen = ++detailGen
+  ++probeGen
+  store.probe = null
   store.detail = null
   store.detailError = ''
   store.detailLoading = true
   store.picked = []
+  store.detailCollection = ''
   store.detailHint = hint ?? null
   try {
     const d = await load()
+    if (gen !== detailGen) return
     store.detail = d
     // 提示里的海报/标题兜住接口没给的情况
     if (hint?.poster && !d.poster) d.poster = hint.poster
@@ -152,9 +179,9 @@ async function openDetailWith(load: () => Promise<DetailView>, hint?: DetailHint
     if (d.focusVid && d.episodes.some(e => e.vid === d.focusVid)) store.picked = [d.focusVid]
     else if (d.episodes.length === 1) store.picked = [d.episodes[0]!.vid]
   } catch (e) {
-    store.detailError = errText(e)
+    if (gen === detailGen) store.detailError = errText(e)
   } finally {
-    store.detailLoading = false
+    if (gen === detailGen) store.detailLoading = false
   }
 }
 
@@ -187,12 +214,14 @@ export async function openQuality(): Promise<void> {
   store.probeError = ''
   store.probing = true
   go('quality')
+  const gen = ++probeGen
   try {
-    store.probe = await gvs('probe', d.provider, eps)
+    const result = await gvs('probe', d.provider, eps)
+    if (gen === probeGen && store.detail === d) store.probe = result
   } catch (e) {
-    store.probeError = errText(e)
+    if (gen === probeGen) store.probeError = errText(e)
   } finally {
-    store.probing = false
+    if (gen === probeGen) store.probing = false
   }
 }
 
@@ -201,9 +230,9 @@ export function initStore(): void {
   window.gvs.on('jobs', (j) => (store.jobs = userFacing(j)))
   window.gvs.on('toast', (t) => toast(t.message, t.tone))
   window.gvs.on('update', (u) => (store.update = u))
-  void gvs('updateState').then((u) => (store.update = u))
-  void gvs('state').then((s) => (store.state = s))
-  void gvs('jobs').then((j) => (store.jobs = j))
+  void gvs('updateState').then((u) => (store.update = u)).catch(() => {})
+  void gvs('state').then((s) => (store.state = s)).catch((e) => toast(errText(e), 'err'))
+  void gvs('jobs').then((j) => (store.jobs = j)).catch((e) => toast(errText(e), 'err'))
 }
 
 export function hasProvider(p: Provider): boolean {

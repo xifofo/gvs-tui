@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { go, hasProvider, runSearch, store, toast, errText } from '../store'
+import { go, hasProvider, modalOpen, runSearch, store, toast, errText } from '../store'
 import Icon from './Icon.vue'
 
 const text = ref(store.query)
@@ -19,6 +19,7 @@ async function submit() {
 }
 
 function onKey(e: KeyboardEvent) {
+  if (modalOpen()) return
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault()
     input.value?.focus()
@@ -32,7 +33,7 @@ const running = computed(() => store.jobs.filter((j) => j.state === 'running' ||
 // 只有优酷/腾讯支持粘贴播放页链接；Key 没这两家权限就别提链接
 const placeholder = computed(() => {
   const sites = [hasProvider('youku') && '优酷', hasProvider('tencent') && '腾讯', hasProvider('mewatch') && 'mewatch', hasProvider('hamivideo') && 'Hami', hasProvider('iq') && 'IQ'].filter(Boolean)
-  return sites.length ? `搜剧名，或直接粘贴${sites.join(' / ')}链接` : '搜剧名'
+  return sites.length ? '搜索剧名或粘贴视频链接' : '搜索剧名'
 })
 const shortcut = computed(() => (store.state?.platform === 'darwin' ? '⌘ K' : 'Ctrl K'))
 </script>
@@ -60,12 +61,12 @@ const shortcut = computed(() => (store.state?.platform === 'darwin' ? '⌘ K' : 
 </template>
 
 <style scoped>
-.top { height: 72px; flex-shrink: 0; padding: 0 32px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 16px; }
+.top { height: 64px; flex-shrink: 0; padding: 0 28px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 16px; }
 .search {
-  width: min(540px, 60%); height: 44px; padding: 0 14px; background: var(--card); border: 1.5px solid var(--ink);
-  border-radius: 8px; box-shadow: var(--shadow-ink); display: flex; align-items: center; gap: 10px; color: var(--ink-2);
+  width: min(540px, 75%); height: 40px; padding: 0 14px; background: var(--card); border: 1px solid var(--line);
+  border-radius: 8px; display: flex; align-items: center; gap: 10px; color: var(--ink-2);
 }
-.search:focus-within { box-shadow: var(--shadow-orange); }
+.search:focus-within { border-color: var(--orange-text); box-shadow: 0 0 0 2px var(--orange-soft); }
 .search input { flex-grow: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 15px; color: var(--ink); }
 .search input::-webkit-search-cancel-button { display: none; }
 .kbd { font-size: 12px; color: var(--ink-3); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; }

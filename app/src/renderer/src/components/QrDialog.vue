@@ -4,6 +4,7 @@ import type { QRPoll, QRStart } from '@shared/api'
 import { errText, gvs, store, toast } from '../store'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
+import { useDialogFocus } from '../dialog-focus'
 
 const kind = store.qr!
 const title = kind === 'iqcn' ? '扫码登录爱奇艺国内版' : kind === 'youku' ? '扫码登录优酷' : '扫码登录腾讯视频'
@@ -12,26 +13,35 @@ const status = ref<QRPoll>({ done: false, message: '正在获取二维码…', t
 const error = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 let busy = false
+let active = true
+let generation = 0
+const dialog = ref<HTMLElement | null>(null)
+useDialogFocus(dialog, close)
 
 async function load() {
   stop()
+  const current = ++generation
   error.value = ''
   start.value = null
   status.value = { done: false, message: '正在获取二维码…', tone: 'muted' }
   try {
-    start.value = kind === 'iqcn' ? await gvs('iqcnQrStart') : kind === 'youku' ? await gvs('youkuQrStart') : await gvs('tencentQrStart')
+    const response = kind === 'iqcn' ? await gvs('iqcnQrStart') : kind === 'youku' ? await gvs('youkuQrStart') : await gvs('tencentQrStart')
+    if (!active || current !== generation) return
+    start.value = response
     status.value = { done: false, message: '等待扫码…', tone: 'muted' }
     timer = setInterval(poll, kind === 'iqcn' ? 2000 : kind === 'youku' ? 1500 : 3500)
   } catch (e) {
-    error.value = errText(e)
+    if (active && current === generation) error.value = errText(e)
   }
 }
 
 async function poll() {
-  if (busy) return
+  if (busy || !active) return
+  const current = generation
   busy = true
   try {
     const r = kind === 'iqcn' ? await gvs('iqcnQrPoll') : kind === 'youku' ? await gvs('youkuQrPoll') : await gvs('tencentQrPoll')
+    if (!active || current !== generation) return
     status.value = r
     if (r.done) {
       stop()
@@ -39,6 +49,7 @@ async function poll() {
       close()
     } else if (r.tone === 'warn') stop()
   } catch (e) {
+    if (!active || current !== generation) return
     status.value = { done: false, message: errText(e), tone: 'warn' }
     stop()
   } finally {
@@ -52,27 +63,26 @@ function stop() {
 }
 
 function close() {
+  active = false
+  ++generation
   stop()
-  void gvs('qrCancel')
+  void gvs('qrCancel').catch(() => {})
   store.qr = null
 }
 
-function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') close()
-}
 onMounted(() => {
-  window.addEventListener('keydown', onKey)
   void load()
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKey)
+  active = false
+  ++generation
   stop()
 })
 </script>
 
 <template>
   <div class="scrim" @click.self="close">
-    <div class="dlg" role="dialog" aria-modal="true" :aria-label="title">
+    <div ref="dialog" class="dlg" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1">
       <div class="head">
         <PlatformLogo :provider="kind" :size="26" />
         <h1 class="title">{{ title }}</h1>

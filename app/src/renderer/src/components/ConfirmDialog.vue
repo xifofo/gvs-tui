@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { store } from '../store'
+import { useDialogFocus } from '../dialog-focus'
 
 const props = withDefaults(defineProps<{ title: string; message?: string; confirmText?: string; danger?: boolean; checkbox?: string }>(), {
   message: '',
@@ -11,23 +12,19 @@ const props = withDefaults(defineProps<{ title: string; message?: string; confir
 const emit = defineEmits<{ confirm: [checked: boolean]; cancel: [] }>()
 
 const checked = ref(false)
-
-function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') emit('cancel')
-}
+const dialog = ref<HTMLElement | null>(null)
+useDialogFocus(dialog, () => emit('cancel'))
 onMounted(() => {
   store.dialogCount++
-  window.addEventListener('keydown', onKey)
 })
 onBeforeUnmount(() => {
   store.dialogCount--
-  window.removeEventListener('keydown', onKey)
 })
 </script>
 
 <template>
   <div class="scrim" @click.self="emit('cancel')">
-    <div class="dlg" role="alertdialog" aria-modal="true" :aria-label="props.title">
+    <div ref="dialog" class="dlg" role="alertdialog" aria-modal="true" :aria-label="props.title" tabindex="-1">
       <h2 class="title">{{ props.title }}</h2>
       <p v-if="props.message" class="msg">{{ props.message }}</p>
       <label v-if="props.checkbox" class="opt">
@@ -36,7 +33,7 @@ onBeforeUnmount(() => {
         <span>{{ props.checkbox }}</span>
       </label>
       <div class="foot">
-        <button type="button" class="btn" @click="emit('cancel')">取消</button>
+        <button type="button" class="btn" data-dialog-cancel @click="emit('cancel')">取消</button>
         <button type="button" class="btn" :class="{ danger: props.danger }" @click="emit('confirm', checked)">{{ props.confirmText }}</button>
       </div>
     </div>

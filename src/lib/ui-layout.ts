@@ -1,5 +1,6 @@
 import type { Audio, Job, Quality, Snapshot } from '../types'
 import { clip, displayWidth, wrapLines } from './text'
+import { isMovieDetail } from './view'
 
 export function splitPane(width: number) {
   const side = width >= 118 ? Math.max(32, Math.min(42, Math.floor(width * 0.28))) : 0
@@ -19,8 +20,20 @@ export function viewMetrics(width: number, height: number) {
     jobRows: Math.max(1, bodyHeight - (pane.side ? 2 : jobPanel + 3)),
     jobLogRows: Math.max(1, bodyHeight - 4),
     settingRows: Math.max(1, bodyHeight - (pane.side ? 2 : 9)),
-    gridRows: Math.max(1, bodyHeight - (pane.side ? 4 : 5)),
   }
+}
+
+/** The episode grid and its keyboard page size share the actual visible chrome. */
+export function detailListRows(bodyHeight: number, state: Pick<Snapshot, 'detail' | 'episodes' | 'episodeGroups'>): number {
+  const detail = state.detail
+  const episodes = state.episodes ?? []
+  const hasFacts = !!detail && !!(detail.tags?.length || detail.score || detail.drm
+    || (detail.episodes <= 1 && detail.duration > 0) || (episodes[0]?.duration ?? 0) > 0)
+  const hasSynopsis = !!detail?.desc?.trim()
+  const hasGroups = (state.episodeGroups?.length ?? 0) > 1
+  // Movie versions have one blank row; an episode grid has a blank row plus its cursor summary.
+  const selectionChrome = episodes.length ? (isMovieDetail(detail) ? 1 : 2) : 0
+  return Math.max(1, bodyHeight - 2 - Number(hasFacts) - Number(hasSynopsis) - Number(hasGroups) - selectionChrome)
 }
 
 export type QualityColumn = { key: 'label' | 'codec' | 'size' | 'hdr' | 'fps' | 'caption' | 'resolution' | 'drm'; title: string; width: number }
@@ -158,7 +171,7 @@ export const HELP_LINES = [
   '怎么用',
   '',
   '发现页',
-  '  1-7     切平台：1 优酷  2 腾讯  3 红果  4 黄果  5 抖音  6 mewatch  7 Hami',
+  '  1-6     切平台：1 优酷  2 腾讯  3 红果  4 黄果  5 抖音  6 爱奇艺国内版',
   '  ← →    换栏目；只有一个栏目时，左右切推荐/榜单',
   '  Tab     推荐 / 榜单',
   '  回车    打开    / 搜索    F 筛选    R 刷新',
@@ -175,5 +188,5 @@ export const HELP_LINES = [
   '',
   'F1 帮助   F2 搜索   F3 任务   F4 设置',
   'Esc 返回    Ctrl+C 退出',
-  'Windows Terminal 会吃掉 Alt+数字，用 Ctrl+1/2/3/4',
+  'Windows Terminal 用 Ctrl+1–6 切平台；搜索页 Tab 可切换全部平台',
 ]

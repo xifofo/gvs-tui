@@ -256,6 +256,7 @@ const busyLabel = computed(() => {
 })
 
 const metaText = computed(() => {
+  if ((state.value.scene === 'detail' && state.value.detailExpanded) || (state.value.scene === 'settings' && state.value.settingsExpanded)) return ''
   switch (state.value.scene) {
     case 'results':
       return resultView.value.total
@@ -323,6 +324,8 @@ const statusLeftW = computed(() =>
 )
 
 const hints = computed((): Array<[string, string]> => {
+  if ((state.value.scene === 'detail' && state.value.detailExpanded) || (state.value.scene === 'settings' && state.value.settingsExpanded))
+    return [['↑↓', '滚动'], ['PgUp/PgDn', '翻页'], ['esc / i', '收起']]
   if (state.value.scene === 'tmdb') {
     if (state.value.tmdbSeasonPicker) return state.value.tmdbSeasonPicker.state === 'loading'
       ? [['esc', '保留编号']]

@@ -7,7 +7,7 @@ import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Skeleton from '../components/Skeleton.vue'
-import { errText, gvs, hasProvider, human, store, toast, type SettingsTab } from '../store'
+import { back, errText, gvs, hasProvider, human, store, toast, type SettingsTab } from '../store'
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'download', label: '下载' },
@@ -38,24 +38,35 @@ const form = reactive({
   hongguoFmt: 'mkv',
   huangguoFmt: 'mkv',
 })
-function reset() {
-  Object.assign(form, { ...s.value, key: '' })
-}
-watch(() => store.state?.settings, reset, { immediate: true })
+let lastSettings: Record<string, unknown> = {}
+watch(() => store.state?.settings, next => {
+  if (!next) return
+  const draft = form as Record<string, unknown>
+  for (const key of Object.keys(form)) {
+    if (key === 'key') continue
+    if (!(key in lastSettings) || draft[key] === lastSettings[key]) draft[key] = (next as unknown as Record<string, unknown>)[key] ?? draft[key]
+  }
+  lastSettings = { ...next }
+}, { immediate: true })
 
 const diagnosticsOpen = ref(false)
 const saving = ref('')
+let saveQueue: Promise<void> = Promise.resolve()
 async function save(patch: SettingsPatch, what: string) {
-  saving.value = what
-  try {
-    store.state = await gvs('saveSettings', patch)
-    toast('已保存', 'ok')
-  } catch (e) {
-    toast(errText(e), 'err')
-    reset()
-  } finally {
-    saving.value = ''
-  }
+  const submitted = { ...patch }
+  saveQueue = saveQueue.then(async () => {
+    saving.value = what
+    try {
+      store.state = await gvs('saveSettings', submitted)
+      if ('key' in submitted && form.key === submitted.key) form.key = ''
+      toast('已保存', 'ok')
+    } catch (e) {
+      toast(errText(e), 'err')
+    } finally {
+      saving.value = ''
+    }
+  })
+  await saveQueue
 }
 
 async function pickDir(which: 'out' | 'tmp') {
@@ -131,7 +142,7 @@ const updText = computed(() => {
     case 'available': return `新版本 ${u.version}`
     case 'downloading': return `下载中 ${u.percent}%`
     case 'ready': return `${u.version} 已就绪`
-    case 'error': return `检查失败：${u.message.slice(0, 60)}`
+    case 'error': return '暂时无法检查'
     default: return '未检查'
   }
 })
@@ -164,6 +175,7 @@ const plat = (p: Provider) => hasProvider(p)
 
 <template>
   <div class="page">
+    <button v-if="store.history.at(-1) === 'quality'" type="button" class="back" @click="back('quality')"><Icon name="back" :size="16" />返回画质选择</button>
     <h1 class="h1">设置</h1>
 
     <div class="cols">
@@ -404,9 +416,10 @@ const plat = (p: Provider) => hasProvider(p)
                 <span v-if="upd?.status === 'checking'" class="spin" />检查更新
               </button>
               <button v-if="upd?.status === 'ready'" type="button" class="btn sm outline" @click="gvs('installUpdate')">立即重启安装</button>
-              <button v-else-if="upd?.status === 'available' && upd.url" type="button" class="btn sm outline" @click="gvs('installUpdate')">前往下载</button>
+              <button v-else-if="upd?.url" type="button" class="btn sm outline" @click="gvs('installUpdate')">打开发布页</button>
             </div>
           </div>
+          <div v-if="upd?.message" class="srow"><p class="update-note" role="status">{{ upd.message }}</p></div>
           <div class="srow">
             <div class="sl"><span class="st">媒体工具</span><span class="sd">下载、解密和封装都要用到，缺哪个会在任务里报错。</span></div>
           </div>
@@ -433,7 +446,7 @@ const plat = (p: Provider) => hasProvider(p)
 
 <style scoped>
 .cols { display: flex; gap: 28px; align-items: flex-start; }
-.tabs { width: 200px; flex-shrink: 0; position: sticky; top: 0; display: flex; flex-direction: column; gap: 4px; }
+.tabs { width: 156px; flex-shrink: 0; position: sticky; top: 0; display: flex; flex-direction: column; gap: 4px; }
 .tab {
   height: 40px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2);
   font-size: 14px; font-weight: 500; text-align: left; cursor: pointer;
@@ -454,6 +467,7 @@ textarea.input { height: 72px; }
 .stepper button { width: 34px; height: 34px; border: 0; background: transparent; font-size: 17px; cursor: pointer; }
 .stepper span { flex-grow: 1; min-width: 34px; text-align: center; font-size: 15px; }
 .warn-text { color: var(--orange-text); }
+.update-note { color: var(--ink-2); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .tool .st { font-weight: 500; }
 @media (max-width: 1100px) {
   .cols { gap: 18px; }

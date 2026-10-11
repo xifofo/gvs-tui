@@ -1,7 +1,7 @@
 import { test, expect, afterEach, spyOn } from 'bun:test'
 import { Runtime } from './runtime'
 import * as tunnel from './lib/tunnel'
-import { viewMetrics } from './lib/ui-layout'
+import { detailListRows, viewMetrics } from './lib/ui-layout'
 import { gridWindow } from './lib/grid'
 import { GwClient } from './lib/client'
 import { wrapLines, displayWidth } from './lib/text'
@@ -1005,7 +1005,7 @@ test('PageDown advances one visible grid page and resizing rewraps job details',
   expect(r.snapshot.episodes!.length).toBeGreaterThan(0)
   const layout = viewMetrics(60, 18)
   const perRow = gridWindow(r.snapshot.episodes!.length, 0, layout.pane.main, 1).perRow
-  const expected = Math.min(r.snapshot.episodes!.length - 1, layout.gridRows * perRow)
+  const expected = Math.min(r.snapshot.episodes!.length - 1, detailListRows(layout.bodyHeight, r.snapshot) * perRow)
   r.handleKey('pagedown')
   for (let i = 0; i < 100 && r.snapshot.cursor !== expected; i++) await Bun.sleep(10)
   expect(r.snapshot.cursor).toBe(expected)

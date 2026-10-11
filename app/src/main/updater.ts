@@ -9,54 +9,51 @@
 // macOS：没有代码签名，Squirrel.Mac 不允许自动替换，只提示并打开发布页。
 import { app, net, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { readFileSync, statSync } from 'node:fs'
+import { mkdir, writeFile, rename } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { UpdateState } from '@shared/api'
 import { runLog } from '@tui/runlog.ts'
-import { userMessage } from '@tui/user-message.ts'
+import { DesktopReleaseClient, RELEASES_URL, newer, releaseFromURL, type ReleaseCache } from './updater-release'
+import { downloadFailureMessage, failedCheckState } from './updater-state'
 
-const OWNER = 'my-name-is-alan'
-const REPO = 'gvs-tui'
-const TAG_PREFIX = 'desktop-v'
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
-
-type Release = { tag_name: string; html_url: string; draft: boolean; prerelease: boolean; body?: string }
-
-function newer(a: string, b: string): boolean {
-  const pa = a.split(/[.-]/).map((x) => Number.parseInt(x, 10) || 0)
-  const pb = b.split(/[.-]/).map((x) => Number.parseInt(x, 10) || 0)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0)
-  }
-  return false
-}
-
-async function latestDesktopRelease(): Promise<Release | null> {
-  const res = await net.fetch(`https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=50`, {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'GVS-Desktop' },
-  })
-  if (!res.ok) throw new Error(`GitHub ${res.status}`)
-  const list = (await res.json()) as Release[]
-  let best: Release | null = null
-  for (const r of list) {
-    if (r.draft || r.prerelease || !r.tag_name.startsWith(TAG_PREFIX)) continue
-    if (!best || newer(r.tag_name.slice(TAG_PREFIX.length), best.tag_name.slice(TAG_PREFIX.length))) best = r
-  }
-  return best
-}
 
 export class Updater {
   private state: UpdateState = { status: 'idle', version: '', current: app.getVersion(), percent: 0, message: '', url: '', auto: false }
   private timer: NodeJS.Timeout | null = null
-  private busy = false
+  private startupTimer: NodeJS.Timeout | null = null
+  private flight: Promise<UpdateState> | null = null
+  private manualRequested = false
+  private readonly releases: DesktopReleaseClient
+  private cacheWrite: Promise<void> = Promise.resolve()
 
   constructor(private readonly emit: (s: UpdateState) => void) {
+    const cachePath = join(app.getPath('userData'), 'desktop-update-cache.json')
+    let cache: unknown
+    try { if (statSync(cachePath).size < 64 * 1024) cache = JSON.parse(readFileSync(cachePath, 'utf8')) } catch { /* First launch or invalid cache. */ }
+    this.releases = new DesktopReleaseClient({
+      fetch: (url, init) => net.fetch(url, init), cache,
+      save: (value: ReleaseCache) => {
+        const text = JSON.stringify(value)
+        this.cacheWrite = this.cacheWrite.then(async () => {
+          await mkdir(dirname(cachePath), { recursive: true })
+          await writeFile(`${cachePath}.tmp`, text, 'utf8')
+          await rename(`${cachePath}.tmp`, cachePath)
+        }).catch(() => runLog('updater cache write failed'))
+      },
+    })
     this.state.auto = app.isPackaged && process.platform === 'win32'
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
     autoUpdater.logger = { info: (m: unknown) => runLog(`updater ${m}`), warn: (m: unknown) => runLog(`updater warn ${m}`), error: (m: unknown) => runLog(`updater error ${m}`), debug: () => {} }
     autoUpdater.on('download-progress', (p) => this.set({ status: 'downloading', percent: Math.round(p.percent) }))
     autoUpdater.on('update-downloaded', (i) => this.set({ status: 'ready', version: i.version, percent: 100, message: '' }))
-    autoUpdater.on('update-not-available', () => this.set({ status: 'latest', message: '' }))
-    autoUpdater.on('error', (e) => this.set({ status: 'error', message: e?.message ?? String(e) }))
+    // An inconsistent channel file must not erase the newer release found by the API.
+    autoUpdater.on('update-not-available', () => {
+      if (this.state.status !== 'ready') this.set({ status: 'available', message: '该发布暂未提供适用于当前系统的更新包，可打开官方发布页查看。' })
+    })
+    autoUpdater.on('error', (e) => this.downloadFailed(e))
   }
 
   view(): UpdateState {
@@ -64,46 +61,66 @@ export class Updater {
   }
 
   private set(patch: Partial<UpdateState>): void {
-    if (patch.status === 'error' && patch.message) {
-      runLog(`update failed: ${patch.message}`)
-      patch = { ...patch, message: userMessage(patch.message, '暂时无法检查或下载更新，请稍后重试。') }
-    }
     Object.assign(this.state, patch)
     this.emit(this.view())
   }
 
+  private downloadFailed(error: unknown): void {
+    runLog(`update download failed: ${error instanceof Error ? error.message : String(error)}`)
+    if (this.state.status === 'ready') return
+    // Keep the official release actionable even if an automatic package download fails.
+    this.set({ status: this.state.version ? 'available' : 'error', message: downloadFailureMessage(error), url: this.state.url || RELEASES_URL })
+  }
+
   start(): void {
-    if (!app.isPackaged) return // 开发版不检查
-    setTimeout(() => void this.check(false), 15_000)
+    if (!app.isPackaged || this.timer) return // 开发版不检查
+    this.startupTimer = setTimeout(() => { this.startupTimer = null; void this.check(false) }, 15_000)
     this.timer = setInterval(() => void this.check(false), CHECK_EVERY_MS)
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer)
+    if (this.startupTimer) clearTimeout(this.startupTimer)
+    this.timer = this.startupTimer = null
   }
 
-  async check(manual: boolean): Promise<UpdateState> {
-    if (this.busy || this.state.status === 'downloading' || this.state.status === 'ready') return this.view()
-    this.busy = true
-    this.set({ status: 'checking', message: '' })
+  check(manual: boolean): Promise<UpdateState> {
+    if (this.flight) {
+      this.manualRequested ||= manual
+      return this.flight
+    }
+    if (this.state.status === 'downloading' || this.state.status === 'ready') return Promise.resolve(this.view())
+    this.manualRequested = manual
+    this.flight = this.checkOnce(manual).finally(() => { this.flight = null })
+    return this.flight
+  }
+
+  private async checkOnce(manual: boolean): Promise<UpdateState> {
+    const before = this.view()
+    if (manual || before.status === 'idle') this.set({ status: 'checking', message: '' })
     try {
-      const rel = await latestDesktopRelease()
-      const version = rel ? rel.tag_name.slice(TAG_PREFIX.length) : ''
-      if (!rel || !newer(version, this.state.current)) {
-        this.set({ status: 'latest', version: version || this.state.current })
+      const result = await this.releases.check(manual)
+      if (!result.verified) {
+        runLog(`update check deferred: ${result.message}`)
+        this.set(failedCheckState(before, this.view(), this.manualRequested, result.message, result.url))
         return this.view()
       }
-      this.set({ status: 'available', version, url: rel.html_url })
+      const rel = result.release
+      const version = rel?.version ?? ''
+      if (!rel || !newer(version, this.state.current)) {
+        this.set({ status: 'latest', version: version || this.state.current, message: '', url: RELEASES_URL })
+        return this.view()
+      }
+      this.set({ status: 'available', version, url: rel.url, message: '' })
       if (!this.state.auto) {
         if (!app.isPackaged && manual) this.set({ message: '开发版不自动安装' })
         return this.view()
       }
-      autoUpdater.setFeedURL({ provider: 'generic', url: `https://github.com/${OWNER}/${REPO}/releases/download/${rel.tag_name}` })
+      autoUpdater.setFeedURL({ provider: 'generic', url: `${RELEASES_URL}/download/${rel.tag}` })
       await autoUpdater.checkForUpdates() // autoDownload=true：发现即下载
     } catch (e) {
-      this.set({ status: 'error', message: e instanceof Error ? e.message : String(e) })
-    } finally {
-      this.busy = false
+      // Release lookup returns controlled failure results; exceptions here come from the package updater.
+      this.downloadFailed(e)
     }
     return this.view()
   }
@@ -113,6 +130,6 @@ export class Updater {
       setImmediate(() => autoUpdater.quitAndInstall(true, true))
       return
     }
-    if (this.state.url) void shell.openExternal(this.state.url)
+    if (this.state.url === RELEASES_URL || releaseFromURL(this.state.url)) void shell.openExternal(this.state.url)
   }
 }

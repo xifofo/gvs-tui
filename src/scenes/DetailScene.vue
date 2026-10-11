@@ -6,13 +6,15 @@ import { Box, StyledText, Text, bold, fg } from 'vue-termui'
 import type { TextChunk } from 'vue-termui'
 import EpisodeGrid from '../components/EpisodeGrid.vue'
 import PageHeader from '../components/PageHeader.vue'
-import { chipChunks, colsLine, ink, markCol, tabChunks, tabsWidth } from '../lib/rows.ts'
+import { chipChunks, colsLine, ink, markCol, tabsWidth } from '../lib/rows.ts'
 import type { Col } from '../lib/rows.ts'
 import { clip, displayWidth, wrapLines } from '../lib/text.ts'
 import { c } from '../lib/theme.ts'
 import { isMovieDetail, sliceList } from '../lib/view.ts'
 import { gridWindow } from '../lib/grid.ts'
+import { detailListRows } from '../lib/ui-layout.ts'
 import type { Episode, Snapshot } from '../types.ts'
+import { tabStrip } from './shared.ts'
 
 const props = defineProps<{
   state: Snapshot
@@ -30,14 +32,20 @@ const detail = computed(() => props.state.detail)
 const isMovie = computed(() => isMovieDetail(detail.value))
 const selectedEpisode = computed(() => episodes.value[props.state.cursor])
 
-/** Synopsis as at most two indented lines; the second one ends in `..` when cut. */
-const descLines = computed(() => {
+/** Keep selection compact; the full synopsis is a separate scrollable view. */
+const synopsis = computed(() => {
   const desc = (props.state.detail?.desc ?? '').replace(/\s+/g, ' ').trim()
-  if (!desc) return []
-  const room = Math.max(10, bodyW.value - 2)
-  const lines = wrapLines(desc, room)
-  if (lines.length > 2) lines[1] = clip(`${lines[1]}${lines[2]}`, room)
-  return lines.slice(0, 2).map((line) => `  ${line}`)
+  if (!desc) return null
+  return colsLine([
+    { text: `  ${desc}`, grow: true, color: c.faint },
+    { text: '  I 简介', cells: 8, color: c.dim },
+  ], bodyW.value)
+})
+const expandedLines = computed(() => {
+  const lines = wrapLines(detail.value?.desc || '暂无简介', bodyW.value)
+  const room = Math.max(1, bodyH.value - 2)
+  const offset = Math.min(props.state.contentOffset || 0, Math.max(0, lines.length - room))
+  return lines.slice(offset, offset + room)
 })
 
 function clock(seconds: number): string {
@@ -75,25 +83,12 @@ const groupTabs = computed(() => {
   const cells = Math.min(tabsWidth(labels), room)
   return colsLine(
     [
-      { chunks: (w: number) => groupTabChunks(labels, current, w), cells },
+      { chunks: (w: number) => tabStrip(labels, Math.max(0, labels.indexOf(current!)), w), cells },
       { text: hint, grow: true, align: 'right', color: c.faint },
     ],
     bodyW.value,
   )
 })
-
-/** ` 正片  预告 ` with the active group on the selection slate. */
-function groupTabChunks(labels: string[], current: string, cells: number): TextChunk[] {
-  const chunks: TextChunk[] = []
-  let used = 0
-  for (const label of labels) {
-    const width = displayWidth(label) + 2
-    if (used + width > cells) break
-    chunks.push(...tabChunks(label, label === current))
-    used += width
-  }
-  return chunks
-}
 
 /**
  * The cursor line above the grid: `E21` in the accent, its runtime quiet and
@@ -139,24 +134,8 @@ const scrollLabel = computed(() => {
     : ''
 })
 
-/**
- * Rows the grid cannot use: PageHeader (2), the facts line, the synopsis, the
- * group tabs, and the cursor line plus the blank row that sets the grid apart.
- * Counting the margins here keeps the grid from being clipped at the bottom.
- */
-const rowsAbove = computed(() => {
-  let n = 2
-  if (detailFacts.value) n += 1
-  n += descLines.value.length
-  if (groupTabs.value) n += 1
-  // The cursor line and the blank row above the grid; no dependency on the
-  // scroll label here, or rowsAbove ↔ gridRows would form a cycle.
-  if (episodes.value.length && !isMovie.value) n += 2
-  return n
-})
-
-const gridRows = computed(() => Math.max(1, bodyH.value - rowsAbove.value))
-const editions = computed(() => sliceList(episodes.value, props.state.cursor, Math.max(1, gridRows.value - 1)))
+const gridRows = computed(() => detailListRows(bodyH.value, props.state))
+const editions = computed(() => sliceList(episodes.value, props.state.cursor, gridRows.value))
 const view = computed(() =>
   gridWindow(episodes.value.length, props.state.cursor, bodyW.value, gridRows.value),
 )
@@ -196,6 +175,11 @@ function editionLine(ep: Episode, here: boolean): StyledText {
 
 <template>
   <Box flexDirection="column" :width="bodyW">
+    <template v-if="state.detailExpanded">
+      <PageHeader title="完整简介" right="I / Esc 收起" :width="bodyW" />
+      <Text v-for="(line, index) in expandedLines" :key="index" :content="ink(c.text, line)" :width="bodyW" :height="1" wrapMode="none" />
+    </template>
+    <template v-else>
     <PageHeader
       :title="state.detail?.title || state.detailTitle || (isMovie ? '电影' : '剧集')"
       :subtitle="state.detail?.category || ''"
@@ -211,9 +195,8 @@ function editionLine(ep: Episode, here: boolean): StyledText {
       :truncate="true"
     />
     <Text
-      v-for="(line, i) in descLines"
-      :key="`desc-${i}`"
-      :content="ink(c.faint, line)"
+      v-if="synopsis"
+      :content="synopsis"
       :width="bodyW"
       :height="1"
       wrapMode="none"
@@ -265,5 +248,6 @@ function editionLine(ep: Episode, here: boolean): StyledText {
       :width="bodyW"
       :rows="gridRows"
     />
+    </template>
   </Box>
 </template>
