@@ -52,9 +52,18 @@ export function createIQCNControlQueue(clock = { now: () => Date.now(), wait: pa
 }
 
 const queues = new WeakMap<GwClient, { scope: string; run: ReturnType<typeof createIQCNControlQueue> }>()
+const descriptorCaches = new WeakMap<GwClient,{scope:string;plans:Map<string,{expires:number;segments:Map<number,Record<string,unknown>>}>}>()
+
+export function clearIQCNDescriptors(cli:GwClient,planId:string):void {
+  descriptorCaches.get(cli)?.plans.delete(planId)
+}
 
 export function iqcnSegmentDescriptor(cli: GwClient, input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const scope = `${cli.host}\0${cli.key}`
+  signal?.throwIfAborted()
+  const warm=descriptorCaches.get(cli)
+  const ready=warm?.scope===scope ? warm.plans.get(String(input.planId||'')) : undefined
+  if(input.refresh!=='1'&&ready&&ready.expires>Date.now()&&ready.segments.has(Number(input.index)))return Promise.resolve({...ready.segments.get(Number(input.index))!,clientDescriptorCacheHit:true})
   let queue = queues.get(cli)
   if (!queue || queue.scope !== scope) {
     queue = { scope, run: createIQCNControlQueue() }
@@ -62,6 +71,25 @@ export function iqcnSegmentDescriptor(cli: GwClient, input: Record<string, unkno
   }
   return queue.run(() => {
     if (`${cli.host}\0${cli.key}` !== scope) throw new Error('网关连接已改变，请重新开始任务')
-    return cli.invoke('iqcn', 'download-segment', input, {}, { timeoutMs: 150000 })
+    let cache=descriptorCaches.get(cli)
+    if(!cache||cache.scope!==scope){cache={scope,plans:new Map()};descriptorCaches.set(cli,cache)}
+    const planId=String(input.planId||''), index=Number(input.index)
+    if(input.refresh==='1')cache.plans.delete(planId)
+    const plan=cache.plans.get(planId)
+    if(input.refresh!=='1'&&plan&&plan.expires>Date.now()&&plan.segments.has(index))return Promise.resolve({...plan.segments.get(index)!,clientDescriptorCacheHit:true})
+    return cli.invoke('iqcn', 'download-segment', {...input,batch:'1'}, {}, { timeoutMs: 150000 }).then(result=>{
+      if(`${cli.host}\0${cli.key}`!==scope)throw new Error('网关连接已改变，请重新开始任务')
+      if(Array.isArray(result.relatedSegments)&&result.relatedSegments.length<=128){
+        const segments=new Map<number,Record<string,unknown>>()
+        for(const value of result.relatedSegments){
+          if(!value||typeof value!=='object')continue
+          const row=value as Record<string,unknown>
+          if(row.transport==='local-v1'&&Number.isSafeInteger(row.index)&&Number(row.index)>=0&&Number.isSafeInteger(row.bytes)&&Number(row.bytes)>0&&Number(row.bytes)<=64*1024*1024&&Array.isArray(row.urls)&&row.urls.length>0&&row.urls.length<=16&&row.urls.every(u=>typeof u==='string'&&u.length<16384))segments.set(Number(row.index),row)
+        }
+        if(cache!.plans.size>=16&&!cache!.plans.has(planId))cache!.plans.delete(cache!.plans.keys().next().value!)
+        cache!.plans.set(planId,{expires:Date.now()+60_000,segments})
+      }
+      return result
+    })
   }, signal)
 }

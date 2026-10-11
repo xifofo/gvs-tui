@@ -8,10 +8,12 @@ import { asString, isObj } from './util.ts'
 import { iqcnSegmentDescriptor } from './iqcn-control.ts'
 
 export type IQCNProcessing = { version: number; ticket: string; identity: string }
+export type IQCNSegmentTiming = { index:number; bytes:number; descriptorMs:number; networkMs:number; restoreMs:number; readMs:number; totalMs:number; descriptorRequests:number; fetchAttempts:number }
 type LocalResult = { version: number; bytes: number; restored: boolean; clearCandidate: boolean }
 export type IQCNLocalRuntime = {
   fetch: (url: string, init: RequestInit) => Promise<Response>
   restore: (source: string, destination: string, material: IQCNProcessing, signal?: AbortSignal) => Promise<LocalResult>
+  onTiming?: (timing: IQCNSegmentTiming) => void
 }
 const MAX_SEGMENT = 64 * 1024 * 1024
 
@@ -145,25 +147,31 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
   if (!Number.isSafeInteger(expected) || expected <= 0 || expected > MAX_SEGMENT) throw new Error('爱奇艺国内版分片大小无效或超过 64 MiB')
   const id = randomUUID(), raw = join(work, `iqcn-${id}.source`), clear = join(work, `iqcn-${id}.clear`)
   let firstError = ''
+  const started=performance.now()
+  const timing:IQCNSegmentTiming={index,bytes:expected,descriptorMs:0,networkMs:0,restoreMs:0,readMs:0,totalMs:0,descriptorRequests:0,fetchAttempts:0}
   try {
     let downloaded = false
     for (let refresh = 0; refresh < 2 && !downloaded; refresh++) {
       signal?.throwIfAborted()
       let descriptor: Record<string, unknown>
+      const descriptorStart=performance.now()
       try {
+        if (!(refresh===0 && initial)) timing.descriptorRequests++
         descriptor = refresh === 0 && initial
           ? initial
           : await iqcnSegmentDescriptor(cli, { planId, index, ...(refresh ? { refresh: '1' } : {}) }, signal)
+        if(!(refresh===0&&initial)&&descriptor.clientDescriptorCacheHit===true)timing.descriptorRequests--
       } catch (error) {
         if (firstError) throw new Error(`${firstError}；刷新分片地址失败`)
         throw error
-      }
+      } finally {timing.descriptorMs+=performance.now()-descriptorStart}
       signal?.throwIfAborted()
       if (descriptor.transport !== 'local-v1' || descriptor.index !== index || descriptor.bytes !== expected || !Array.isArray(descriptor.urls) || !descriptor.urls.length || descriptor.urls.length > 16) {
         throw new Error('网关分片响应不符合本地下载协议')
       }
       const urls = descriptor.urls.map(mediaURL)
       for (const url of urls) {
+        const fetchStart=performance.now();timing.fetchAttempts++
         try {
           await fetchSegment(url, raw, expected, runtime.fetch, signal)
           downloaded = true
@@ -171,12 +179,13 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
         } catch (error) {
           signal?.throwIfAborted()
           firstError ||= error instanceof Error ? error.message : '分片直连失败'
-        }
+        } finally {timing.networkMs+=performance.now()-fetchStart}
       }
     }
     if (!downloaded) throw new Error(firstError || '爱奇艺国内版分片直连失败')
     signal?.throwIfAborted()
     let report: LocalResult
+    const restoreStart=performance.now()
     try { report = await runtime.restore(raw, clear, material, signal) }
     catch (error) {
       signal?.throwIfAborted()
@@ -185,10 +194,15 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
       const reason = match && ['material_invalid', 'restore_failed', 'restore_incomplete', 'input_open_failed', 'input_read_failed', 'output_create_failed', 'output_write_failed', 'helper_failed'].includes(match[1]!)
         ? `${match[1]}, exit=${match[2]}` : 'helper_failed'
       throw new Error(`爱奇艺国内版本地分片还原失败（分片 ${index + 1}，${expected} 字节，${reason}）`)
-    }
+    } finally {timing.restoreMs=performance.now()-restoreStart}
     signal?.throwIfAborted()
+    const readStart=performance.now()
     const bytes = readFileSync(clear)
+    timing.readMs=performance.now()-readStart
     if ((!report.restored && !report.clearCandidate) || report.version !== 1 || report.bytes !== bytes.length || bytes.length !== expected) throw new Error('爱奇艺国内版本地分片还原或长度校验失败')
+    timing.totalMs=performance.now()-started
+    // Timing contains no URLs, account IDs, processing material or local paths.
+    try {runtime.onTiming?.(timing)} catch { /* Diagnostics must not interrupt a download. */ }
     return bytes
   } finally {
     for (const path of [raw, clear]) { try { unlinkSync(path) } catch { /* absent */ } }

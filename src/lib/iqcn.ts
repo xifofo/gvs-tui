@@ -18,6 +18,7 @@ import { iqcnNamingEvidence, usesMeasuredNaming } from './completed-naming.ts'
 import { iqcnRendition, resolveIQCNSelection } from './iqcn-quality-selection.ts'
 import { runLog } from './runlog.ts'
 import { orderedMuxAudios } from './audio-selection.ts'
+import { clearIQCNDescriptors } from './iqcn-control.ts'
 export { iqcnSelection } from './iqcn-quality-selection.ts'
 
 /** Domestic selection uses source BID/bitrate/frame rate, never guessed tiers. */
@@ -86,9 +87,17 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     writeFileSync(transport, '')
     const material = iqcnProcessing(plan)
     const process = processingQueue(2)
+    const metrics={count:0,bytes:0,descriptorMs:0,networkMs:0,restoreMs:0,readMs:0,descriptorRequests:0,fetchAttempts:0}
+    const reportMetrics=()=>runLog(`iqcn performance ${JSON.stringify({...metrics,threads,processingWorkers:2,wallMs:Date.now()-started})}`)
     const local: IQCNLocalRuntime = {
       fetch: runtime?.fetch ?? ((url, init) => fetch(url, init)),
       restore: (source, destination, value, abort) => process(() => (runtime?.restore ?? restoreIQCNLocal)(source, destination, value, abort), abort),
+      onTiming: timing=>{
+        metrics.count++;metrics.bytes+=timing.bytes
+        for(const key of ['descriptorMs','networkMs','restoreMs','readMs','descriptorRequests','fetchAttempts'] as const)metrics[key]+=Math.round(timing[key])
+        try{runtime?.onTiming?.(timing)}catch{/* observer only */}
+        if(metrics.count%20===0)reportMetrics()
+      },
     }
     const sizes = segments.map(segment => Number(segment.contentlength))
     const totalBytes = sizes.reduce((sum, size) => sum + size, 0)
@@ -109,6 +118,7 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
         emit('本地下载与处理', 0.02 + completedBytes / totalBytes * 0.87, `分片 ${index + 1}/${segments.length} · 平均 ${speed.toFixed(2)} MiB/s`)
       },
     })
+    reportMetrics()
     const ffmpeg = await ensureFFmpeg(undefined, signal)
     const notes: string[] = []
     const copyOptions = { onCodecDiagnostic: () => {
@@ -166,6 +176,7 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     }
     return [...new Set([...notes, prepared.note].filter(Boolean))].join('；')
   } finally {
+    clearIQCNDescriptors(cli,planId)
     try { unlinkSync(staged) } catch { /* no staged output */ }
     await cli.invoke('iqcn', 'download-finish', { planId }, {}, { timeoutMs: 15000 }).catch(() => undefined)
   }

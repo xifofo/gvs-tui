@@ -11,6 +11,24 @@ const copy: IQCNLocalRuntime['restore'] = async (source, destination) => {
   return { version: 1, bytes: readFileSync(source).length, restored: true, clearCandidate: false }
 }
 
+test('segment timing distinguishes descriptor, transfer and restoration without secrets',async()=>{
+  const work=mkdtempSync(join(tmpdir(),'iqcn-timing-'))
+  let observed:Record<string,unknown>|undefined
+  const initial={transport:'local-v1',index:0,bytes:188,urls:['https://fixture.ptqy.gitv.tv/media?token=PRIVATE']}
+  const cli={invoke:async()=>{throw new Error('prefetched URL must not refetch descriptor')}} as unknown as GwClient
+  const result=await downloadIQCNLocalSegment(cli,'PRIVATE_PLAN',0,188,material,work,undefined,{
+    fetch:async()=>{await Bun.sleep(12);return new Response(Buffer.alloc(188))},
+    restore:async(...args)=>{await Bun.sleep(20);return copy(...args)},
+    onTiming:timing=>{observed={...timing}},
+  },initial)
+  expect(result.length).toBe(188)
+  expect(observed).toMatchObject({index:0,bytes:188,descriptorRequests:0,fetchAttempts:1})
+  expect(Number(observed?.networkMs)).toBeGreaterThanOrEqual(10)
+  expect(Number(observed?.restoreMs)).toBeGreaterThanOrEqual(15)
+  expect(JSON.stringify(observed)).not.toContain('PRIVATE')
+  expect(JSON.stringify(observed)).not.toContain(work)
+})
+
 test('18.8 MB segment goes directly to local disk; gateway carries only small metadata', async () => {
   const work = mkdtempSync(join(tmpdir(), 'iqcn-local-large-'))
   const size = 18800752, bytes = Buffer.alloc(size, 0x47)
@@ -31,7 +49,7 @@ test('18.8 MB segment goes directly to local disk; gateway carries only small me
   })
   expect(result.equals(bytes)).toBe(true)
   expect(fetched).toBe(1)
-  expect(requests).toEqual([{ planId: 'plan', index: 3 }])
+  expect(requests).toEqual([{ planId: 'plan', index: 3, batch:'1' }])
   expect(JSON.stringify(requests).length).toBeLessThan(100)
   expect(readdirSync(work)).toEqual([])
 })
@@ -49,7 +67,7 @@ test('truncated CDN body refreshes its address once and never processes partial 
     restore: async () => { restored = true; throw new Error('must not run') },
   })).rejects.toThrow('不完整')
   expect(restored).toBe(false)
-  expect(requests).toEqual([{ planId: 'plan', index: 0 }, { planId: 'plan', index: 0, refresh: '1' }])
+  expect(requests).toEqual([{ planId: 'plan', index: 0, batch:'1' }, { planId: 'plan', index: 0, refresh: '1', batch:'1' }])
   expect(readdirSync(work)).toEqual([])
 })
 

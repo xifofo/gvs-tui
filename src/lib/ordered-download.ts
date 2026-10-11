@@ -18,16 +18,22 @@ export async function orderedDownload<T>(options: {
   const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal
   type Outcome = { ok: true; value: T } | { ok: false; error: unknown }
   const pending = new Map<number, Promise<Outcome>>()
-  let next = 0, reserved = 0
+  let next = 0, reserved = 0, active = 0
   const fill = () => {
-    while (next < sizes.length && pending.size < limit && reserved + sizes[next]! <= budget && !signal.aborted) {
+    while (next < sizes.length && active < limit && reserved + sizes[next]! <= budget && !signal.aborted) {
       const index = next++
       reserved += sizes[index]!
+      active++
       // Attach rejection handling immediately, including out-of-order failures.
       const task = Promise.resolve().then(() => { signal.throwIfAborted(); return pull(index, signal) }).then<Outcome, Outcome>(
         value => ({ ok: true, value }),
         error => { controller.abort(error); return { ok: false, error } },
-      )
+      ).finally(() => {
+        active--
+        // A completed later segment still reserves bytes until ordered write,
+        // but must not occupy a network worker while an earlier segment stalls.
+        fill()
+      })
       pending.set(index, task)
     }
   }

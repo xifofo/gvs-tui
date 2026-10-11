@@ -45,6 +45,21 @@ test('byte budget bounds lookahead even with sixteen configured workers', async 
   expect(issued).toEqual([0, 1, 2])
 })
 
+test('completed out-of-order transfers release workers while retaining the byte budget',async()=>{
+  const head=deferred<number>(), advanced=deferred()
+  const issued:number[]=[],written:number[]=[]
+  const run=orderedDownload({sizes:Array(8).fill(2),threads:2,budget:8,
+    pull:async index=>{issued.push(index);if(index===3)advanced.resolve();return index===0?head.promise:index},
+    write:(value)=>{written.push(value)},
+  })
+  await advanced.promise
+  await Bun.sleep(5)
+  expect(issued).toEqual([0,1,2,3])
+  expect(written).toEqual([])
+  head.resolve(0);await run
+  expect(written).toEqual([0,1,2,3,4,5,6,7])
+})
+
 test('worker failure aborts its peers and drains cleanup before returning', async () => {
   const ready = deferred(), fail = deferred(), cleaned = deferred()
   let running = 0, writes = 0
