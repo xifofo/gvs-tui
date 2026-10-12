@@ -5,7 +5,9 @@ import { needsAttention } from '@shared/provider-registry'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
-import { go, gvs, prefs, runSearch, savePrefs, shownProviders, store, toast, errText } from '../store'
+import { dateKey, subscriptionItems } from '@shared/calendar'
+import { go, gvs, openDetail, prefs, runSearch, savePrefs, shownProviders, store, toast, errText } from '../store'
+import type { Provider } from '@shared/api'
 
 const text = ref('')
 const recent = computed(() => prefs().recentSearches.slice(0, 10))
@@ -18,7 +20,7 @@ const jobs = computed(() => {
   return store.jobs.filter((j) => j.state !== 'done').slice().sort((a, b) => order[a.state] - order[b.state] || b.createdAt - a.createdAt).slice(0, 4)
 })
 const doneToday = computed(() => store.jobs.filter((j) => j.state === 'done' && Date.now() - j.finishedAt < 86400e3).length)
-const isEmpty = computed(() => !store.jobs.length && !recent.value.length)
+const isEmpty = computed(() => !store.jobs.length && !recent.value.length && !store.subs?.subs.length)
 const hello = computed(() => {
   const h = new Date().getHours()
   return h < 6 ? '夜深了' : h < 12 ? '早上好' : h < 18 ? '下午好' : '晚上好'
@@ -32,6 +34,20 @@ function login(p: string) {
   store.accountDrawer = p as never
 }
 const clearRecent = () => void savePrefs({ recentSearches: [] })
+
+// 今日更新：订阅检测到 / 预计今天更新的集；芒果 TV 排播只显示数量
+const today = computed(() => {
+  const d = new Date(); d.setHours(0, 0, 0, 0)
+  return subscriptionItems(store.subs?.subs ?? [], d.getTime(), d.getTime() + 86400e3).slice(0, 5)
+})
+const freshSubs = computed(() => (store.subs?.subs ?? []).filter((s) => s.newCount > 0 && !today.value.some((i) => i.id === s.showId)).slice(0, 3))
+const todayText: Record<string, string> = { downloaded: '已下载', pending: '待更新', new: '未下载', failed: '失败' }
+const mgToday = ref(0)
+void gvs('calendar').then((r) => { mgToday.value = r.days.find((x) => x.date === dateKey(Date.now()))?.items.length ?? 0 }).catch(() => {})
+function openSub(provider: string, id: string) {
+  const s = store.subs?.subs.find((x) => x.provider === provider && x.showId === id)
+  void openDetail(provider as Provider, id, { title: s?.title, poster: s?.poster, mediaKind: 'show' })
+}
 </script>
 
 <template>
@@ -78,9 +94,22 @@ const clearRecent = () => void savePrefs({ recentSearches: [] })
               <button v-else-if="j.state === 'failed'" type="button" class="btn sm icon" aria-label="重试" @click="act(() => gvs('retryJob', j.id))"><Icon name="retry" :size="14" /></button>
             </div>
           </section>
-          <section class="card box soon">
+          <section class="card box">
             <div class="bh"><h2 class="h2s">今日更新</h2><button type="button" class="linkish" @click="go('calendar')">追剧日历 ›</button></div>
-            <p class="muted small">订阅在追的剧后，这里会显示今天更新的集数和下载状态。</p>
+            <div v-if="!today.length && !freshSubs.length" class="muted small">
+              {{ store.subs?.subs.length ? '订阅的剧今天还没有更新。' : '订阅在追的剧后，这里会显示今天更新的集数和下载状态。' }}
+              <template v-if="mgToday"> 芒果 TV 今天有 {{ mgToday }} 部更新。</template>
+            </div>
+            <button v-for="(i, k) in today" :key="i.id + k" type="button" class="today" @click="openSub(i.provider, i.id)">
+              <Poster class="tp" :url="i.poster" :provider="i.provider" :title="i.title" :title-size="9" />
+              <span class="tm"><b><PlatformLogo :provider="i.provider" :size="14" />{{ i.title }}</b><span class="muted small">{{ i.episodes }} · {{ i.time }}</span></span>
+              <span class="chip" :class="{ ok: i.status === 'downloaded', warn: i.status === 'new' }">{{ todayText[i.status ?? 'pending'] }}</span>
+            </button>
+            <button v-for="s in freshSubs" :key="s.id" type="button" class="today" @click="go('subscriptions')">
+              <Poster class="tp" :url="s.poster" :provider="s.provider" :title="s.title" :title-size="9" />
+              <span class="tm"><b><PlatformLogo :provider="s.provider" :size="14" />{{ s.title }}</b><span class="muted small">{{ s.lastCheck?.message }}</span></span>
+              <span class="chip warn">{{ s.newCount }} 集新</span>
+            </button>
           </section>
         </div>
         <div class="col">
@@ -133,5 +162,9 @@ const clearRecent = () => void savePrefs({ recentSearches: [] })
 .att { display: flex; align-items: center; gap: 10px; }
 .am { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
 .ok-line { display: flex; align-items: center; gap: 6px; color: var(--ok); }
-.soon { border-style: dashed; }
+.today { display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 0; text-align: left; cursor: pointer; }
+.today:hover b { text-decoration: underline; }
+.tp { width: 34px; height: 48px; padding: 2px; flex-shrink: 0; }
+.tm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.tm b { display: flex; align-items: center; gap: 5px; }
 </style>

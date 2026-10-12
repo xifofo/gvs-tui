@@ -6,7 +6,7 @@ import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
 import Skeleton from '../components/Skeleton.vue'
 import Quality from './Quality.vue'
-import { back, openCard, openQuality, store } from '../store'
+import { back, errText, go, gvs, openCard, openQuality, store, subscriptionOf, toast } from '../store'
 import type { Card } from '@shared/api'
 
 const d = computed(() => store.detail)
@@ -111,6 +111,24 @@ const hintPoster = computed(() => hint.value.poster ?? '')
 const descOpen = ref(false)
 /** 4 行以上的简介才给展开按钮（按字符数估，不引额外测量） */
 const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
+
+/** 订阅：剧集（非电影）可订阅，按规则组自动下载新集 */
+const sub = computed(() => (d.value ? subscriptionOf(d.value.provider, d.value.id) : null))
+const subBusy = ref(false)
+async function subscribe() {
+  const v = d.value
+  if (!v || subBusy.value) return
+  subBusy.value = true
+  try {
+    const card = store.detailCard
+    await gvs('subscribe', { provider: v.provider, showId: v.id, title: v.title, poster: v.poster, kind: v.kind, updateText: card && card.provider === v.provider ? [card.meta, card.desc].join(' ') : '' })
+    toast(`已订阅《${v.title}》：之后的新集会按规则自动下载`, 'ok')
+  } catch (e) {
+    toast(errText(e), 'err')
+  } finally {
+    subBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -162,6 +180,8 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
             <span v-if="d.vip" class="chip warn">VIP</span>
             <span v-if="d.drm" class="chip">DRM · {{ d.drm }}</span>
             <span v-if="d.score" class="chip mono">{{ d.score }}</span>
+            <button v-if="!isMovie && !sub" type="button" class="btn sm subscribe" :disabled="subBusy" @click="subscribe"><Icon name="star" :size="14" />订阅追更</button>
+            <button v-else-if="sub" type="button" class="btn sm outline subscribe" title="打开订阅" @click="store.subFocus = sub.id; go('subscriptions')"><Icon name="check" :size="14" />已订阅 · {{ sub.autoDownload ? '自动下载' : '仅通知' }}</button>
           </div>
           <p v-if="d.desc" class="desc" :class="{ open: descOpen }">{{ d.desc }}</p>
           <button v-if="descLong" type="button" class="linkish more" :aria-expanded="descOpen" @click="descOpen = !descOpen">{{ descOpen ? '收起' : '展开' }}</button>
