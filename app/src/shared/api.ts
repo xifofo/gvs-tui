@@ -156,6 +156,7 @@ export type QualityView = {
   width: number
   height: number
   size: number
+  duration?: number
   codec: string
   drm: string
   hdr: string

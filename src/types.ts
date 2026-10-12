@@ -43,6 +43,7 @@ export type Quality = {
   label: string
   title: string
   size: number
+  duration?: number
   width: number
   height: number
   codec: string

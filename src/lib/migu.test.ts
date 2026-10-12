@@ -32,6 +32,19 @@ test('Migu preserves verified resolution and blocks protected catalog entries',a
   ])
 })
 
+test('Migu keeps every same-tier App rendition with size, codec and duration',()=>{
+  const variants=[
+    ['9|h264|u111417|b1810|3840x1600',3840,1600,'h264',5622606240],
+    ['9|h265|u121417|b1810|3840x1600|cuvahdr',3840,1600,'h265',4475407304],
+    ['5|h265|u121414|b251|2560x1066|cuvahdr',2560,1066,'h265',3660280288],
+    ['5|h265|u121415|b251|2560x1066',2560,1066,'h265',3557530392],
+  ]as const
+  const result=miguOptions({qualityOptions:variants.map(([id,width,height,codec,size])=>({id,width,height,codec,size,duration:2725,label:'臻享 超高清',available:true}))})
+  expect(result.qualities).toHaveLength(4)
+  expect(result.qualities.map(q=>q.id)).toEqual(variants.map(v=>v[0]))
+  expect(result.qualities.map(q=>[q.codec,q.size,q.duration])).toEqual(variants.map(v=>[v[3],v[4],2725]))
+})
+
 test('Migu refuses incomplete episodes and retains App focus episode',async()=>{
   const fixture={id:'968082110',focusVid:'968181177',episodesComplete:true,episodes:[{id:'968181177',number:1}]}
   const data=await webVideoDetail(async(_p,_a,input)=>{expect(input.terminal).toBe('mobile');return fixture},'migu','968181177')

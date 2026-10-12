@@ -61,10 +61,25 @@ async function main(){
     assert.deepEqual(detail.args.slice(0,2),['migu',expected])
     assert((await run("document.querySelector('main .src')?.textContent")).includes(name==='tv'?'咪咕 TV（咪视界）':'咪咕 App'))
     await capture(name+'-detail')
+    if(name==='app'){
+      await run("(()=>{const episode=document.querySelector('button[aria-label^=\"第 1 集\"]');if(episode.getAttribute('aria-pressed')!=='true')episode.click()})()")
+      await wait("!Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='下一步：选画质')?.disabled")
+      await click('下一步：选画质')
+      await wait("document.querySelectorAll('label.migu-columns').length===12")
+      const rows=await run("Array.from(document.querySelectorAll('label.migu-columns')).map(row=>row.innerText)")
+      assert.equal(rows.filter(row=>row.includes('2560×1066')).length,2)
+      assert.equal(rows.filter(row=>row.includes('3840×1600')).length,2)
+      assert(rows.every(row=>row.includes('00:45:25')))
+      assert(rows.some(row=>row.includes('H.264'))&&rows.some(row=>row.includes('H.265')))
+      assert(!(await run("document.querySelector('main').innerText")).includes('u121417'))
+      await capture('app-rendition-table')
+      await run("document.querySelectorAll('label.migu-columns input')[3].click()")
+      await wait("window.miguSearchSmoke.calls().filter(c=>c.method==='namingPreview').at(-1)?.args[0].quality===3")
+    }
     await click('搜索')
     await wait("!!document.querySelector('main button.pill')")
   }
-  fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({passed:true,scope:'Built renderer with synthetic IPC; external network blocked; independent App/TV recommendations, category switches, search counts, filtering, labels and detail IDs verified.',pills,calls:await run('window.miguSearchSmoke.calls()')},null,2))
+  fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({passed:true,scope:'Built renderer with synthetic IPC; external network blocked; independent App/TV catalogs and exact App rendition rows, codec, size, resolution, duration and selected index verified.',pills,calls:await run('window.miguSearchSmoke.calls()')},null,2))
   app.exit(0)
 }
 main().catch(async e=>{

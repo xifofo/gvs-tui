@@ -32,6 +32,7 @@ const starting = ref(false)
 const manualKind = ref(false)
 let tmdbSeq = 0
 const isMovie = computed(() => d.value?.kind === 'movie')
+const miguApp = computed(() => d.value?.provider === 'migu' && !d.value.id.startsWith('tv:') && !d.value.id.startsWith('tv-series:'))
 const canMatchTmdb = computed(() => supportsTmdb(d.value?.provider))
 
 const quality = computed(() => probe.value?.qualities[qIndex.value] ?? null)
@@ -279,6 +280,7 @@ const spec = (q: { width: number; height: number; size: number; fps: number }) =
     .filter(Boolean)
     .join(' · ')
 const CODEC_NAME: Record<string, string> = { bytevc1: 'H.265', bytevc2: 'H.266', h264: 'H.264', avc: 'H.264', h265: 'H.265', hevc: 'H.265', av1: 'AV1' }
+const renditionSize = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : bytes > 0 ? `${(bytes / 1024 ** 2).toFixed(2)} MB` : '源站未提供'
 /** 码流名给人看：红果的 id 是「1080p|bytevc1|」这种拼接串，去掉空段和标题里已有的部分，编码换成通用名 */
 function streamCode(q: { stream: string; label: string }): string {
   if (d.value?.provider === 'iqcn') return ''
@@ -359,7 +361,20 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
         <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
         <fieldset class="fs video-options">
           <legend>视频画质</legend>
-          <label v-for="q in probe.qualities" :key="q.index" class="opt" :class="{ on: q.index === qIndex }">
+          <template v-if="miguApp">
+            <div class="migu-columns muted small" aria-hidden="true"><span /><span>序号</span><span>清晰度</span><span>文件体积</span><span>视频编码</span><span>分辨率</span><span>影片时长</span></div>
+            <label v-for="q in probe.qualities" :key="q.index" class="opt migu-columns" :class="{ on: q.index === qIndex }" :aria-label="`${q.label} · ${CODEC_NAME[q.codec.toLowerCase()] || q.codec} · ${q.width}×${q.height} · ${human(q.size)}`">
+              <input v-model="qIndex" type="radio" name="quality" :value="q.index" class="sr-only" />
+              <span class="radio"><span v-if="q.index === qIndex" /></span>
+              <span class="mono dim">{{ q.index + 1 }}</span>
+              <span class="on-t">{{ qname(q) }}</span>
+              <span class="mono small">{{ renditionSize(q.size) }}</span>
+              <span class="mono small">{{ CODEC_NAME[q.codec.toLowerCase()] || q.codec || '未知' }}</span>
+              <span class="mono small">{{ q.width && q.height ? `${q.width}×${q.height}` : '未知' }}</span>
+              <span class="mono small">{{ q.duration ? `${Math.floor(q.duration / 3600).toString().padStart(2,'0')}:${Math.floor(q.duration % 3600 / 60).toString().padStart(2,'0')}:${Math.floor(q.duration % 60).toString().padStart(2,'0')}` : '源站未提供' }}</span>
+            </label>
+          </template>
+          <label v-for="q in miguApp ? [] : probe.qualities" :key="q.index" class="opt" :class="{ on: q.index === qIndex }">
             <input v-model="qIndex" type="radio" name="quality" :value="q.index" class="sr-only" />
             <span class="radio"><span v-if="q.index === qIndex" /></span>
             <span class="ot"><span class="on-t">{{ qname(q) }}</span><span v-if="streamCode(q)" class="mono muted code">{{ streamCode(q) }}</span></span>
@@ -513,6 +528,9 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .on-t { font-size: 14px; font-weight: 600; }
 .code { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spec { margin-left: auto; font-size: 13px; white-space: nowrap; }
+.migu-columns { display: grid; grid-template-columns: 20px 30px minmax(100px,1fr) 80px 68px 100px 70px; gap: 10px; align-items: center; }
+.migu-columns > .on-t { min-width: 0; overflow-wrap: anywhere; }
+.migu-columns.muted { padding: 8px 12px; }
 .abox { padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; gap: 10px; }
 .alegend { display: flex; align-items: baseline; gap: 10px; }
 .atitle { font-size: 16px; font-weight: 700; }

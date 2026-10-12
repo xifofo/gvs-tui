@@ -1254,6 +1254,7 @@ export class Core {
       width: q.width,
       height: q.height,
       size: q.size,
+      duration: q.duration,
       codec: q.codec,
       drm: q.drm,
       hdr: q.hdr ?? '',
