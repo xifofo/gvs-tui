@@ -39,6 +39,23 @@ const RELOGIN_RE = /requires re-login|needs_relogin|invalid Yk-Sign/i
 const DEFAULT_TIMEOUT_MS = 45_000
 const TENCENT_PLAY_TIMEOUT_MS = 120_000
 
+export const GW_ACCOUNT_HEADER = 'X-Gvs-Account'
+export const GW_DEFAULT_ACCOUNT = 'default'
+export type GatewayAccountsInfo = { multiAccount: true; providers: string[]; header: string }
+
+/** 本地账号槽位 id → 网关账号 id（^[a-z0-9][a-z0-9_-]{0,31}$） */
+export function gatewayAccountId(slotId: string): string {
+  let id = slotId.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[^a-z0-9]+/, '')
+  if (id.length > 32) id = id.slice(0, 20) + '-' + hashTail(slotId)
+  if (!id || id === GW_DEFAULT_ACCOUNT) id = 'a' + hashTail(slotId)
+  return id
+}
+function hashTail(s: string): string {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
+  return (h >>> 0).toString(36)
+}
+
 export class GwClient {
   host: string
   key: string
@@ -49,6 +66,11 @@ export class GwClient {
   private operationScope = ''
   private diagnosticJobID = ''
   private readonly source: 'tui_process' | 'electron_process'
+  /**
+   * 多账号网关（/v1/accounts multiAccount=true）：返回这次请求要用的网关账号 id。
+   * 空 / 'default' = 旧行为（网关按 Key 的默认会话）。旧网关从不设置。
+   */
+  accountFor?: (provider: string) => string | undefined
 
   constructor(host: string, key: string, cfgOf?: (() => FileConfig | string | undefined) | string, source: 'tui_process' | 'electron_process' = 'tui_process') {
     this.host = host.replace(/\/+$/, '')
@@ -86,6 +108,7 @@ export class GwClient {
     const child = new GwClient(this.host, this.key, this.cfgOf, this.source)
     child.proxyOf = this.proxyOf
     child.diagnosticJobID = String(jobID)
+    child.accountFor = this.accountFor
     if (!this.cfgOf?.()?.tencentObservations && process.env.GVS_TENCENT_OBSERVE !== '1') return child
     child.operations = this.operationTracker().fork(String(jobID), vid, async input => {
       const envelope = await child.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, undefined, 5000)
@@ -93,6 +116,55 @@ export class GwClient {
     })
     child.operationScope = `${child.host}\0${child.key}`
     return child
+  }
+
+  /** 固定某平台用某个网关账号（下载任务入队时锁定，之后切换「当前账号」不影响它） */
+  fixedAccount(provider: string, account: string | undefined): GwClient {
+    if (!account || account === GW_DEFAULT_ACCOUNT) {
+      if (!this.accountFor?.(provider)) return this
+    }
+    const child = new GwClient(this.host, this.key, this.cfgOf, this.source)
+    child.proxyOf = this.proxyOf
+    child.diagnosticJobID = this.diagnosticJobID
+    const parent = this.accountFor
+    child.accountFor = (p) => (p === provider ? account || GW_DEFAULT_ACCOUNT : parent?.(p))
+    return child
+  }
+
+  /** 网关多账号能力；旧网关（没有 /v1/accounts）返回 null */
+  async accountsInfo(): Promise<GatewayAccountsInfo | null> {
+    try {
+      const env = await this.request('GET', '/v1/accounts', undefined, undefined, 10_000)
+      const d = (env.data ?? {}) as Partial<GatewayAccountsInfo>
+      if (d.multiAccount !== true || !Array.isArray(d.providers)) return null
+      return { multiAccount: true, providers: d.providers.filter((x): x is string => typeof x === 'string'), header: typeof d.header === 'string' ? d.header : GW_ACCOUNT_HEADER }
+    } catch {
+      return null
+    }
+  }
+
+  /** 在网关登记账号；已存在算成功 */
+  async ensureAccount(provider: string, id: string, name: string): Promise<void> {
+    try {
+      await this.request('POST', '/v1/accounts', { provider, id, name: name.slice(0, 64) }, undefined, 10_000)
+    } catch (e) {
+      if ((e as { httpStatus?: number }).httpStatus === 409 && !/LIMIT/i.test(String((e as Error).message))) return
+      throw e
+    }
+  }
+
+  async renameAccount(provider: string, id: string, name: string): Promise<void> {
+    await this.request('PATCH', `/v1/accounts/${encodeURIComponent(id)}`, { provider, name: name.slice(0, 64) }, undefined, 10_000)
+  }
+
+  /** 网关会先注销这个账号的平台会话再删除登记 */
+  async deleteAccount(provider: string, id: string): Promise<void> {
+    try {
+      await this.request('DELETE', `/v1/accounts/${encodeURIComponent(id)}?provider=${encodeURIComponent(provider)}`, undefined, undefined, 20_000)
+    } catch (e) {
+      if ((e as { httpStatus?: number }).httpStatus === 404) return
+      throw e
+    }
   }
 
   observeTencentTransfer(bytes: number, total: number): void { this.operations?.observeTransfer(bytes, total) }
@@ -137,6 +209,12 @@ export class GwClient {
     const timeoutMs =
       opts?.timeoutMs ??
       (provider === 'tencent' && action === 'play' ? TENCENT_PLAY_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
+    const account = this.accountFor?.(provider)
+    if (account && account !== GW_DEFAULT_ACCOUNT) {
+      // 账号的凭证已经托管在网关该账号下；别再用全局配置里的 Cookie 头覆盖它
+      const { 'Iq-Cookie': _iq, ...rest } = extra ?? {}
+      extra = { ...rest, [GW_ACCOUNT_HEADER]: account }
+    }
     if (provider === 'douyin' && !extra?.['Dy-Cookie']) {
       const ck = this.cfgOf?.()?.douyinCookie
       if (ck) extra = { ...extra, 'Dy-Cookie': ck }
