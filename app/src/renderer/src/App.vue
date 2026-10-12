@@ -9,7 +9,8 @@ import CommandPalette from './components/CommandPalette.vue'
 import Setup from './views/Setup.vue'
 import Home from './views/Home.vue'
 import Accounts from './views/Accounts.vue'
-import ComingSoon from './views/ComingSoon.vue'
+import Calendar from './views/Calendar.vue'
+import Subscriptions from './views/Subscriptions.vue'
 import Discover from './views/Discover.vue'
 import Search from './views/Search.vue'
 import Detail from './views/Detail.vue'
@@ -45,7 +46,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             <Quality v-else-if="store.view === 'quality'" key="quality" />
             <Downloads v-else-if="store.view === 'downloads'" key="downloads" />
             <Accounts v-else-if="store.view === 'accounts'" key="accounts" />
-            <ComingSoon v-else-if="store.view === 'calendar' || store.view === 'subscriptions'" :key="store.view" />
+            <Calendar v-else-if="store.view === 'calendar'" key="calendar" />
+            <Subscriptions v-else-if="store.view === 'subscriptions'" key="subscriptions" />
             <Settings v-else-if="store.view === 'settings'" key="settings" />
           </KeepAlive>
         </Transition>

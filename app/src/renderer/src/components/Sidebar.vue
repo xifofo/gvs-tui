@@ -23,9 +23,10 @@ const accounts = computed(() => {
   const all = store.state?.accounts ?? []
   return shownProviders().map((p) => all.find((a) => a.provider === p)).filter((a): a is NonNullable<typeof a> => !!a)
 })
+const freshSubs = computed(() => (store.subs?.subs ?? []).filter((s) => s.newCount > 0).length)
 const attention = computed(() => accounts.value.filter((a) => accountBucket(a) === 'attention').length)
 const readyCount = computed(() => accounts.value.filter((a) => a.tone === 'ok').length)
-const badge = (v: View) => (v === 'downloads' ? activeJobs.value : v === 'accounts' ? attention.value : 0)
+const badge = (v: View) => (v === 'downloads' ? activeJobs.value : v === 'accounts' ? attention.value : v === 'subscriptions' ? freshSubs.value : 0)
 const dotColor = (a: (typeof accounts.value)[number]) => {
   const b = accountBucket(a)
   return b === 'ok' ? 'var(--side-ok)' : b === 'attention' ? (a.tone === 'err' ? '#ff8a7a' : 'var(--side-warn)') : 'var(--side-muted)'

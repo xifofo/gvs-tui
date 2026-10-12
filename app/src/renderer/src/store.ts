@@ -12,6 +12,7 @@ import type {
   ProbeResult,
   Provider,
   SearchResult,
+  SubsView,
   UpdateState,
   Tone,
 } from '@shared/api'
@@ -77,6 +78,10 @@ export const store = reactive({
   /** 打开着的确认框数量：Esc 返回时要避开 */
   dialogCount: 0,
   update: null as UpdateState | null,
+  /** 订阅列表与检查器状态（主进程推送） */
+  subs: null as SubsView | null,
+  /** 订阅页要高亮/展开的订阅 */
+  subFocus: '',
   toasts: [] as Toast[],
 })
 
@@ -296,6 +301,17 @@ export function initStore(): void {
   void gvs('updateState').then((u) => (store.update = u)).catch(() => {})
   void gvs('state').then((s) => (store.state = s)).catch((e) => toast(errText(e), 'err'))
   void gvs('jobs').then((j) => (store.jobs = j)).catch((e) => toast(errText(e), 'err'))
+  window.gvs.on('subs', (v) => (store.subs = v))
+  window.gvs.on('navigate', (n) => {
+    if (n.subId) store.subFocus = n.subId
+    if (n.view === 'subscriptions' || n.view === 'calendar' || n.view === 'downloads' || n.view === 'home') go(n.view)
+  })
+  void gvs('subscriptions').then((v) => (store.subs = v)).catch(() => {})
+}
+
+/** 当前剧是否已订阅 */
+export function subscriptionOf(provider: string, showId: string) {
+  return store.subs?.subs.find((s) => s.provider === provider && s.showId === showId) ?? null
 }
 
 export function hasProvider(p: Provider): boolean {
