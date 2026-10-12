@@ -7,7 +7,9 @@ import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
 import Skeleton from '../components/Skeleton.vue'
-import { go, openCard, prefs, store } from '../store'
+import { go, gvs, openCard, prefs, store } from '../store'
+import { BADGE_LABEL, badgesFromText, mergeHints, qualityScore, type QualityHint } from '@shared/quality-badges'
+import { reactive } from 'vue'
 
 const groups = computed(() => store.search?.groups ?? [])
 /** 结果到达顺序 → 用户的平台排序，保证合并后芯片顺序稳定 */
@@ -17,7 +19,52 @@ const orderedGroups = computed(() => {
 })
 const rows = computed(() => mergeSearch<Card>(orderedGroups.value))
 const filterSet = computed(() => new Set<string>(store.searchFilter))
-const shown = computed(() => filterRows(rows.value, filterSet.value))
+// ---- 画质徽标：先用搜索结果自带的文字，没有再懒加载探测（主进程限流 2 并发、12 秒超时、缓存 6 小时）
+const probed = reactive<Record<string, QualityHint | null>>({})
+const asked = new Set<string>()
+const PROBE_CAP = 12
+type Row = (typeof rows.value)[number]
+const probeTarget = (row: Row) => row.sources.find((c) => c.target === 'detail' && c.id && !c.video)
+const metaHint = (row: Row) => badgesFromText(row.title, row.meta, ...row.sources.map((c) => `${c.title} ${c.meta} ${c.desc}`))
+const hintOf = (row: Row): QualityHint => {
+  const t = probeTarget(row)
+  return mergeHints(metaHint(row), t ? probed[`${t.provider}:${t.id}`] : null)
+}
+const hintPending = (row: Row) => { const t = probeTarget(row); return !!t && asked.has(`${t.provider}:${t.id}`) && probed[`${t.provider}:${t.id}`] === undefined }
+function requestHint(row: Row) {
+  const t = probeTarget(row)
+  if (!t || metaHint(row).height) return
+  const key = `${t.provider}:${t.id}`
+  if (asked.has(key) || asked.size >= PROBE_CAP * 4) return
+  asked.add(key)
+  void gvs('qualityHint', t.provider, t.id).then((h) => { probed[key] = h }).catch(() => { probed[key] = null })
+}
+let io: IntersectionObserver | null = null
+const rowEls = new Map<Element, Row>()
+let requested = 0
+function observe(el: unknown, row: Row) {
+  if (!(el instanceof Element) || rowEls.has(el)) return
+  rowEls.set(el, row)
+  io ??= new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue
+      const r = rowEls.get(e.target)
+      if (r && requested < PROBE_CAP) { requested++; requestHint(r) }
+      io?.unobserve(e.target)
+    }
+  }, { rootMargin: '120px' })
+  io.observe(el)
+}
+watch(() => store.search?.query, () => { requested = 0; rowEls.clear(); io?.disconnect(); io = null })
+onBeforeUnmount(() => io?.disconnect())
+
+const sortBy = ref<'relevance' | 'quality'>('relevance')
+const qFilter = ref<'' | '4k' | 'hdr' | 'dolby'>('')
+const passQ = (h: QualityHint) => !qFilter.value || (qFilter.value === '4k' ? h.badges.includes('4K') : qFilter.value === 'hdr' ? h.badges.includes('HDR') || h.badges.includes('DV') : h.badges.includes('DOLBY') || h.badges.includes('ATMOS'))
+const shown = computed(() => {
+  const list = filterRows(rows.value, filterSet.value).filter((r) => passQ(hintOf(r)))
+  return sortBy.value === 'quality' ? list.map((r, i) => ({ r, i, s: qualityScore(hintOf(r)) })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.r) : list
+})
 const total = computed(() => groups.value.reduce((n, g) => n + g.cards.length, 0))
 const failed = computed(() => groups.value.filter((g) => g.error))
 const returned = computed(() => groups.value.map((g) => g.provider))
@@ -66,6 +113,14 @@ function metaText(row: { year: number; meta: string }): string {
       <span v-if="store.search && groups.length" class="muted">
         {{ rows.length }} 部作品 · {{ total }} 条结果 · {{ groups.length }} 个平台 · {{ (store.search.ms / 1000).toFixed(1) }}s
       </span>
+      <div class="qtools">
+        <select v-model="qFilter" class="qsel" aria-label="按画质筛选">
+          <option value="">全部画质</option><option value="4k">仅 4K</option><option value="hdr">HDR / 杜比视界</option><option value="dolby">杜比音效</option>
+        </select>
+        <select v-model="sortBy" class="qsel" aria-label="排序">
+          <option value="relevance">按相关度</option><option value="quality">画质优先</option>
+        </select>
+      </div>
       <div ref="menu" class="fwrap">
         <button type="button" class="btn sm" :class="{ outline: store.searchFilter.length }" :aria-expanded="menuOpen" aria-haspopup="listbox" @click="menuOpen = !menuOpen">
           平台：{{ filterLabel }}<Icon name="chevron" :size="14" />
@@ -91,13 +146,17 @@ function metaText(row: { year: number; meta: string }): string {
 
     <div v-if="store.searchError" class="error-box">{{ store.searchError }}</div>
     <div v-else class="list">
-      <div v-for="row in shown" :key="row.key" class="card row" :class="{ off: !row.sources.some(playable) }">
+      <div v-for="row in shown" :key="row.key" :ref="(el) => observe(el, row)" class="card row" :class="{ off: !row.sources.some(playable) }">
         <button type="button" class="thumb-b" :disabled="!row.sources.some(playable)" :aria-label="`打开 ${row.title}`" @click="open(row)">
           <Poster class="thumb" :url="row.poster" :provider="row.sources[0]!.provider" :title="row.title" :title-size="12" />
         </button>
         <div class="info">
           <button type="button" class="t clamp2" :disabled="!row.sources.some(playable)" @click="open(row)">{{ row.title }}</button>
           <span class="dim small">{{ [row.year || '', kindText(row.mediaKind), metaText(row)].filter(Boolean).join(' · ') }}</span>
+          <span v-if="hintOf(row).badges.length || hintPending(row)" class="qb" :title="hintOf(row).source === 'probe' ? '已探测第一集的最高画质' : '来自平台搜索信息'">
+            <span v-for="b in hintOf(row).badges" :key="b" class="qbadge" :class="b === '1080P' ? 'r1080' : b">{{ BADGE_LABEL[b] }}</span>
+            <span v-if="hintPending(row)" class="qbadge wait"><span class="spin" style="width: 9px; height: 9px" />探测画质</span>
+          </span>
           <span v-if="row.desc" class="muted desc">{{ row.desc }}</span>
           <div class="srcs">
             <button
@@ -138,7 +197,16 @@ function metaText(row: { year: number; meta: string }): string {
 <style scoped>
 .head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
 .q { max-width: 60%; overflow-wrap: anywhere; }
-.fwrap { margin-left: auto; position: relative; align-self: center; }
+.qtools { margin-left: auto; display: flex; gap: 6px; align-self: center; }
+.qsel { height: 30px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 0 8px; font-size: 13px; }
+.fwrap { position: relative; align-self: center; }
+.qb { display: flex; gap: 5px; flex-wrap: wrap; }
+.qbadge { height: 20px; padding: 0 7px; border-radius: 4px; font: 700 11px var(--font-mono); display: inline-flex; align-items: center; gap: 4px; background: var(--ink); color: var(--paper); letter-spacing: .3px; }
+.qbadge.r1080 { background: var(--paper-2); color: var(--ink); }
+.qbadge.HDR { background: #6b4a12; color: #ffd98a; }
+.qbadge.DV { background: #1d1d3a; color: #c9c3ff; }
+.qbadge.DOLBY, .qbadge.ATMOS { background: #0f2f3a; color: #9fe3f5; }
+.qbadge.wait { background: transparent; color: var(--ink-3); border: 1px dashed var(--line); font-weight: 500; }
 .fmenu { position: absolute; right: 0; top: 42px; width: 280px; padding: 8px; z-index: 20; box-shadow: 0 14px 40px rgba(0, 0, 0, .16); display: flex; flex-direction: column; gap: 2px; }
 .fm-h { display: flex; justify-content: space-between; padding: 4px 8px 6px; font-size: 12px; color: var(--ink-3); }
 .fm-i { height: 36px; padding: 0 8px; border: 0; background: transparent; border-radius: 6px; display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; text-align: left; }
