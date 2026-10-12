@@ -13,6 +13,8 @@ import type {
   Provider,
   SearchResult,
   SubsView,
+  AccountsView,
+  AccountSlot,
   UpdateState,
   Tone,
 } from '@shared/api'
@@ -82,6 +84,10 @@ export const store = reactive({
   subs: null as SubsView | null,
   /** 订阅页要高亮/展开的订阅 */
   subFocus: '',
+  /** 多账号簿（主进程推送） */
+  accounts: null as AccountsView | null,
+  /** 本次下载/探测选用的账号：provider → 账号 id（空 = 默认） */
+  accountPick: {} as Record<string, string>,
   toasts: [] as Toast[],
 })
 
@@ -284,7 +290,7 @@ export async function openQuality(): Promise<void> {
   else go('quality')
   const gen = ++probeGen
   try {
-    const result = await gvs('probe', d.provider, eps)
+    const result = await gvs('probe', d.provider, eps, store.accountPick[d.provider] || undefined)
     if (gen === probeGen && store.detail === d) store.probe = result
   } catch (e) {
     if (gen === probeGen) store.probeError = errText(e)
@@ -307,6 +313,16 @@ export function initStore(): void {
     if (n.view === 'subscriptions' || n.view === 'calendar' || n.view === 'downloads' || n.view === 'home') go(n.view)
   })
   void gvs('subscriptions').then((v) => (store.subs = v)).catch(() => {})
+  window.gvs.on('accounts', (v) => (store.accounts = v))
+  void gvs('accounts').then((v) => (store.accounts = v)).catch(() => {})
+}
+
+/** 某平台的账号槽位：默认账号排第一 */
+export function accountsOf(provider: string): AccountSlot[] {
+  const b = store.accounts?.book
+  if (!b) return []
+  const d = b.defaults[provider]
+  return b.slots.filter((s) => s.provider === provider).sort((x, y) => Number(y.id === d) - Number(x.id === d) || x.createdAt - y.createdAt)
 }
 
 /** 当前剧是否已订阅 */

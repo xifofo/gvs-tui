@@ -4,8 +4,10 @@ import type { CheckWindow, Subscription, SubscriptionPatch } from '@shared/api'
 import { formatRules, parseRules } from '@shared/rule-groups'
 import { windowText } from '@shared/subscription'
 import Icon from './Icon.vue'
+import AccountPicker from './AccountPicker.vue'
+import { accountsOf } from '../store'
 
-const props = defineProps<{ sub: Pick<Subscription, 'title' | 'rules' | 'autoDownload' | 'upgrade' | 'window'>; globalMinutes: number; saving?: boolean }>()
+const props = defineProps<{ sub: Pick<Subscription, 'title' | 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'provider' | 'accountId'>; globalMinutes: number; saving?: boolean }>()
 const emit = defineEmits<{ save: [patch: SubscriptionPatch]; cancel: [] }>()
 
 const PRESETS = [
@@ -19,6 +21,7 @@ const DAYS = ['一', '二', '三', '四', '五', '六', '日'].map((n, i) => ({ 
 const w = props.sub.window
 const form = reactive({
   rules: props.sub.rules,
+  accountId: props.sub.accountId ?? '',
   autoDownload: props.sub.autoDownload,
   upgrade: props.sub.upgrade,
   kind: (w?.kind ?? 'global') as 'global' | CheckWindow['kind'],
@@ -50,7 +53,7 @@ function toggleDay(d: number) {
 }
 function submit() {
   if (invalid.value) return
-  emit('save', { rules: formatRules(parsed.value), autoDownload: form.autoDownload, upgrade: form.upgrade, window: win.value })
+  emit('save', { accountId: form.accountId || undefined, rules: formatRules(parsed.value), autoDownload: form.autoDownload, upgrade: form.upgrade, window: win.value })
 }
 </script>
 
@@ -93,6 +96,11 @@ function submit() {
         <label class="field">{{ form.kind === 'interval' ? '每隔（分钟）' : '窗口内每隔（分钟）' }}<input v-model.number="form.minutes" type="number" min="1" max="1440" class="input mono" /></label>
         <label v-if="form.kind === 'episodes'" class="field">上线后持续检查（分钟）<input v-model.number="form.grace" type="number" min="10" class="input mono" /></label>
       </div>
+    </section>
+
+    <section v-if="accountsOf(sub.provider).length > 1" class="blk">
+      <div class="bh"><b>账号</b><span class="muted small">检查和下载用这个账号；会员受限时自动换号</span></div>
+      <AccountPicker v-model="form.accountId" :provider="sub.provider" label="订阅账号" />
     </section>
 
     <div class="acts">

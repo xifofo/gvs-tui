@@ -8,7 +8,8 @@ import Icon from '../components/Icon.vue'
 import Skeleton from '../components/Skeleton.vue'
 import IQCNAudioPicker from '../components/IQCNAudioPicker.vue'
 import { preferredQualityIndex } from '@shared/ui-prefs'
-import { back, errText, go, gvs, human, openQuality, openSettings, prefs, store, toast } from '../store'
+import { accountsOf, back, errText, go, gvs, human, openQuality, openSettings, prefs, store, toast } from '../store'
+import AccountPicker from '../components/AccountPicker.vue'
 
 defineOptions({ name: 'QualityView' })
 /** embedded：嵌在剧集页里（不显示返回与标题，默认收起手动选择） */
@@ -240,6 +241,7 @@ const request = computed<EnqueueRequest | null>(() => {
     defaultAudioId: defaultAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
     tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
+    accountId: store.accountPick[v.provider] || undefined,
   }
 })
 
@@ -361,6 +363,7 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
     </div>
     <div v-else-if="probe" class="cols">
       <div v-if="!manual" class="left auto">
+        <AccountPicker v-if="d && accountsOf(d.provider).length > 1" :provider="d.provider" @change="openQuality()" />
         <div v-if="probe.warning" class="warn-box">{{ probe.warning }}</div>
         <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
         <div class="card autosum">

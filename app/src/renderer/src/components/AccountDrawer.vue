@@ -6,12 +6,14 @@ import AccountExtras from './AccountExtras.vue'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
 import ProviderAccounts from './ProviderAccounts.vue'
-import { prefs, savePrefs, store } from '../store'
+import AccountSlots from './AccountSlots.vue'
+import { accountsOf, prefs, savePrefs, store } from '../store'
 import { useDialogFocus } from '../dialog-focus'
 
 const props = defineProps<{ provider: Provider }>()
 const meta = computed(() => providerMeta(props.provider))
 const account = computed(() => store.state?.accounts.find((a) => a.provider === props.provider))
+const slotCount = computed(() => accountsOf(props.provider).length)
 const hidden = computed(() => prefs().hiddenProviders.includes(props.provider))
 const drawer = ref<HTMLElement | null>(null)
 const close = () => { if (!store.qr) store.accountDrawer = null }
@@ -48,19 +50,14 @@ function hide() {
         </section>
 
         <section class="sec">
-          <h3>账号</h3>
-          <div class="acct-row">
-            <span class="av"><Icon name="user" :size="16" /></span>
-            <div class="am"><b>当前 API Key 绑定的账号</b><span class="muted">{{ account?.summary || '—' }}</span></div>
-            <span class="chip">默认</span>
-          </div>
-          <!-- TODO(multi-account): 网关目前每个 API Key 每个平台只保存一份会话；网关支持后在这里列出并切换多个账号。 -->
-          <button type="button" class="btn sm" disabled :title="meta.multiAccount ? '' : '网关暂不支持同一平台多个账号'">＋ 添加另一个账号（即将支持）</button>
+          <h3>账号 <span class="muted">· {{ slotCount }} 个</span></h3>
+          <AccountSlots v-if="!meta.methods.includes('none') || slotCount" :provider="provider" />
+          <span v-else class="muted small">这个平台无需登录。</span>
         </section>
       </div>
       <footer class="df">
         <button v-if="!hidden" type="button" class="btn sm" @click="hide"><Icon name="eyeoff" :size="15" />隐藏此平台</button>
-        <span class="muted small">凭证由网关加密托管，本机不保存密码。</span>
+        <span class="muted small">凭证由网关加密托管；多账号的 Cookie 用系统密钥环加密存本机。</span>
       </footer>
     </aside>
   </div>
