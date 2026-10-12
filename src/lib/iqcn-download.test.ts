@@ -10,9 +10,14 @@ import type { GwClient } from './client.ts'
 import { JobHub, runTask, type DlTask, type JobEvt } from './jobs.ts'
 import type { IQCNLocalRuntime } from './iqcn-local.ts'
 import { defaultConfig } from './config.ts'
-import { probeFinishedMedia } from './gvs-record.ts'
+import { hostFFprobe, probeFinishedMedia } from './gvs-record.ts'
 import { reserveOutputPath } from './completed-naming.ts'
 import { actualVersionSummary } from './actual-version.ts'
+
+// These cases assert names and audio defaults measured by the host ffprobe.
+// probeFinishedMedia never downloads ffprobe, so hosts without it (e.g. the
+// Windows CI runner) correctly fall back to requested specs; skip there.
+const withHostProbe = test.skipIf(!hostFFprobe())
 
 async function multiAudioFixture(dir: string): Promise<Buffer> {
   const ffmpeg = await ensureFFmpeg(), source = join(dir, 'multi-audio.ts')
@@ -66,7 +71,7 @@ function fixtureClient(bytes: Buffer, subtitles = true, onSegment?: () => void, 
   return { cli, runtime, released: () => released, peak: () => peak }
 }
 
-test('domestic shared runner names the measured default audio, preserves S00 and protects collisions and legacy queues', async () => {
+withHostProbe('domestic shared runner names the measured default audio, preserves S00 and protects collisions and legacy queues', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-naming-'))
   let hub: JobHub | undefined
   try {
@@ -151,7 +156,7 @@ test('domestic mux refuses an output reservation changed during download and sti
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }, 60000)
 
-test('domestic job preflights audio and muxes restored media without runtime decode-validation', async () => {
+withHostProbe('domestic job preflights audio and muxes restored media without runtime decode-validation', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-download-'))
   const ffmpeg = await ensureFFmpeg()
   const source = join(dir, 'source.ts')

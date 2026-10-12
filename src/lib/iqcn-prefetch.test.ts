@@ -50,7 +50,7 @@ test('expired initial URL refreshes only the rejected segment through its origin
       restore, fetch: async url => url.endsWith('/new') ? new Response(Buffer.alloc(188)) : new Response('', { status: 403 }),
     }, descriptor(2))
     expect(bytes.length).toBe(188)
-    expect(calls).toEqual([{ planId: 'plan', index: 2, refresh: '1' }])
+    expect(calls).toEqual([{ planId: 'plan', index: 2, refresh: '1', batch: '1' }])
   } finally { rmSync(work, { recursive: true, force: true }) }
 })
 

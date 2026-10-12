@@ -2,11 +2,15 @@ import { expect, mock, test } from 'bun:test'
 import { join } from 'node:path'
 
 const state = { isPackaged: false }
-mock.module(join(import.meta.dir, '../../app/node_modules/electron'), () => ({ app: {
+// Mock the bare specifier: app/node_modules is absent in the TUI CI jobs, so a
+// path-based mock alone leaves the shim's `import 'electron'` unresolvable.
+const electron = () => ({ app: {
   get isPackaged() { return state.isPackaged },
   getAppPath: () => '/fixture/gvs/app',
   getPath: () => '/fixture/user-data',
-} }))
+} })
+mock.module('electron', electron)
+mock.module(join(import.meta.dir, '../../app/node_modules/electron'), electron)
 const { iqcnLocalPath, tuiBinDir } = await import('../../app/src/main/shims/tool-paths.ts')
 
 test('development IQCN helper uses the checkout tools', () => {

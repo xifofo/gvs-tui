@@ -95,11 +95,16 @@ export function mediaSpecsFromProbe(payload: string, options: ProbeAudioOptions 
   } catch { return { status: 'unavailable' } }
 }
 
+/** Host ffprobe from the tools directory or PATH; never downloaded. */
+export function hostFFprobe(): string | undefined {
+  const executable = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
+  return [tuiBinDir(), ...(process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':')]
+    .map(dir => join(dir, executable)).find(p => { try { return statSync(p).isFile() } catch { return false } })
+}
+
 /** Optional host ffprobe; no tool download and no decoding of the full video. */
 export async function probeFinishedMedia(path: string, signal?: AbortSignal, options: ProbeAudioOptions = {}): Promise<MediaSpecs> {
-  const executable = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
-  const candidate = [tuiBinDir(), ...(process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':')]
-    .map(dir => join(dir, executable)).find(p => { try { return statSync(p).isFile() } catch { return false } })
+  const candidate = hostFFprobe()
   if (!candidate) return Promise.resolve({ status: 'unavailable' })
   const payload = await new Promise<string>(resolve => {
     const child = spawn(candidate, ['-v', 'error', '-probesize', '8M', '-analyzeduration', '8000000',

@@ -23,7 +23,7 @@ test('segment 429 retains plan/index and does not refresh CDN or process incompl
       restore: async (source, dest) => { restored++; copyFileSync(source, dest); return { version: 1, bytes: readFileSync(dest).length, restored: true, clearCandidate: false } },
     })
     expect(data.length).toBe(188)
-    expect(calls).toEqual([{ planId: 'same-plan', index: 8 }, { planId: 'same-plan', index: 8 }])
+    expect(calls).toEqual([{ planId: 'same-plan', index: 8, batch: '1' }, { planId: 'same-plan', index: 8, batch: '1' }])
     expect([fetched, restored]).toEqual([1, 1])
     expect(readdirSync(work)).toEqual([])
   } finally { rmSync(work, { recursive: true, force: true }) }
