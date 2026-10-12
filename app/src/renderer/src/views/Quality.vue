@@ -7,9 +7,14 @@ import { defaultTmdbHit } from '@shared/tmdb-selection'
 import Icon from '../components/Icon.vue'
 import Skeleton from '../components/Skeleton.vue'
 import IQCNAudioPicker from '../components/IQCNAudioPicker.vue'
-import { back, errText, go, gvs, human, openQuality, openSettings, store, toast } from '../store'
+import { preferredQualityIndex } from '@shared/ui-prefs'
+import { back, errText, go, gvs, human, openQuality, openSettings, prefs, store, toast } from '../store'
 
 defineOptions({ name: 'QualityView' })
+/** embedded：嵌在剧集页里（不显示返回与标题，默认收起手动选择） */
+const props = defineProps<{ embedded?: boolean }>()
+/** 嵌入模式下是否展开「手动选择画质/音轨」 */
+const manual = ref(!props.embedded)
 
 const d = computed(() => store.detail)
 const probe = computed(() => store.probe)
@@ -63,7 +68,7 @@ watch(
   (p) => {
     ++tmdbSeq
     tmdbLoading.value = false
-    qIndex.value = 0
+    qIndex.value = p ? preferredQualityIndex(p.qualities, prefs().defaultQuality) : 0
     preferredAudioId.value = ''
     tmdb.value = null
     tmdbHits.value = []
@@ -307,10 +312,11 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
 </script>
 
 <template>
-  <div class="page" :class="{ 'quality-page': store.probing || (probe && !store.probeError) }">
-    <button type="button" class="back" @click="back('detail')"><Icon name="back" :size="16" />{{ d?.title ?? '返回' }}</button>
+  <div class="page" :class="{ 'quality-page': store.probing || (probe && !store.probeError), embedded }">
+    <button v-if="!embedded" type="button" class="back" @click="back('detail')"><Icon name="back" :size="16" />{{ d?.title ?? '返回' }}</button>
     <div class="h1-row">
-      <h1 class="h1">选择画质</h1>
+      <h1 v-if="!embedded" class="h1">选择画质</h1>
+      <h2 v-else class="h2s">画质与音轨</h2>
       <span class="muted">已选 {{ count }} {{ noun }}<template v-if="count > 1"> · 按{{ isMovie ? '首个版本' : '第一集' }}探测，整批沿用</template></span>
     </div>
 
@@ -354,7 +360,19 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
       <div style="margin-top: 10px"><button type="button" class="btn sm" @click="openQuality">重试</button></div>
     </div>
     <div v-else-if="probe" class="cols">
-      <div class="left">
+      <div v-if="!manual" class="left auto">
+        <div v-if="probe.warning" class="warn-box">{{ probe.warning }}</div>
+        <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
+        <div class="card autosum">
+          <span class="lab">已按默认规则自动选择</span>
+          <div class="arow"><span class="muted">视频</span><b>{{ quality ? qname(quality) : '—' }}</b><span class="dim small">{{ quality ? spec(quality) : '' }}</span></div>
+          <div class="arow"><span class="muted">音轨</span><b>{{ embeddedOnly ? '随视频内嵌' : audioSummary || '—' }}</b></div>
+          <span class="muted small">默认画质：{{ { best: '最高可用', '2160': '不超过 4K', '1080': '不超过 1080P', '720': '不超过 720P' }[prefs().defaultQuality] }}（可在设置里修改）</span>
+          <button type="button" class="btn sm" @click="manual = true">手动选择画质 / 音轨<Icon name="down" :size="14" /></button>
+        </div>
+      </div>
+      <div v-else class="left">
+        <button v-if="embedded" type="button" class="linkish collapse" @click="manual = false"><Icon name="up" :size="14" />收起手动选择</button>
         <div v-if="probe.warning" class="warn-box">{{ probe.warning }}</div>
         <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
         <fieldset class="fs video-options">
@@ -489,6 +507,14 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
 
 <style scoped>
 .quality-page { overflow: hidden; }
+.page.embedded { height: min(640px, 78vh); padding: 18px 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+.page.embedded .h1-row { gap: 12px; }
+.h2s { font-size: 17px; font-weight: 700; }
+.autosum { padding: 18px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.autosum .lab { font-size: 13px; font-weight: 700; color: var(--orange-text); }
+.arow { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.arow .muted { width: 36px; }
+.collapse { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }
 .back { margin-bottom: -8px; }
 .kind-options { display: flex; gap: 8px; }
 .season-select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }

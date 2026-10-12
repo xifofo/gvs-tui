@@ -5,7 +5,9 @@ import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
 import Skeleton from '../components/Skeleton.vue'
-import { back, openQuality, store } from '../store'
+import Quality from './Quality.vue'
+import { back, openCard, openQuality, store } from '../store'
+import type { Card } from '@shared/api'
 
 const d = computed(() => store.detail)
 const collection = computed({ get: () => store.detailCollection, set: value => { store.detailCollection = value } })
@@ -16,6 +18,16 @@ const collections = computed(() => {
 const eps = computed(() => (d.value?.episodes ?? []).filter(e => !collection.value || e.collection === collection.value))
 const duplicateNumbers = computed(() => new Set(eps.value.map(e => e.number)).size < eps.value.length)
 const picked = computed(() => new Set(store.picked))
+/** 同一部剧在其它平台的来源（来自合并搜索结果） */
+const alternates = computed(() => (store.detailCard && store.detailCard.provider === d.value?.provider ? store.detailAlternates : []))
+function switchSource(c: Card) {
+  const current = store.detailCard
+  openCard(c, [...alternates.value.filter((a) => a !== c), ...(current ? [current] : [])])
+}
+// 选集变了，之前探测的画质就作废：收起内嵌画质面板
+watch(() => store.picked.join(','), () => {
+  if (store.qualityInline && !store.probing) store.qualityInline = false
+})
 const range = ref('')
 const rangeError = ref('')
 const anchor = ref(-1)
@@ -103,7 +115,7 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
 
 <template>
   <div class="page">
-    <button type="button" class="back" @click="back('search')"><Icon name="back" :size="16" />返回</button>
+    <button type="button" class="back" @click="back(store.search ? 'search' : 'home')"><Icon name="back" :size="16" />返回</button>
 
     <template v-if="store.detailLoading">
       <div class="hero">
@@ -137,7 +149,14 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
         <div class="wrap"><Poster class="poster" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" /></div>
         <div class="info">
           <div class="src dim"><PlatformLogo :provider="d.provider" :size="18" /><span>{{ PROVIDER_NAME[d.provider] }}</span><span v-if="d.category">· {{ d.category }}</span></div>
-          <h1 class="title">{{ d.title }}</h1>
+          <h1 class="title" :title="d.title">{{ d.title }}</h1>
+          <div v-if="alternates.length" class="alts" role="group" aria-label="切换平台">
+            <span class="muted small">也在</span>
+            <span class="alt on"><PlatformLogo :provider="d.provider" :size="16" />{{ PROVIDER_NAME[d.provider] }}</span>
+            <button v-for="a in alternates" :key="a.provider + a.id" type="button" class="alt" :title="`切换到 ${PROVIDER_NAME[a.provider]} 的版本`" @click="switchSource(a)">
+              <PlatformLogo :provider="a.provider" :size="16" />{{ PROVIDER_NAME[a.provider] }}<span v-if="a.vip" class="vip">VIP</span>
+            </button>
+          </div>
           <span v-if="meta" class="dim meta">{{ meta }}</span>
           <div class="chips">
             <span v-if="d.vip" class="chip warn">VIP</span>
@@ -209,11 +228,12 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
 
         <div class="foot">
           <span><b class="mono n">{{ store.picked.length }}</b> {{ collection ? '条' : d.pickNoun }}已选</span>
-          <button type="button" class="btn primary" :disabled="!store.picked.length" @click="openQuality">
-            下一步：选画质<Icon name="arrow" />
+          <button type="button" class="btn primary" :disabled="!store.picked.length || store.probing" @click="openQuality">
+            {{ store.qualityInline ? '重新取画质' : '选画质' }}<Icon :name="store.qualityInline ? 'refresh' : 'down'" />
           </button>
         </div>
       </section>
+      <Quality v-if="store.qualityInline" embedded />
     </template>
   </div>
 </template>
@@ -226,7 +246,12 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
 .poster-sk { width: 142px; height: 202px; }
 .info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding-top: 4px; }
 .src { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-.title { font-family: var(--font-display); font-size: 32px; font-weight: 700; letter-spacing: -.5px; line-height: 1.2; }
+.title { font-family: var(--font-display); font-size: 32px; font-weight: 700; letter-spacing: -.5px; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.alts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.alt { height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.alt:hover { border-color: var(--ink); }
+.alt.on { background: var(--ink); color: var(--paper); border-color: var(--ink); cursor: default; }
+.alt .vip { font-size: 10px; color: var(--orange-text); font-weight: 700; }
 .meta { font-size: 15px; }
 .desc { font-size: 14px; line-height: 1.7; color: var(--ink-2); max-width: 720px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .desc.open { -webkit-line-clamp: unset; }
