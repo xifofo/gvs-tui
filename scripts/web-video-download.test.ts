@@ -94,7 +94,7 @@ test('Migu uses mobile protocol and downloads HLS directly with embedded audio',
   const t=task('migu','tv:8')
   const cli={invoke:async(p:string,a:string,input:Record<string,unknown>)=>{
     expect(p).toBe('migu');expect(a).toBe('resolve');expect(input.terminal).toBe('unified');expect(input.quality).toBe('tv:8')
-    return {id:t.vid,actualQuality:'tv:8',trial:false,media:[{type:'video',url:base+'/index.m3u8',quality:'tv:8',format:'hls',drm:false,duration:2}]}
+    return {id:t.vid,actualQuality:'tv:8',trial:false,media:[{type:'video',url:base+'/index.m3u8',quality:'tv:8',format:'hls',drm:false,upstreamNeedClothHat:true,duration:2}]}
   }} as unknown as Pick<GwClient,'invoke'>
   const work=join(dir,'migu');mkdirSync(work)
   const output=join(dir,'migu-output.mkv')

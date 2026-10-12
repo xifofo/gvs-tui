@@ -8,6 +8,7 @@ import { ffmpegConcat, validateAudio, validateVideoDecode } from './ffmpeg'
 import { mkvmergeMux, mkvmergeRemux } from './mkvmerge'
 import { mgtvCapabilities, miguCapabilities, selectedBilibiliMedia, webTracks, audioChoice, type WebTrack } from './web-video-providers'
 import { probeFinishedMedia } from './gvs-record'
+import { verifyMiguManifest } from './migu-manifest'
 
 type Emit = (status: string, pct: number, log: string) => void
 async function verifyCoverage(path: string, expected: number | undefined, signal?: AbortSignal) {
@@ -24,7 +25,11 @@ export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileCo
     if (String(data.actualQuality) !== task.quality) throw new Error('咪咕所选画质已不可用，请重新选档')
     if (data.trial === true || Number(data.trialDuration)>0) throw new Error('咪咕返回试看片段，已停止下载')
     const source = webTracks(data).find(t=>t.type === 'video')
-    if (!source || source.source.trial === true || source.source.needClothHat === true) throw new Error('咪咕没有返回完整可下载媒体')
+    if (!source || source.source.trial === true) throw new Error('咪咕没有返回完整可下载媒体')
+    if (source.source.upstreamNeedClothHat === true || source.source.needClothHat === true) {
+      emit('校验', .03, '本机核对咪咕清单的加密声明')
+      await verifyMiguManifest(source.url, source.headers, signal)
+    }
     await downloadPlaylist({src:source.url,dest,ref:'https://www.miguvideo.com/',headers:source.headers,threads:cfg.threads,select:'muxed',muxTracks:true,transport:'re',workDir:work,workTag:'migu',signal,cb:(n,total,info)=>emit(playlistStatus('下载',info?.phase||'download'),.05+.85*(total>1?n/total:n),info?.log||'咪咕 CDN → 本机')})
     await verifyCoverage(dest,task.duration || Number(source.source.duration) || undefined,signal)
     return
