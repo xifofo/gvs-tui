@@ -91,13 +91,26 @@ test('substituted or preview MGTV streams are rejected before any media is reque
 })
 
 test('Migu uses mobile protocol and downloads HLS directly with embedded audio',async()=>{
-  const t=task('migu','tv:8')
+  const t=task('migu','5')
   const cli={invoke:async(p:string,a:string,input:Record<string,unknown>)=>{
-    expect(p).toBe('migu');expect(a).toBe('resolve');expect(input.terminal).toBe('unified');expect(input.quality).toBe('tv:8')
-    return {id:t.vid,actualQuality:'tv:8',trial:false,media:[{type:'video',url:base+'/index.m3u8',quality:'tv:8',format:'hls',drm:false,upstreamNeedClothHat:true,duration:2}]}
+    expect(p).toBe('migu');expect(a).toBe('resolve');expect(input.terminal).toBe('mobile');expect(input.quality).toBe('5')
+    return {id:t.vid,actualQuality:'5',trial:false,media:[{type:'video',url:base+'/index.m3u8',quality:'5',format:'hls',drm:false,upstreamNeedClothHat:true,duration:2}]}
   }} as unknown as Pick<GwClient,'invoke'>
   const work=join(dir,'migu');mkdirSync(work)
   const output=join(dir,'migu-output.mkv')
+  await downloadWebVideo(cli,cfg,t,output,work,()=>{})
+  expect(inspect(output).tracks.map(t=>t.type)).toEqual(['video','audio'])
+},60000)
+
+test('Migu TV download stays on TV with its own episode and quality',async()=>{
+  const t={...task('migu','8'),vid:'tv:3660147'}
+  const cli={invoke:async(p:string,a:string,input:Record<string,unknown>)=>{
+    expect(p).toBe('migu');expect(a).toBe('resolve')
+    expect(input).toEqual({id:'tv:3660147',quality:'8',terminal:'tv',devicePreset:'max'})
+    return {id:'3660147',actualQuality:'8',trial:false,media:[{type:'video',url:base+'/index.m3u8',quality:'8',format:'hls',drm:false,duration:2}]}
+  }} as unknown as Pick<GwClient,'invoke'>
+  const work=join(dir,'migu-tv');mkdirSync(work)
+  const output=join(dir,'migu-tv-output.mkv')
   await downloadWebVideo(cli,cfg,t,output,work,()=>{})
   expect(inspect(output).tracks.map(t=>t.type)).toEqual(['video','audio'])
 },60000)

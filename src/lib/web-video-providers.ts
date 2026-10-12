@@ -113,7 +113,7 @@ export async function probeWebVideo(invoke: Invoke, provider: WebVideoProvider, 
   if (provider === 'migu') return miguOptions(await invoke(provider,'qualities',{id,...miguCapabilities(id)}))
   return provider === 'mgtv' ? mgtvOptions(await invoke(provider,'qualities',{vid:id,...mgtvCapabilities})) : bilibiliOptions(await invoke(provider,'resolve',{id}))
 }
-export function miguCapabilities(id: string) { return {terminal:id.startsWith('tv:') ? 'tv' : 'unified',devicePreset:'max'} }
+export function miguCapabilities(id: string) { return {terminal:id.startsWith('tv:') || id.startsWith('tv-series:') ? 'tv' : 'mobile',devicePreset:'max'} }
 export function miguOptions(data: Obj): {qualities:Quality[];audios:Audio[]} {
   const qualities = rows(data.qualityOptions).filter(q=>q.available === true).map((q):Quality=>({
     id:str(q.id),stream:str(q.id),label:str(q.label)||str(q.id),

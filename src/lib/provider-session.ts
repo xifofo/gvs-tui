@@ -1,6 +1,6 @@
 export type SessionProvider = 'mewatch' | 'hamivideo' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu'
 export type SessionCommand = { provider: SessionProvider; op: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string }
-export type ProviderSessionView = { provider: SessionProvider; state: string; authenticated: boolean; summary: string; qrDataUrl?: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
+export type ProviderSessionView = { provider: SessionProvider; terminal?: 'mobile' | 'tv' | 'unified'; state: string; authenticated: boolean; summary: string; qrDataUrl?: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
 const positive = (v: unknown, fallback: number) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback
@@ -15,44 +15,46 @@ export class ProviderSessions {
   private activation?: ProviderSessionView
   private nextPoll = 0
   private nextSMS = 0
-  private busy = new Map<SessionProvider, { op: string; result?: Promise<ProviderSessionView> }>()
+  private busy = new Map<string, { op: string; result?: Promise<ProviderSessionView> }>()
   private views = new Map<string, ProviderSessionView>()
   private cnFlow?: { id: string; expires: number; nextPoll: number }
   private mangoFlow?: { id: string; expires: number; nextPoll: number }
   private biliFlow?: { expires: number; nextPoll: number }
-  private miguFlow?: { id: string; expires: number; nextPoll: number; terminal:'mobile'|'tv'|'unified' }
+  private miguFlows = new Map<string, { id: string; expires: number; nextPoll: number }>()
   constructor(private readonly invoke: Invoke, private readonly now = Date.now) {}
   setScope(scope: string): void {
     if (scope === this.scope) return
-    this.scope = scope; this.scopeRevision++; this.busy.clear(); this.flow = ''; this.flowExpires = 0; this.nextPoll = 0; this.nextSMS = 0; this.activation = undefined; this.cnFlow = undefined; this.mangoFlow = undefined; this.biliFlow = undefined; this.miguFlow = undefined; this.views.clear()
+    this.scope = scope; this.scopeRevision++; this.busy.clear(); this.flow = ''; this.flowExpires = 0; this.nextPoll = 0; this.nextSMS = 0; this.activation = undefined; this.cnFlow = undefined; this.mangoFlow = undefined; this.biliFlow = undefined; this.miguFlows.clear(); this.views.clear()
   }
   command(c: SessionCommand): Promise<ProviderSessionView> {
-    const operation = c.op + (c.provider === 'migu' ? ':'+(c.terminal || 'unified') : '')
-    const pending = this.busy.get(c.provider)
+    const busyKey = c.provider + (c.provider === 'migu' ? ':'+(c.terminal || 'mobile') : '')
+    const operation = c.op
+    const pending = this.busy.get(busyKey)
     // Startup and the account page can ask for the same read-only status together.
     if (pending?.result && pending.op === operation && (c.op === 'status' || c.op === 'web_status')) return pending.result
     if (pending) return Promise.reject(new Error('登录请求进行中，请勿重复操作'))
     const entry: { op: string; result?: Promise<ProviderSessionView> } = { op: operation }
     const revision = this.scopeRevision
-    this.busy.set(c.provider, entry)
+    this.busy.set(busyKey, entry)
     entry.result = this.execute(c, revision).finally(() => {
       // An old gateway's response must not unlock a request on the new gateway.
-      if (this.busy.get(c.provider) === entry) this.busy.delete(c.provider)
+      if (this.busy.get(busyKey) === entry) this.busy.delete(busyKey)
     })
     return entry.result
   }
   private async execute(c: SessionCommand, revision: number): Promise<ProviderSessionView> {
     if (!OPS[c.provider]?.has(c.op)) throw new Error('不支持的登录操作')
     const web = c.provider === 'hamivideo' && c.op.startsWith('web_')
-    const miguTerminal = c.terminal || (c.op === 'poll' ? this.miguFlow?.terminal : undefined) || 'unified'
+    const miguTerminal = c.terminal || 'mobile'
+    const miguFlow = this.miguFlows.get(miguTerminal)
     const key = c.provider + (c.provider === 'migu' ? ':'+miguTerminal : web ? ':web' : ':tv')
     const input: Record<string, unknown> = { op: c.op }
     if (c.provider === 'migu') {
       input.terminal=miguTerminal
       if (miguTerminal === 'tv') input.verifyId='968181178'
       if (c.op === 'poll') {
-        const flow=this.miguFlow
-        if (!flow || flow.terminal!==miguTerminal || this.now()>=flow.expires) throw new Error('咪咕二维码已过期，请重新开始')
+        const flow=miguFlow
+        if (!flow || this.now()>=flow.expires) throw new Error('咪咕二维码已过期，请重新开始')
         if (this.now()<flow.nextPoll) return this.views.get(key)!
         input.loginId=flow.id
       }
@@ -122,24 +124,25 @@ export class ProviderSessions {
     const previous = c.provider === 'mewatch' ? this.activation : this.views.get(key)
     const view: ProviderSessionView = { provider: c.provider, state, authenticated, summary: authenticated ? '已登录；播放仍以源站授权为准' : state === 'imported' ? '已导入；尚未验证订阅' : state }
     if (c.provider === 'migu') {
-      const label=miguTerminal==='tv' ? '咪视界 TV' : miguTerminal==='unified' ? '咪咕' : '咪咕手机端'
+      view.terminal = miguTerminal
+      const label=miguTerminal==='tv' ? '咪咕 TV（咪视界）' : miguTerminal==='unified' ? '咪咕' : '咪咕 App'
       if (c.op === 'start') {
         const url=new URL(text(data.qrCodeUrl)), expires=positive(data.expiresAt,0)*1000
         if (url.protocol!=='https:' || url.hostname!=='passport.migu.cn' || url.port || url.username || url.password || !url.pathname.startsWith('/qrc/') || !text(data.loginId) || expires<=this.now()) throw new Error('网关返回的咪咕二维码无效')
         const image=text(data.qrCodeDataUrl)
         if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(image) || image.length>1024*1024) throw new Error('网关返回的咪咕二维码图片无效')
         view.url=url.href;view.qrDataUrl=image;view.expiresAt=expires;view.interval=positive(data.pollIntervalMs,3000)/1000
-        this.miguFlow={id:text(data.loginId),expires,nextPoll:this.now()+view.interval*1000,terminal:miguTerminal}
+        this.miguFlows.set(miguTerminal,{id:text(data.loginId),expires,nextPoll:this.now()+view.interval*1000})
       } else if (state==='pending') {
-        view.url=previous?.url;view.qrDataUrl=previous?.qrDataUrl;view.expiresAt=this.miguFlow?.expires;view.interval=positive(data.pollIntervalMs,3000)/1000
-        if (this.miguFlow) this.miguFlow.nextPoll=this.now()+view.interval*1000
+        view.url=previous?.url;view.qrDataUrl=previous?.qrDataUrl;view.expiresAt=miguFlow?.expires;view.interval=positive(data.pollIntervalMs,3000)/1000
+        if (miguFlow) miguFlow.nextPoll=this.now()+view.interval*1000
       }
       view.summary=authenticated ? `${label}已登录；播放以账号授权为准` : state==='pending' ? `用咪咕视频 App 扫码，确认${label}登录` : state==='expired' ? '二维码已过期，请刷新' : state==='denied' ? '登录已取消' : `${label}尚未登录`
       if (miguTerminal==='unified' && authenticated) {
         view.tvAuthenticated=data.tvAuthenticated===true
         view.summary=data.tvAuthenticated===true ? '咪咕已登录，TV 和 App 画质已合并' : '咪咕已登录，App 可用；TV 能力暂不可用，取流时会自动检查'
       }
-      if (this.miguFlow?.terminal===miguTerminal && (authenticated || c.op==='logout' || ['expired','denied'].includes(state))) this.miguFlow=undefined
+      if (authenticated || c.op==='logout' || ['expired','denied'].includes(state)) this.miguFlows.delete(miguTerminal)
     }
     if (c.provider === 'mgtv') {
       if (c.op === 'start') {

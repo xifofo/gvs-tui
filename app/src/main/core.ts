@@ -560,6 +560,7 @@ export class Core {
     if (this.has('iqcn')) void this.providerSession({ provider: 'iqcn', op: 'status' }).catch(() => {})
     if (this.has('hamivideo')) void this.providerSession({ provider: 'hamivideo', op: 'status' }).catch(() => {})
     for (const p of ['mgtv','bilibili','migu'] as const) if (this.has(p)) void this.providerSession({provider:p,op:'status'}).catch(()=>{})
+    if (this.has('migu')) void this.providerSession({provider:'migu',op:'status',terminal:'tv'}).catch(()=>{})
   }
 
   private async probeDouyin(): Promise<void> {
@@ -688,7 +689,12 @@ export class Core {
     return this.providers().map((p): AccountView => {
       if (p === 'mgtv' || p === 'bilibili' || p === 'migu') {
         const account = this.providerAccounts.get(p)
-        return {provider:p,short:account?.authenticated ? '已登录' : p === 'bilibili' ? '匿名' : '待登录',summary:account?.summary || (p === 'bilibili' ? '匿名可用，可扫码登录或导入 Web Cookie' : p === 'migu' ? '到账号设置使用咪咕视频 App 扫码' : '到账号设置使用芒果 TV App 扫码'),tone:account?.authenticated ? 'ok' : 'muted'}
+        if (p === 'migu') {
+          const tv = this.providerAccounts.get('migu:tv')
+          const authenticated = account?.authenticated || tv?.authenticated
+          return {provider:p,short:authenticated ? '已登录' : '待登录',summary:`App：${account?.authenticated ? '已登录' : '未登录'} · TV：${tv?.authenticated ? '已登录' : '未登录'}`,tone:authenticated ? 'ok' : 'muted'}
+        }
+        return {provider:p,short:account?.authenticated ? '已登录' : p === 'bilibili' ? '匿名' : '待登录',summary:account?.summary || (p === 'bilibili' ? '匿名可用，可扫码登录或导入 Web Cookie' : '到账号设置使用芒果 TV App 扫码'),tone:account?.authenticated ? 'ok' : 'muted'}
       }
       if (p === 'youku') {
         if (!this.cfg.youkuSign && !this.ykLogin?.ok && !this.ykAcct)
@@ -1015,7 +1021,7 @@ export class Core {
     if (command.provider === 'iq') {
       this.iqStatusCheck = 'checked'
     }
-    this.providerAccounts.set(command.provider + (command.provider === 'migu' && command.terminal === 'tv' ? ':tv' : command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
+    this.providerAccounts.set(command.provider + (command.provider === 'migu' && view.terminal === 'tv' ? ':tv' : command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
     this.emit.state()
     return view
   }

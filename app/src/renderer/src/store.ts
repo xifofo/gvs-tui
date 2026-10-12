@@ -56,6 +56,7 @@ export const store = reactive({
   probeError: '',
 
   qr: null as null | 'youku' | 'tencent' | 'iqcn' | 'mgtv' | 'migu' | 'bilibili',
+  miguQrTerminal: 'mobile' as 'mobile' | 'tv',
   /** 打开着的确认框数量：Esc 返回时要避开 */
   dialogCount: 0,
   update: null as UpdateState | null,

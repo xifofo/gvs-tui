@@ -209,6 +209,7 @@ export class Runtime {
   private qrIQCN = false
   private qrMGTV = false
   private qrMIGU = false
+  private qrMiguTerminal: 'mobile' | 'tv' = 'mobile'
   private qrBILI = false
   /** When true, qr scene polls App+TV in parallel. */
   private qrTencentDual = false
@@ -583,7 +584,7 @@ export class Runtime {
     if (this.has('hamivideo')) f.push('Hami 会话类型', 'Hami TV Cookie', 'Hami TV 续期', 'Hami Web 准备', 'Hami 手机号（确认发码）', 'Hami 短信码', 'Hami 状态', 'Hami 退出')
     if (this.has('mgtv')) f.push('芒果扫码','芒果状态','芒果退出')
     if (this.has('bilibili')) f.push('B 站扫码','B 站 Cookie','B 站状态','B 站退出')
-    if (this.has('migu')) f.push('咪咕扫码','咪咕状态','咪咕退出')
+    if (this.has('migu')) f.push('咪咕 App 扫码','咪咕 App 状态','咪咕 App 退出','咪咕 TV 扫码','咪咕 TV 状态','咪咕 TV 退出')
     if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯诊断日志')
     f.push('运行日志')
     return f
@@ -1830,7 +1831,8 @@ export class Runtime {
     const loginCommands: Record<string, SessionCommand> = {
       '芒果扫码':{provider:'mgtv',op:'start'},'芒果状态':{provider:'mgtv',op:'status'},'芒果退出':{provider:'mgtv',op:'logout'},
       'B 站扫码':{provider:'bilibili',op:'start'},'B 站状态':{provider:'bilibili',op:'status'},'B 站退出':{provider:'bilibili',op:'logout'},
-      '咪咕扫码':{provider:'migu',op:'start'},'咪咕状态':{provider:'migu',op:'status'},'咪咕退出':{provider:'migu',op:'logout'},
+      '咪咕 App 扫码':{provider:'migu',op:'start',terminal:'mobile'},'咪咕 App 状态':{provider:'migu',op:'status',terminal:'mobile'},'咪咕 App 退出':{provider:'migu',op:'logout',terminal:'mobile'},
+      '咪咕 TV 扫码':{provider:'migu',op:'start',terminal:'tv'},'咪咕 TV 状态':{provider:'migu',op:'status',terminal:'tv'},'咪咕 TV 退出':{provider:'migu',op:'logout',terminal:'tv'},
       '爱奇艺国内版扫码': {provider:'iqcn',op:'start'}, '爱奇艺国内版状态': {provider:'iqcn',op:'status'}, '爱奇艺国内版退出': {provider:'iqcn',op:'logout'},
       'IQ 账号状态': {provider:'iq',op:'status'}, 'IQ 换TV': {provider:'iq',op:'exchange_tv'}, 'IQ 检查授权': {provider:'iq',op:'poll'}, 'IQ 退出': {provider:'iq',op:'logout'},
       'mewatch profiles': {provider:'mewatch',op:'profiles'}, 'Hami TV 续期': {provider:'hamivideo',op:'refresh'},
@@ -2052,7 +2054,7 @@ export class Runtime {
       if (scope !== this.cfg.host + ':' + this.cfg.key || generation !== this.providerLoginGeneration) return
       if (command.provider === 'migu') {
         if (command.op === 'start' && view.url) {
-          this.cancelQRScene();this.qrMIGU=true;this.scene='qr'
+          this.cancelQRScene();this.qrMIGU=true;this.qrMiguTerminal=command.terminal === 'tv' ? 'tv' : 'mobile';this.scene='qr'
           this.qrAscii=await QRCode.toString(view.url,{type:'terminal',small:true});this.qrHint=view.summary;this.startQRPoll()
         } else if (this.qrMIGU && (view.authenticated || ['expired','denied'].includes(view.state))) {this.cancelQRScene();this.scene='settings'}
       }
@@ -3028,7 +3030,7 @@ export class Runtime {
   private async pollQR(): Promise<void> {
     if (this.scene !== 'qr' || !this.cli || this.qrBusy) return
     if (this.qrMGTV) {await this.providerLogin({provider:'mgtv',op:'poll'});return}
-    if (this.qrMIGU) {await this.providerLogin({provider:'migu',op:'poll'});return}
+    if (this.qrMIGU) {await this.providerLogin({provider:'migu',op:'poll',terminal:this.qrMiguTerminal});return}
     if (this.qrBILI) {await this.providerLogin({provider:'bilibili',op:'poll'});return}
     if (this.qrIQCN) { await this.providerLogin({provider:'iqcn',op:'poll'}); return }
     if (this.mewatchQR) { await this.providerLogin({provider:'mewatch',op:'poll'}); return }
