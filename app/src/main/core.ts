@@ -85,6 +85,7 @@ import {
   type TmdbHit,
   type Tone,
 } from '@shared/api'
+import { mergeUiPrefs, sanitizeUiPrefs } from '@shared/ui-prefs'
 import { installTunnelWebSocket } from './env'
 import { desktopProxy, setDesktopProxy } from './desktop-network'
 import { normalizeDesktopProxy } from './desktop-proxy'
@@ -681,6 +682,7 @@ export class Core {
       huangguoNfo: c.huangguoNfo,
       hongguoFmt: c.hongguoFmt,
       huangguoFmt: c.huangguoFmt,
+      ui: sanitizeUiPrefs(c.desktopUi),
     }
   }
 
@@ -807,6 +809,7 @@ export class Core {
     if (patch.huangguoNfo !== undefined) c.huangguoNfo = patch.huangguoNfo
     if (patch.hongguoFmt !== undefined) c.hongguoFmt = patch.hongguoFmt
     if (patch.huangguoFmt !== undefined) c.huangguoFmt = patch.huangguoFmt
+    if (patch.ui !== undefined) c.desktopUi = mergeUiPrefs(c.desktopUi, patch.ui)
     saveConfig(c)
     if (patch.tencentCookie !== undefined && this.has('tencent')) void this.refreshTencent()
     this.emit.state()

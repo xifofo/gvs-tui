@@ -57,6 +57,8 @@ export type FileConfig = {
    * volume as the library instead of the system temp drive.
    */
   tmpDir: string
+  /** Desktop app UI preferences (sidebar, provider order/visibility, recent searches). Ignored by the TUI. */
+  desktopUi?: Record<string, unknown>
 }
 
 export const MIN_THREADS = 1

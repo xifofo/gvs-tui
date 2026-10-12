@@ -2,6 +2,8 @@ import type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
 import type { ActualVersion, CompletedMedia } from '../../../src/lib/actual-version'
 export type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
 import { PROVIDER_IDS, PROVIDER_LABELS } from '../../../src/lib/providers'
+import type { UiPrefs } from './ui-prefs'
+export type { UiPrefs, QualityCap } from './ui-prefs'
 // 主进程 ↔ 界面之间的契约。只放可序列化的纯数据。
 
 export const PROVIDERS = PROVIDER_IDS
@@ -47,9 +49,11 @@ export type SettingsView = {
   huangguoNfo: boolean
   hongguoFmt: string
   huangguoFmt: string
+  /** Desktop UI preferences (persisted as desktopUi in tui.json). */
+  ui: UiPrefs
 }
 
-export type SettingsPatch = Partial<Omit<SettingsView, 'keyMasked' | 'hasKey'>> & { key?: string }
+export type SettingsPatch = Partial<Omit<SettingsView, 'keyMasked' | 'hasKey' | 'ui'>> & { key?: string; ui?: Partial<UiPrefs> }
 
 export type AppState = {
   accountScope?: string
