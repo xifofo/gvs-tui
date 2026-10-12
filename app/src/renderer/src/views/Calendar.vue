@@ -123,7 +123,7 @@ const statusText: Record<string, string> = { downloaded: '已下载', pending: '
         <dl>
           <dt>平台</dt><dd>{{ PROVIDER_NAME[picked.provider as Provider] ?? picked.provider }}</dd>
           <dt>集数</dt><dd>{{ picked.episodes || '—' }}</dd>
-          <dt>时间</dt><dd class="mono">{{ picked.onlineText || (picked.onlineAt ? new Date(picked.onlineAt).toLocaleString() : picked.time) }}</dd>
+          <dt>时间</dt><dd class="mono">{{ picked.onlineText || (picked.onlineAt ? new Date(picked.onlineAt).toLocaleString('zh-CN', { hour12: false }) : picked.time) }}</dd>
           <dt v-if="picked.info">类型</dt><dd v-if="picked.info">{{ picked.info }}</dd>
           <dt>来源</dt><dd>{{ picked.source === 'platform' ? '芒果 TV 排播接口' : '订阅检测 / 更新规律推算' }}</dd>
         </dl>
