@@ -70,6 +70,8 @@ export type Section = { id: string; title: string; mode: string; available: bool
 
 export type Card = {
   provider: Provider
+  /** 咪咕的作品来源；服务端平台权限仍统一使用 migu。 */
+  sourceTerminal?: 'mobile' | 'tv'
   id: string
   title: string
   poster: string

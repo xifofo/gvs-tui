@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { PROVIDER_NAME } from '@shared/api'
+import { cardSourceName } from '@shared/search-sources'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
@@ -136,7 +136,7 @@ const descLong = computed(() => (d.value?.desc?.length ?? 0) > 150)
       <div class="hero">
         <div class="wrap"><Poster class="poster" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" /></div>
         <div class="info">
-          <div class="src dim"><PlatformLogo :provider="d.provider" :size="18" /><span>{{ PROVIDER_NAME[d.provider] }}</span><span v-if="d.category">· {{ d.category }}</span></div>
+          <div class="src dim"><PlatformLogo :provider="d.provider" :size="18" /><span>{{ cardSourceName(d) }}</span><span v-if="d.category">· {{ d.category }}</span></div>
           <h1 class="title">{{ d.title }}</h1>
           <span v-if="meta" class="dim meta">{{ meta }}</span>
           <div class="chips">

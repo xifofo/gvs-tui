@@ -1,24 +1,26 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { PROVIDER_NAME, type Card, type Provider } from '@shared/api'
+import { type Card } from '@shared/api'
+import { cardSourceName, providerSearchSources, splitSearchSources, type SearchSourceKey } from '@shared/search-sources'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
 import Skeleton from '../components/Skeleton.vue'
 import { openCard, store } from '../store'
 
-const filter = ref<Provider | 'all'>('all')
+const filter = ref<SearchSourceKey | 'all'>('all')
 watch(
   () => store.search?.query,
   () => (filter.value = 'all'),
 )
 
-const groups = computed(() => store.search?.groups ?? [])
+const groups = computed(() => splitSearchSources(store.search?.groups ?? []))
+const pending = computed(() => store.searchPending.flatMap(providerSearchSources))
 const total = computed(() => groups.value.reduce((n, g) => n + g.cards.length, 0))
 const cards = computed<Card[]>(() =>
-  groups.value.filter((g) => filter.value === 'all' || g.provider === filter.value).flatMap((g) => g.cards),
+  groups.value.filter((g) => filter.value === 'all' || g.key === filter.value).flatMap((g) => g.cards),
 )
-const failed = computed(() => groups.value.filter((g) => g.error && (filter.value === 'all' || g.provider === filter.value)))
+const failed = computed(() => groups.value.filter((g) => g.error && (filter.value === 'all' || g.key === filter.value)))
 /** 还没搜到任何东西 / 还有平台在搜：末尾补骨架行 */
 const tailSkeleton = computed(() => (store.searching ? Math.min(2, Math.max(1, store.searchPending.length)) : 0))
 const actionText = (c: Card) => (c.video || c.target === 'detail' ? '查看详情' : c.target === 'search' ? '搜这个' : '预约')
@@ -29,15 +31,15 @@ const actionText = (c: Card) => (c.video || c.target === 'detail' ? '查看详�
     <div class="h1-row">
       <h1 class="h1">“{{ store.query }}”</h1>
       <span v-if="store.search && groups.length" class="muted">
-        {{ total }} 条结果 · {{ groups.length }} 个平台 · {{ (store.search.ms / 1000).toFixed(1) }}s
+        {{ total }} 条结果 · {{ groups.length }} 个来源 · {{ (store.search.ms / 1000).toFixed(1) }}s
       </span>
     </div>
 
     <div v-if="store.searchError" class="error-box">{{ store.searchError }}</div>
     <div v-else-if="store.searching && !groups.length" class="list">
       <div class="filters">
-        <span v-for="p in store.searchPending" :key="p" class="pill pending" aria-live="polite">
-          <PlatformLogo :provider="p" :size="16" />{{ PROVIDER_NAME[p] }}<span class="spin" style="width: 12px; height: 12px" />
+        <span v-for="s in pending" :key="s.key" class="pill pending" aria-live="polite">
+          <PlatformLogo :provider="s.provider" :size="16" />{{ s.name }}<span class="spin" style="width: 12px; height: 12px" />
         </span>
       </div>
       <div v-for="i in 5" :key="i" class="card row sk-row">
@@ -59,18 +61,20 @@ const actionText = (c: Card) => (c.video || c.target === 'detail' ? '查看详�
         </button>
         <button
           v-for="g in groups"
-          :key="g.provider"
+          :key="g.key"
           type="button"
           class="pill"
-          :class="{ on: filter === g.provider }"
+          :aria-label="g.name"
+          :aria-pressed="filter === g.key"
+          :class="{ on: filter === g.key }"
           :disabled="!g.cards.length && !g.error"
-          @click="filter = g.provider"
+          @click="filter = g.key"
         >
-          <PlatformLogo :provider="g.provider" :size="16" />{{ PROVIDER_NAME[g.provider] }}
+          <PlatformLogo :provider="g.provider" :size="16" />{{ g.name }}
           <span class="count">{{ g.error ? '!' : g.cards.length }}</span>
         </button>
-        <span v-for="p in store.searchPending" :key="p" class="pill pending" aria-live="polite">
-          <PlatformLogo :provider="p" :size="16" />{{ PROVIDER_NAME[p] }}<span class="spin" style="width: 12px; height: 12px" />
+        <span v-for="s in pending" :key="s.key" class="pill pending" aria-live="polite">
+          <PlatformLogo :provider="s.provider" :size="16" />{{ s.name }}<span class="spin" style="width: 12px; height: 12px" />
         </span>
       </div>
 
@@ -86,7 +90,7 @@ const actionText = (c: Card) => (c.video || c.target === 'detail' ? '查看详�
             <span v-if="c.meta" class="dim">{{ c.meta }}</span>
             <span v-if="c.desc" class="muted desc">{{ c.desc }}</span>
           </div>
-          <div class="src"><PlatformLogo :provider="c.provider" :size="20" /><span>{{ PROVIDER_NAME[c.provider] }}</span></div>
+          <div class="src"><PlatformLogo :provider="c.provider" :size="20" /><span>{{ cardSourceName(c) }}</span></div>
           <span class="btn outline">{{ actionText(c) }}<Icon name="arrow" :size="16" /></span>
         </button>
 
@@ -103,8 +107,8 @@ const actionText = (c: Card) => (c.video || c.target === 'detail' ? '查看详�
         </div>
 
         <div v-if="!cards.length && !failed.length && !store.searching" class="empty">没有搜到结果</div>
-        <div v-for="g in failed" :key="g.provider" class="warn-box">
-          {{ PROVIDER_NAME[g.provider] }} 搜索失败：{{ g.error }}
+        <div v-for="g in failed" :key="g.key" class="warn-box">
+          {{ g.name }} 搜索失败：{{ g.error }}
         </div>
       </div>
 
@@ -136,6 +140,6 @@ const actionText = (c: Card) => (c.video || c.target === 'detail' ? '查看详�
 .t-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .t { font-size: 19px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .desc { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; }
-.src { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; width: 88px; flex-shrink: 0; }
+.src { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; width: 150px; flex-shrink: 0; }
 .ex { margin-left: auto; font-size: 12px; }
 </style>

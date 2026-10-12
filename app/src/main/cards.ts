@@ -181,6 +181,7 @@ export function toCards(provider: Provider, data: Record<string, unknown>): Card
     const metaBits = [category !== '首页' ? category : '', year, eps > 1 ? `${eps} 集` : ''].filter(Boolean)
     out.push({
       provider,
+      ...(provider === 'migu' ? {sourceTerminal: id.startsWith('tv:') || id.startsWith('tv-series:') || raw.sourceTerminal === 'tv' || meta.sourceTerminal === 'tv' ? 'tv' as const : 'mobile' as const} : {}),
       id,
       title,
       poster: posterOf(raw, meta),
