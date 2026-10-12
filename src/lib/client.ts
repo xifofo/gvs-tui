@@ -212,10 +212,10 @@ export class GwClient {
     const account = this.accountFor?.(provider)
     if (account && account !== GW_DEFAULT_ACCOUNT) {
       // 账号的凭证已经托管在网关该账号下；别再用全局配置里的 Cookie 头覆盖它
-      const { 'Iq-Cookie': _iq, ...rest } = extra ?? {}
+      const { 'Iq-Cookie': _iq, 'Tx-Cookie': _tx, 'Dy-Cookie': _dy, ...rest } = extra ?? {}
       extra = { ...rest, [GW_ACCOUNT_HEADER]: account }
     }
-    if (provider === 'douyin' && !extra?.['Dy-Cookie']) {
+    if (provider === 'douyin' && !extra?.['Dy-Cookie'] && !(account && account !== GW_DEFAULT_ACCOUNT)) {
       const ck = this.cfgOf?.()?.douyinCookie
       if (ck) extra = { ...extra, 'Dy-Cookie': ck }
     }

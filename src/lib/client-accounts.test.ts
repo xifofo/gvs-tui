@@ -49,3 +49,19 @@ test('accountsInfo feature-detects; old gateways return null', async () => {
   globalThis.fetch = (async () => new Response(JSON.stringify({ code: 400, msg: 'INVALID_PARAM: provider or url required', data: null }), { status: 400 })) as unknown as typeof fetch
   expect(await cli.accountsInfo()).toBeNull()
 })
+
+test('scoped tencent/douyin requests drop global cookie headers; legacy keeps them', async () => {
+  const seen = capture()
+  const cfg = { douyinCookie: 'sessionid=GLOBAL' } as never
+  const cli = new GwClient('http://gw.test', 'k', () => cfg)
+  cli.accountFor = (p) => (p === 'tencent' || p === 'douyin' ? 'work' : undefined)
+  await cli.invoke('tencent', 'detail', { id: '1' }, { 'Tx-Cookie': 'vqq=GLOBAL' })
+  await cli.invoke('douyin', 'detail', { id: '1' })
+  const legacy = new GwClient('http://gw.test', 'k', () => cfg)
+  await legacy.invoke('douyin', 'detail', { id: '1' })
+  await legacy.invoke('tencent', 'detail', { id: '1' }, { 'Tx-Cookie': 'vqq=GLOBAL' })
+  expect([seen[0]!.headers[GW_ACCOUNT_HEADER], seen[0]!.headers['Tx-Cookie']]).toEqual(['work', undefined] as never)
+  expect([seen[1]!.headers[GW_ACCOUNT_HEADER], seen[1]!.headers['Dy-Cookie']]).toEqual(['work', undefined] as never)
+  expect(seen[2]!.headers['Dy-Cookie']).toBe('sessionid=GLOBAL')
+  expect(seen[3]!.headers['Tx-Cookie']).toBe('vqq=GLOBAL')
+})
