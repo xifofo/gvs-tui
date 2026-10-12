@@ -75,7 +75,7 @@ const open = (p: Provider) => { store.accountDrawer = p }
           </button>
         </div>
         <div class="chips">
-          <span class="chip" :class="toneClass[account(p)?.tone ?? 'muted']">● {{ account(p)?.short ?? '未知' }}</span>
+          <span class="chip" :class="toneClass[account(p)?.tone ?? 'muted']">● {{ account(p)?.short ?? (providerMeta(p).methods.includes('none') ? '无需登录' : '未登录') }}</span>
           <span v-for="m in providerMeta(p).methods.filter((m) => m !== 'none')" :key="m" class="chip">{{ METHOD_LABEL[m] }}</span>
         </div>
         <span class="sum clamp2">{{ account(p)?.summary || providerMeta(p).benefit }}</span>

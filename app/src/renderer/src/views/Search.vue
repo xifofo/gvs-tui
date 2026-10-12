@@ -52,6 +52,11 @@ function open(row: { sources: Card[] }, c?: Card) {
   openCard(pick, row.sources.filter((s) => s !== pick))
 }
 const kindText = (k?: 'movie' | 'show') => (k === 'movie' ? '电影' : k === 'show' ? '剧集' : '')
+/** 平台 meta 常带年份，行首已显示年份时去掉重复 */
+function metaText(row: { year: number; meta: string }): string {
+  if (!row.year) return row.meta
+  return row.meta.split(/\s*[·|]\s*/).filter((part) => part.trim() !== String(row.year)).join(' · ')
+}
 </script>
 
 <template>
@@ -92,7 +97,7 @@ const kindText = (k?: 'movie' | 'show') => (k === 'movie' ? '电影' : k === 'sh
         </button>
         <div class="info">
           <button type="button" class="t clamp2" :disabled="!row.sources.some(playable)" @click="open(row)">{{ row.title }}</button>
-          <span class="dim small">{{ [row.year || '', kindText(row.mediaKind), row.meta].filter(Boolean).join(' · ') }}</span>
+          <span class="dim small">{{ [row.year || '', kindText(row.mediaKind), metaText(row)].filter(Boolean).join(' · ') }}</span>
           <span v-if="row.desc" class="muted desc">{{ row.desc }}</span>
           <div class="srcs">
             <button

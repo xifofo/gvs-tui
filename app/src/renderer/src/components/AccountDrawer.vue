@@ -30,7 +30,7 @@ function hide() {
         <PlatformLogo :provider="provider" :size="32" />
         <div class="dt">
           <b>{{ PROVIDER_NAME[provider] }}</b>
-          <span class="chip" :class="toneClass[account?.tone ?? 'muted']">● {{ account?.short ?? '未知' }}</span>
+          <span class="chip" :class="toneClass[account?.tone ?? 'muted']">● {{ account?.short ?? (meta.methods.includes('none') ? '无需登录' : '未登录') }}</span>
         </div>
         <button type="button" class="btn sm icon" aria-label="关闭" data-dialog-cancel @click="close"><Icon name="x" :size="16" /></button>
       </header>
