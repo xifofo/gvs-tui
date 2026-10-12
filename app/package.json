@@ -14,6 +14,7 @@
     "dist:mac": "node ../scripts/build-iqcn-local.mjs --platform=darwin --arch=arm64 --output=.build/iqcn-local/darwin-arm64/iqcn-local && node ../scripts/build-iqcn-local.mjs --platform=darwin --arch=x64 --output=.build/iqcn-local/darwin-x64/iqcn-local && electron-vite build && electron-builder --mac"
   },
   "dependencies": {
+    "@tabler/icons-vue": "^3.49.0",
     "electron-updater": "^6",
     "https-proxy-agent": "^7",
     "opencc-js": "1.4.2",
