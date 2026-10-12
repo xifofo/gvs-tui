@@ -1,141 +1,166 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PROVIDER_NAME, type Card, type Provider } from '@shared/api'
+import { filterRows, mergeSearch } from '@shared/search-merge'
+import { orderProviders } from '@shared/provider-registry'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
 import Skeleton from '../components/Skeleton.vue'
-import { openCard, store } from '../store'
-
-const filter = ref<Provider | 'all'>('all')
-watch(
-  () => store.search?.query,
-  () => (filter.value = 'all'),
-)
+import { go, openCard, prefs, store } from '../store'
 
 const groups = computed(() => store.search?.groups ?? [])
+/** 结果到达顺序 → 用户的平台排序，保证合并后芯片顺序稳定 */
+const orderedGroups = computed(() => {
+  const order = orderProviders(groups.value.map((g) => g.provider), prefs().providerOrder)
+  return order.map((p) => groups.value.find((g) => g.provider === p)!).filter(Boolean)
+})
+const rows = computed(() => mergeSearch<Card>(orderedGroups.value))
+const filterSet = computed(() => new Set<string>(store.searchFilter))
+const shown = computed(() => filterRows(rows.value, filterSet.value))
 const total = computed(() => groups.value.reduce((n, g) => n + g.cards.length, 0))
-const cards = computed<Card[]>(() =>
-  groups.value.filter((g) => filter.value === 'all' || g.provider === filter.value).flatMap((g) => g.cards),
-)
-const failed = computed(() => groups.value.filter((g) => g.error && (filter.value === 'all' || g.provider === filter.value)))
-/** 还没搜到任何东西 / 还有平台在搜：末尾补骨架行 */
+const failed = computed(() => groups.value.filter((g) => g.error))
+const returned = computed(() => groups.value.map((g) => g.provider))
+const filterProviders = computed<Provider[]>(() => [...returned.value, ...store.searchPending.filter((p) => !returned.value.includes(p))])
+const countOf = (p: Provider) => groups.value.find((g) => g.provider === p)?.cards.length ?? 0
+watch(() => store.search?.query, () => { store.searchFilter = [] })
+
+const menuOpen = ref(false)
+const menu = ref<HTMLElement | null>(null)
+function toggleFilter(p: Provider) {
+  const set = new Set(store.searchFilter)
+  set.has(p) ? set.delete(p) : set.add(p)
+  store.searchFilter = [...set]
+}
+const filterLabel = computed(() => {
+  const n = store.searchFilter.length
+  if (!n) return '全部平台'
+  if (n === 1) return PROVIDER_NAME[store.searchFilter[0]!]
+  return `${n} 个平台`
+})
+function onDoc(e: MouseEvent) {
+  if (menuOpen.value && menu.value && !menu.value.contains(e.target as Node)) menuOpen.value = false
+}
+onMounted(() => document.addEventListener('mousedown', onDoc))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
+
 const tailSkeleton = computed(() => (store.searching ? Math.min(2, Math.max(1, store.searchPending.length)) : 0))
-const actionText = (c: Card) => (c.video || c.target === 'detail' ? '查看详情' : c.target === 'search' ? '搜这个' : '预约')
+const playable = (c: Card) => c.target !== 'unavailable'
+function open(row: { sources: Card[] }, c?: Card) {
+  const pick = c ?? row.sources.find(playable)
+  if (!pick) return
+  openCard(pick, row.sources.filter((s) => s !== pick))
+}
+const kindText = (k?: 'movie' | 'show') => (k === 'movie' ? '电影' : k === 'show' ? '剧集' : '')
 </script>
 
 <template>
   <div class="page">
-    <div class="h1-row">
-      <h1 class="h1">“{{ store.query }}”</h1>
+    <div class="head">
+      <h1 class="h1 q">“{{ store.query }}”</h1>
       <span v-if="store.search && groups.length" class="muted">
-        {{ total }} 条结果 · {{ groups.length }} 个平台 · {{ (store.search.ms / 1000).toFixed(1) }}s
+        {{ rows.length }} 部作品 · {{ total }} 条结果 · {{ groups.length }} 个平台 · {{ (store.search.ms / 1000).toFixed(1) }}s
       </span>
+      <div ref="menu" class="fwrap">
+        <button type="button" class="btn sm" :class="{ outline: store.searchFilter.length }" :aria-expanded="menuOpen" aria-haspopup="listbox" @click="menuOpen = !menuOpen">
+          平台：{{ filterLabel }}<Icon name="chevron" :size="14" />
+        </button>
+        <div v-if="menuOpen" class="fmenu card" role="listbox" aria-multiselectable="true" aria-label="按平台筛选">
+          <div class="fm-h"><span>筛选平台</span><button type="button" class="linkish" @click="store.searchFilter = []">全部</button></div>
+          <button v-for="p in filterProviders" :key="p" type="button" role="option" class="fm-i" :aria-selected="store.searchFilter.includes(p)" @click="toggleFilter(p)">
+            <span class="cb" :class="{ on: store.searchFilter.includes(p) }"><Icon v-if="store.searchFilter.includes(p)" name="check" :size="12" :stroke="3" /></span>
+            <PlatformLogo :provider="p" :size="16" />
+            <span class="fm-n">{{ PROVIDER_NAME[p] }}</span>
+            <span v-if="store.searchPending.includes(p)" class="spin" style="width: 12px; height: 12px" />
+            <span v-else class="mono muted small">{{ groups.find((g) => g.provider === p)?.error ? '!' : countOf(p) }}</span>
+          </button>
+          <button type="button" class="fm-foot linkish" @click="go('accounts'); menuOpen = false">管理平台（排序 / 隐藏）</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="store.searchPending.length || failed.length" class="status" aria-live="polite">
+      <span v-for="p in store.searchPending" :key="p" class="chip"><span class="spin" style="width: 10px; height: 10px" />{{ PROVIDER_NAME[p] }} 搜索中</span>
+      <span v-for="g in failed" :key="g.provider" class="chip warn" :title="g.error"><Icon name="alert" :size="13" />{{ PROVIDER_NAME[g.provider] }} 搜索失败</span>
     </div>
 
     <div v-if="store.searchError" class="error-box">{{ store.searchError }}</div>
-    <div v-else-if="store.searching && !groups.length" class="list">
-      <div class="filters">
-        <span v-for="p in store.searchPending" :key="p" class="pill pending" aria-live="polite">
-          <PlatformLogo :provider="p" :size="16" />{{ PROVIDER_NAME[p] }}<span class="spin" style="width: 12px; height: 12px" />
-        </span>
-      </div>
-      <div v-for="i in 5" :key="i" class="card row sk-row">
-        <Skeleton class="thumb-sk" w="76" h="106" r="8" />
+    <div v-else class="list">
+      <div v-for="row in shown" :key="row.key" class="card row" :class="{ off: !row.sources.some(playable) }">
+        <button type="button" class="thumb-b" :disabled="!row.sources.some(playable)" :aria-label="`打开 ${row.title}`" @click="open(row)">
+          <Poster class="thumb" :url="row.poster" :provider="row.sources[0]!.provider" :title="row.title" :title-size="12" />
+        </button>
         <div class="info">
-          <Skeleton w="46%" h="19" />
-          <Skeleton w="30%" h="13" />
-          <Skeleton w="88%" h="13" />
-          <Skeleton w="64%" h="13" />
+          <button type="button" class="t clamp2" :disabled="!row.sources.some(playable)" @click="open(row)">{{ row.title }}</button>
+          <span class="dim small">{{ [row.year || '', kindText(row.mediaKind), row.meta].filter(Boolean).join(' · ') }}</span>
+          <span v-if="row.desc" class="muted desc">{{ row.desc }}</span>
+          <div class="srcs">
+            <button
+              v-for="c in row.sources" :key="c.provider + c.id" type="button" class="src" :disabled="!playable(c)"
+              :title="c.reason || `在${PROVIDER_NAME[c.provider]}打开`" @click="open(row, c)"
+            >
+              <PlatformLogo :provider="c.provider" :size="16" />
+              <span>{{ PROVIDER_NAME[c.provider] }}</span>
+              <span v-if="c.vip" class="chip warn tiny">VIP</span>
+              <span v-else-if="c.target !== 'unavailable'" class="chip ok tiny">可看</span>
+              <span v-else class="chip tiny">预约</span>
+            </button>
+          </div>
         </div>
-        <Skeleton class="src-sk" w="72" h="20" />
-        <Skeleton w="104" h="38" r="8" />
+        <button type="button" class="btn outline go" :disabled="!row.sources.some(playable)" @click="open(row)">选集下载<Icon name="arrow" :size="16" /></button>
+      </div>
+
+      <div v-for="i in (groups.length ? tailSkeleton : store.searching ? 4 : 0)" :key="'sk' + i" class="card row sk-row">
+        <Skeleton w="72" h="100" r="8" />
+        <div class="info"><Skeleton w="42%" h="19" /><Skeleton w="26%" h="13" /><Skeleton w="80%" h="13" /><Skeleton w="56%" h="13" /></div>
+      </div>
+
+      <div v-if="!shown.length && !store.searching && store.search" class="empty">
+        <Icon name="search" :size="28" />
+        <span>{{ rows.length ? '所选平台没有结果' : '没有搜到结果' }}</span>
+        <button v-if="store.searchFilter.length" type="button" class="btn sm" @click="store.searchFilter = []">显示全部平台</button>
       </div>
     </div>
-    <template v-else-if="store.search">
-      <div class="filters">
-        <button type="button" class="pill" :class="{ on: filter === 'all' }" @click="filter = 'all'">
-          全部<span class="count">{{ total }}</span>
-        </button>
-        <button
-          v-for="g in groups"
-          :key="g.provider"
-          type="button"
-          class="pill"
-          :class="{ on: filter === g.provider }"
-          :disabled="!g.cards.length && !g.error"
-          @click="filter = g.provider"
-        >
-          <PlatformLogo :provider="g.provider" :size="16" />{{ PROVIDER_NAME[g.provider] }}
-          <span class="count">{{ g.error ? '!' : g.cards.length }}</span>
-        </button>
-        <span v-for="p in store.searchPending" :key="p" class="pill pending" aria-live="polite">
-          <PlatformLogo :provider="p" :size="16" />{{ PROVIDER_NAME[p] }}<span class="spin" style="width: 12px; height: 12px" />
-        </span>
-      </div>
 
-      <div class="list">
-        <button v-for="c in cards" :key="c.provider + (c.id || c.title)" type="button" class="card row" :disabled="c.target === 'unavailable'" :title="c.reason" @click="openCard(c)">
-          <Poster class="thumb" :url="c.poster" :provider="c.provider" :title="c.title" :title-size="13" />
-          <div class="info">
-            <div class="t-row">
-              <h3 class="t">{{ c.title }}</h3>
-              <span v-if="c.vip" class="chip warn">VIP</span>
-              <span v-if="c.score" class="chip mono">{{ c.score }}</span>
-            </div>
-            <span v-if="c.meta" class="dim">{{ c.meta }}</span>
-            <span v-if="c.desc" class="muted desc">{{ c.desc }}</span>
-          </div>
-          <div class="src"><PlatformLogo :provider="c.provider" :size="20" /><span>{{ PROVIDER_NAME[c.provider] }}</span></div>
-          <span class="btn outline">{{ actionText(c) }}<Icon name="arrow" :size="16" /></span>
-        </button>
-
-        <div v-for="i in tailSkeleton" :key="'sk' + i" class="card row sk-row">
-          <Skeleton class="thumb-sk" w="76" h="106" r="8" />
-          <div class="info">
-            <Skeleton w="42%" h="19" />
-            <Skeleton w="26%" h="13" />
-            <Skeleton w="80%" h="13" />
-            <Skeleton w="56%" h="13" />
-          </div>
-          <Skeleton class="src-sk" w="72" h="20" />
-          <Skeleton w="104" h="38" r="8" />
-        </div>
-
-        <div v-if="!cards.length && !failed.length && !store.searching" class="empty">没有搜到结果</div>
-        <div v-for="g in failed" :key="g.provider" class="warn-box">
-          {{ PROVIDER_NAME[g.provider] }} 搜索失败：{{ g.error }}
-        </div>
-      </div>
-
-      <div class="notice">
-        <Icon name="link" :size="18" />
-        <span>搜不到？直接把播放页链接粘到上面的搜索框</span>
-        <span class="mono muted ex">v.youku.com/v_show/… · v.qq.com/x/cover/…</span>
-      </div>
-    </template>
+    <div v-if="store.search && !store.searching" class="notice">
+      <Icon name="link" :size="18" />
+      <span>搜不到？直接把播放页链接粘到上面的搜索框</span>
+      <span class="mono muted ex">v.youku.com/v_show/… · v.qq.com/x/cover/…</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.filters { display: flex; gap: 8px; flex-wrap: wrap; }
-.pending { cursor: default; color: var(--ink-3); border-style: dashed; }
-.list { display: flex; flex-direction: column; gap: 12px; }
-.row {
-  padding: 16px; display: flex; gap: 18px; align-items: center; width: 100%; text-align: left;
-  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-}
-.row:hover:not(:disabled) { border-color: var(--ink); }
-.row:disabled { cursor: not-allowed; opacity: .65; }
-.thumb { width: 76px; height: 106px; padding: 8px; }
-.thumb-sk { flex-shrink: 0; }
-.src-sk { width: 88px; flex-shrink: 0; }
+.head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.q { max-width: 60%; overflow-wrap: anywhere; }
+.fwrap { margin-left: auto; position: relative; align-self: center; }
+.fmenu { position: absolute; right: 0; top: 42px; width: 280px; padding: 8px; z-index: 20; box-shadow: 0 14px 40px rgba(0, 0, 0, .16); display: flex; flex-direction: column; gap: 2px; }
+.fm-h { display: flex; justify-content: space-between; padding: 4px 8px 6px; font-size: 12px; color: var(--ink-3); }
+.fm-i { height: 36px; padding: 0 8px; border: 0; background: transparent; border-radius: 6px; display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; text-align: left; }
+.fm-i:hover { background: var(--paper); }
+.fm-n { flex: 1; }
+.cb { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #cfcabe; display: flex; align-items: center; justify-content: center; }
+.cb.on { background: var(--ink); border-color: var(--ink); color: var(--orange); }
+.fm-foot { padding: 8px; border-top: 1px solid var(--line); margin-top: 4px; text-align: left; }
+.status { display: flex; gap: 8px; flex-wrap: wrap; }
+.status .chip { gap: 6px; }
+.list { display: flex; flex-direction: column; gap: 10px; }
+.row { padding: 12px; display: flex; gap: 16px; align-items: center; }
+.row.off { opacity: .65; }
+.thumb-b { border: 0; padding: 0; background: none; cursor: pointer; flex-shrink: 0; }
+.thumb { width: 72px; height: 100px; padding: 8px; }
 .sk-row { cursor: default; }
-.sk-row .info { gap: 9px; }
-.info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.t-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.t { font-size: 19px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.info { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.t { border: 0; background: none; padding: 0; text-align: left; font-size: 17px; font-weight: 700; cursor: pointer; line-height: 1.35; }
+.t:hover:not(:disabled) { color: var(--orange-text); }
+.clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.small { font-size: 12px; }
 .desc { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; }
-.src { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; width: 88px; flex-shrink: 0; }
+.srcs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.src { height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.src:hover:not(:disabled) { border-color: var(--ink); background: var(--card); }
+.src:disabled { cursor: not-allowed; opacity: .6; }
+.tiny { height: 18px; padding: 0 6px; font-size: 11px; }
+.go { flex-shrink: 0; }
 .ex { margin-left: auto; font-size: 12px; }
 </style>
