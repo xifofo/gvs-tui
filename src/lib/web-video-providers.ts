@@ -123,7 +123,13 @@ export function miguOptions(data: Obj): {qualities:Quality[];audios:Audio[]} {
     audios:[{id:'embedded',label:'随视频内嵌',lang:'原声',codec:'',isDefault:true,selected:true,embedded:true}],
   }))
   qualities.sort((a,b)=>(b.id === str(data.recommendedQuality) ? 1 : 0)-(a.id === str(data.recommendedQuality) ? 1 : 0)||b.width*b.height-a.width*a.height)
-  if (!qualities.length) throw new Error('咪咕没有完整且可下载的画质，请检查登录和账号权益')
+  if (!qualities.length) {
+    const options = rows(data.qualityOptions)
+    if (options.length && options.every(q => q.unavailableReason === 'protected_stream')) throw new Error('该媒体受保护，本次咪咕各档画质均暂不支持下载；请换其他作品，无需重复扫码')
+    if (options.length && options.every(q => q.unavailableReason === 'preview_only')) throw new Error('咪咕本次只返回试看版本，暂不能下载完整内容')
+    if (options.some(q => q.rightsGranted === false)) throw new Error('咪咕账号暂不具备此内容的播放权益，请在官方客户端确认')
+    throw new Error('咪咕本次没有可下载的完整版本，请刷新画质列表或选择其他作品')
+  }
   return {qualities,audios:[]}
 }
 export function selectedBilibiliMedia(data: Obj, choice: string, audioIds: string[]) {
