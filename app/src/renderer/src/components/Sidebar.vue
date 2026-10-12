@@ -1,140 +1,145 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { PROVIDER_NAME } from '@shared/api'
+import { accountBucket } from '@shared/provider-registry'
 import mark from '../assets/gvs-mark.svg'
-import { go, gvs, openSettings, section, store, type View } from '../store'
+import { go, gvs, openSettings, prefs, savePrefs, section, shownProviders, store, type View } from '../store'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
 
-const nav: Array<{ view: View; label: string; icon: string }> = [
-  { view: 'discover', label: '发现', icon: 'compass' },
-  { view: 'search', label: '搜索', icon: 'search' },
-  { view: 'downloads', label: '下载', icon: 'download' },
-  { view: 'settings', label: '设置', icon: 'gear' },
+type NavItem = { view: View; label: string; icon: string }
+const groups: NavItem[][] = [
+  [{ view: 'home', label: '首页', icon: 'home' }, { view: 'search', label: '搜索', icon: 'search' }],
+  [{ view: 'calendar', label: '追剧日历', icon: 'calendar' }, { view: 'subscriptions', label: '订阅', icon: 'star' }, { view: 'downloads', label: '下载', icon: 'download' }],
+  [{ view: 'accounts', label: '账号', icon: 'user' }, { view: 'settings', label: '设置', icon: 'gear' }],
 ]
 
-const active = (n: (typeof nav)[number]) => section() === n.view
+const collapsed = computed(() => prefs().sidebarCollapsed)
+const toggle = () => void savePrefs({ sidebarCollapsed: !collapsed.value })
+
+const active = (n: NavItem) => section() === n.view
 const activeJobs = computed(() => store.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length)
-const accountSummary = computed(() => {
-  const accounts = store.state?.accounts ?? []
-  const ready = accounts.filter(a => a.tone === 'ok').length
-  return `${ready} / ${accounts.length} 已就绪`
+const accounts = computed(() => {
+  const all = store.state?.accounts ?? []
+  return shownProviders().map((p) => all.find((a) => a.provider === p)).filter((a): a is NonNullable<typeof a> => !!a)
 })
-const toneColor: Record<string, string> = { ok: 'var(--side-ok)', warn: 'var(--side-warn)', err: '#ff8a7a', muted: 'var(--side-muted)' }
-const host = computed(() => {
-  try {
-    return new URL(store.state?.settings.host ?? '').host
-  } catch {
-    return store.state?.settings.host ?? ''
-  }
-})
+const attention = computed(() => accounts.value.filter((a) => accountBucket(a) === 'attention').length)
+const readyCount = computed(() => accounts.value.filter((a) => a.tone === 'ok').length)
+const badge = (v: View) => (v === 'downloads' ? activeJobs.value : v === 'accounts' ? attention.value : 0)
+const dotColor = (a: (typeof accounts.value)[number]) => {
+  const b = accountBucket(a)
+  return b === 'ok' ? 'var(--side-ok)' : b === 'attention' ? (a.tone === 'err' ? '#ff8a7a' : 'var(--side-warn)') : 'var(--side-muted)'
+}
+function onNav(v: View) {
+  // 「搜索」入口：没有搜过时先打开命令面板
+  if (v === 'search' && !store.search) { store.paletteOpen = true; return }
+  go(v)
+}
+
 const tunnel = computed(() => {
   const t = store.state?.tunnel
-  if (!t?.enabled) return { color: 'var(--side-muted)', text: '无需隧道' }
+  if (!t?.enabled) return { color: 'var(--side-ok)', text: '网关已连接' }
   if (t.ok) return { color: 'var(--side-ok)', text: '隧道已连接' }
   return { color: 'var(--side-warn)', text: '隧道重连中…' }
+})
+const host = computed(() => {
+  try { return new URL(store.state?.settings.host ?? '').host } catch { return store.state?.settings.host ?? '' }
 })
 </script>
 
 <template>
-  <aside class="side">
+  <aside class="side" :class="{ c: collapsed }">
     <div class="brand">
-      <img :src="mark" alt="" width="34" height="34" />
-      <div class="brand-t">
-        <span class="name">GVS</span>
-        <span class="sub mono">Get Video Streaming</span>
-      </div>
+      <img :src="mark" alt="" width="30" height="30" />
+      <span v-if="!collapsed" class="name">GVS</span>
     </div>
 
     <nav aria-label="主导航" class="nav">
-      <button v-for="n in nav" :key="n.view" type="button" class="nav-i" :class="{ on: active(n) }" @click="go(n.view)">
-        <Icon :name="n.icon" :size="19" />
-        <span>{{ n.label }}</span>
-        <span v-if="n.view === 'downloads' && activeJobs" class="badge mono">{{ activeJobs }}</span>
-      </button>
+      <template v-for="(g, gi) in groups" :key="gi">
+        <div v-if="gi" class="sep" />
+        <button
+          v-for="n in g" :key="n.view" type="button" class="nav-i" :class="{ on: active(n) }"
+          :title="collapsed ? n.label : undefined" :aria-label="n.label" :aria-current="active(n) ? 'page' : undefined" @click="onNav(n.view)"
+        >
+          <Icon :name="n.icon" :size="18" />
+          <span v-if="!collapsed" class="lb">{{ n.label }}</span>
+          <span v-if="badge(n.view)" class="badge mono" :class="{ warn: n.view === 'accounts' }">{{ badge(n.view) }}</span>
+        </button>
+      </template>
     </nav>
 
-    <div v-if="store.state?.accounts.length" class="plats">
-      <button type="button" class="accounts-link" @click="openSettings('account')"><Icon name="gear" :size="17" /><span>平台账号</span><span class="account-count">{{ accountSummary }}</span></button>
-      <details class="account-details">
-      <summary>查看账号状态</summary>
-      <button
-        v-for="a in store.state.accounts"
-        :key="a.provider"
-        type="button"
-        class="plat"
-        :title="a.summary"
-        @click="openSettings('account')"
-      >
-        <PlatformLogo :provider="a.provider" :size="18" />
-        <span>{{ PROVIDER_NAME[a.provider] }}</span>
-        <span class="st" :style="{ color: toneColor[a.tone] }"><span class="dot" :style="{ background: toneColor[a.tone] }" />{{ a.short }}</span>
-      </button>
-      </details>
-    </div>
-
-    <button v-if="store.update?.status === 'ready'" type="button" class="upd ready" @click="gvs('installUpdate')">
-      <Icon name="refresh" :size="16" /><span>新版本 {{ store.update.version }} 已就绪<br /><b>点此重启安装</b></span>
+    <button v-if="store.update?.status === 'ready'" type="button" class="upd ready" :title="`新版本 ${store.update.version} 已就绪`" @click="gvs('installUpdate')">
+      <Icon name="refresh" :size="16" /><span v-if="!collapsed">新版本 {{ store.update.version }}<br /><b>重启安装</b></span>
     </button>
-    <button v-else-if="store.update?.status === 'downloading'" type="button" class="upd" @click="openSettings('about')">
-      <Icon name="download" :size="16" /><span>正在下载新版本 {{ store.update.percent }}%</span>
-    </button>
-    <button v-else-if="store.update?.status === 'available'" type="button" class="upd" @click="openSettings('about')">
-      <Icon name="download" :size="16" /><span>有新版本 {{ store.update.version }}</span>
+    <button v-else-if="store.update?.status === 'downloading' || store.update?.status === 'available'" type="button" class="upd" :title="`新版本 ${store.update.version}`" @click="openSettings('about')">
+      <Icon name="download" :size="16" /><span v-if="!collapsed">{{ store.update.status === 'downloading' ? `下载新版本 ${store.update.percent}%` : `有新版本 ${store.update.version}` }}</span>
     </button>
 
-    <div class="gw" :class="{ tight: store.update && ['ready', 'downloading', 'available'].includes(store.update.status) }">
-      <div class="gw-row">
-        <span class="dot" :style="{ background: tunnel.color }" />
-        <span>{{ tunnel.text }}</span>
-      </div>
-      <div class="gw-host mono" :title="store.state?.settings.host">{{ host || '未连接网关' }}</div>
-    </div>
+    <button type="button" class="pst" :title="`平台：${readyCount}/${accounts.length} 已登录 · ${tunnel.text}`" @click="go('accounts')">
+      <span v-if="!collapsed" class="pst-h"><span>平台</span><span class="muted-s">{{ readyCount }}/{{ accounts.length }} 已登录</span></span>
+      <span class="dots">
+        <span v-for="a in accounts" :key="a.provider" class="pd" :title="`${PROVIDER_NAME[a.provider]} · ${a.short}`">
+          <PlatformLogo :provider="a.provider" :size="18" />
+          <i :style="{ background: dotColor(a) }" />
+        </span>
+      </span>
+      <span class="gw-row"><span class="dot" :style="{ background: tunnel.color }" /><span v-if="!collapsed">{{ tunnel.text }}</span></span>
+      <span v-if="!collapsed && host" class="gw-host mono">{{ host }}</span>
+    </button>
+
+    <button type="button" class="coll" :aria-label="collapsed ? '展开侧栏' : '收起侧栏'" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="toggle">
+      <Icon name="sidebar" :size="16" /><span v-if="!collapsed">收起侧栏</span>
+    </button>
   </aside>
 </template>
 
 <style scoped>
 .side {
-  width: 208px; height: 100%; flex-shrink: 0; background: var(--side); color: var(--side-fg);
-  padding: 22px 14px 18px; display: flex; flex-direction: column; gap: 24px; overflow-y: auto;
+  width: 196px; height: 100%; flex-shrink: 0; background: var(--side); color: var(--side-fg);
+  padding: 18px 12px 12px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; transition: width .15s ease;
 }
-.brand { display: flex; align-items: center; gap: 11px; padding: 0 6px; }
-.brand-t { display: flex; flex-direction: column; gap: 2px; }
-.name { font-family: var(--font-display); font-size: 22px; font-weight: 800; letter-spacing: .5px; line-height: 1; }
-.sub { font-size: 9px; color: var(--side-muted); white-space: nowrap; }
-.nav { display: flex; flex-direction: column; gap: 4px; }
+.side.c { width: 64px; padding: 18px 10px 12px; align-items: stretch; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; height: 32px; }
+.side.c .brand { justify-content: center; padding: 0; }
+.name { font-family: var(--font-display); font-size: 21px; font-weight: 800; letter-spacing: .5px; }
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.sep { height: 1px; background: var(--side-2); margin: 6px 8px; }
 .nav-i {
-  height: 44px; padding: 0 14px; border-radius: 8px; border: 0; background: transparent; color: var(--side-fg);
-  display: flex; align-items: center; gap: 12px; font-size: 15px; font-weight: 500; cursor: pointer; text-align: left;
+  position: relative; height: 40px; padding: 0 12px; border-radius: 8px; border: 0; background: transparent; color: #dcdad3;
+  display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left;
 }
-.nav-i:hover { background: var(--side-2); }
+.side.c .nav-i { justify-content: center; padding: 0; }
+.nav-i:hover { background: var(--side-2); color: var(--side-fg); }
 .nav-i.on { background: var(--orange); color: var(--ink); font-weight: 700; }
 .badge {
-  margin-left: auto; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--orange);
-  color: var(--ink); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--side-2);
+  color: var(--side-fg); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
 }
+.badge.warn { background: var(--side-warn); color: var(--ink); }
 .nav-i.on .badge { background: var(--ink); color: var(--paper); }
-.plats { display: flex; flex-direction: column; gap: 2px; }
-.accounts-link { display: flex; align-items: center; gap: 8px; padding: 12px 10px; border: 0; border-radius: 8px; background: var(--side-2); color: var(--side-fg); cursor: pointer; font-size: 13px; }
-.account-count { margin-left: auto; font-size: 11px; color: var(--side-muted); }
-.account-details summary { padding: 12px 10px; color: var(--side-muted); cursor: pointer; font-size: 12px; }
-.account-details .plat { padding: 0 8px; font-size: 12px; }
-.plats-h { padding: 0 14px 6px; font-size: 12px; color: var(--side-muted); letter-spacing: 1px; }
-.plat {
-  height: 34px; padding: 0 14px; display: flex; align-items: center; gap: 10px; font-size: 14px;
-  background: transparent; border: 0; color: var(--side-fg); border-radius: 6px; cursor: pointer; text-align: left;
-}
-.plat:hover { background: var(--side-2); }
-.st { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.st .dot { width: 6px; height: 6px; }
+.side.c .badge { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; background: var(--orange); color: var(--ink); }
 .upd {
-  margin-top: auto; padding: 10px 14px; border-radius: 8px; border: 1.5px solid var(--orange); background: transparent;
-  color: var(--side-fg); display: flex; align-items: center; gap: 10px; font-size: 13px; line-height: 1.5; text-align: left; cursor: pointer;
+  margin-top: auto; padding: 10px 12px; border-radius: 8px; border: 1.5px solid var(--orange); background: transparent;
+  color: var(--side-fg); display: flex; align-items: center; gap: 10px; font-size: 12px; line-height: 1.5; text-align: left; cursor: pointer;
 }
-.upd.ready { background: var(--orange); color: var(--ink); border-color: var(--orange); }
-.upd:hover { filter: brightness(1.08); }
-.gw.tight { margin-top: 0; }
-.gw { margin-top: auto; padding: 12px 14px; border-radius: 8px; background: var(--side-2); display: flex; flex-direction: column; gap: 6px; }
-.gw-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.gw-host { font-size: 12px; color: var(--side-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side.c .upd { justify-content: center; padding: 10px 0; }
+.upd.ready { background: var(--orange); color: var(--ink); }
+.pst {
+  margin-top: auto; padding: 10px; border-radius: 8px; border: 0; background: var(--side-2); color: var(--side-fg);
+  display: flex; flex-direction: column; gap: 8px; font-size: 12px; text-align: left; cursor: pointer;
+}
+.upd + .pst { margin-top: 0; }
+.pst:hover { filter: brightness(1.12); }
+.pst-h { display: flex; justify-content: space-between; }
+.muted-s { color: var(--side-muted); }
+.dots { display: flex; flex-wrap: wrap; gap: 7px; }
+.side.c .dots { flex-direction: column; align-items: center; }
+.pd { position: relative; display: inline-flex; }
+.pd i { position: absolute; right: -3px; bottom: -3px; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--side-2); }
+.gw-row { display: flex; align-items: center; gap: 7px; }
+.side.c .gw-row { justify-content: center; }
+.gw-host { font-size: 11px; color: var(--side-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.coll { height: 30px; border: 0; background: transparent; color: var(--side-muted); display: flex; align-items: center; gap: 8px; padding: 0 10px; font-size: 12px; cursor: pointer; border-radius: 6px; }
+.side.c .coll { justify-content: center; padding: 0; }
+.coll:hover { color: var(--side-fg); background: var(--side-2); }
 </style>

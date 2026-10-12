@@ -5,11 +5,11 @@ import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
 import Skeleton from '../components/Skeleton.vue'
-import { errText, go, gvs, openCard, store } from '../store'
+import { errText, go, gvs, openCard, shownProviders, store } from '../store'
 
 defineOptions({ name: 'DiscoverView' })
 
-const browsable = computed<Provider[]>(() => (store.state?.providers ?? []).filter((p) => p !== 'douyin'))
+const browsable = computed<Provider[]>(() => shownProviders().filter((p) => p !== 'douyin'))
 const provider = ref<Provider | null>(null)
 const sections = ref<Section[]>([])
 const section = ref<Section | null>(null)

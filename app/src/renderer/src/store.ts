@@ -15,8 +15,11 @@ import type {
   UpdateState,
   Tone,
 } from '@shared/api'
+import { DEFAULT_UI_PREFS, pushRecent, type UiPrefs } from '@shared/ui-prefs'
+import { visibleProviders } from '@shared/provider-registry'
 
-export type View = 'discover' | 'search' | 'detail' | 'quality' | 'downloads' | 'settings'
+export type View = 'home' | 'discover' | 'search' | 'detail' | 'quality' | 'downloads' | 'settings' | 'accounts' | 'calendar' | 'subscriptions'
+/** 'account' 保留为兼容别名：账号已移到独立的「账号」页。 */
 export type SettingsTab = 'download' | 'account' | 'gateway' | 'naming' | 'about'
 
 // 参数可能是 Vue 响应式代理，IPC 的结构化克隆不认；统一转成纯数据再发。
@@ -28,7 +31,7 @@ type Toast = { id: number; message: string; tone: Tone }
 export const store = reactive({
   state: null as AppState | null,
   jobs: [] as JobView[],
-  view: 'discover' as View,
+  view: 'home' as View,
   history: [] as View[],
 
   query: '',
@@ -46,6 +49,12 @@ export const store = reactive({
   /** 选中的集 vid */
   picked: [] as string[],
   detailCollection: '',
+  /** 同一部剧在其它平台的搜索结果（合并搜索时带入），详情页用来切换平台 */
+  detailAlternates: [] as Card[],
+  /** 当前剧集页是从哪张卡片打开的（用于平台切换） */
+  detailCard: null as Card | null,
+  /** 画质面板直接嵌在剧集页里（不再单独跳到画质页） */
+  qualityInline: false,
 
   settingsTab: 'download' as SettingsTab,
   dlFilter: 'all' as 'all' | 'active' | 'paused' | 'failed' | 'done',
@@ -55,6 +64,15 @@ export const store = reactive({
   probing: false,
   probeError: '',
 
+  /** Ctrl+K 命令面板 */
+  paletteOpen: false,
+  /** 账号中心右侧抽屉当前平台 */
+  accountDrawer: null as Provider | null,
+  /** 首次引导进行中（连上网关后继续第 2、3 步） */
+  onboarding: false,
+  /** 搜索页的平台筛选（空 = 全部） */
+  searchFilter: [] as Provider[],
+
   qr: null as null | 'youku' | 'tencent' | 'iqcn' | 'mgtv' | 'migu' | 'bilibili',
   /** 打开着的确认框数量：Esc 返回时要避开 */
   dialogCount: 0,
@@ -63,7 +81,7 @@ export const store = reactive({
 })
 
 /** 还有弹窗挡在前面（Esc 归弹窗管） */
-export const modalOpen = () => store.qr !== null || store.dialogCount > 0
+export const modalOpen = () => store.qr !== null || store.dialogCount > 0 || store.paletteOpen || store.accountDrawer !== null
 
 let toastId = 0
 export function toast(message: string, tone: Tone = 'muted'): void {
@@ -84,7 +102,15 @@ let probeGen = 0
 function leaveView(next: View): void {
   if (next === store.view) return
   if (store.view === 'search') { ++searchGen; store.searching = false; store.searchPending = [] }
-  if (store.view === 'detail') { ++detailGen; store.detailLoading = false }
+  if (store.view === 'detail') {
+    ++detailGen
+    store.detailLoading = false
+    if (store.qualityInline && next !== 'settings') {
+      ++probeGen
+      if (store.probing && !store.probe) store.probeError = '画质加载已中断，请点击重试继续。'
+      store.probing = false
+    }
+  }
   if (store.view === 'quality') {
     ++probeGen
     if (store.probing && !store.probe) store.probeError = '画质加载已中断，请点击重试继续。'
@@ -100,23 +126,52 @@ export function go(view: View): void {
   store.view = view
 }
 
-export function back(fallback: View = 'discover'): void {
+export function back(fallback: View = 'home'): void {
   const next = store.history.pop() ?? fallback
   leaveView(next)
   store.view = next
 }
 
 export function openSettings(tab: SettingsTab): void {
+  if (tab === 'account') return go('accounts')
   store.settingsTab = tab
   go('settings')
 }
 
-/** 侧栏高亮：详情/画质页归到进来的那一栏（发现或搜索） */
+/** 当前 UI 偏好（未连接时用默认值） */
+export function prefs(): UiPrefs {
+  return store.state?.settings.ui ?? DEFAULT_UI_PREFS
+}
+
+let prefsQueue: Promise<unknown> = Promise.resolve()
+/** 乐观更新本地 UI 偏好，再写回主进程（tui.json desktopUi） */
+export function savePrefs(patch: Partial<UiPrefs>): Promise<void> {
+  const st = store.state
+  if (st) st.settings.ui = { ...prefs(), ...patch }
+  const run = prefsQueue.then(async () => {
+    try {
+      store.state = await gvs('saveSettings', { ui: patch })
+    } catch (e) {
+      toast(errText(e), 'err')
+    }
+  })
+  prefsQueue = run
+  return run
+}
+
+/** 按用户排序、去掉隐藏的平台 */
+export function shownProviders(): Provider[] {
+  return visibleProviders(store.state?.providers ?? [], prefs())
+}
+
+/** 侧栏高亮：详情/画质页归到进来的那一栏；发现页归在首页下 */
 export function section(): View {
+  if (store.view === 'discover') return 'home'
   if (store.view !== 'detail' && store.view !== 'quality') return store.view
   for (let i = store.history.length - 1; i >= 0; i--) {
     const v = store.history[i]
-    if (v === 'discover' || v === 'search') return v
+    if (v === 'search') return 'search'
+    if (v === 'discover' || v === 'home') return 'home'
   }
   return 'search'
 }
@@ -126,6 +181,7 @@ export async function runSearch(raw: string): Promise<void> {
   if (!q) return
   store.query = q
   go('search')
+  void savePrefs({ recentSearches: pushRecent(prefs().recentSearches, q) })
   const gen = ++searchGen
   store.searching = true
   store.searchError = ''
@@ -139,7 +195,8 @@ export async function runSearch(raw: string): Promise<void> {
       await openDetailWith(() => gvs('detailFromLink', link))
       return
     }
-    const targets = await gvs('searchTargets')
+    const hidden = new Set(prefs().hiddenProviders)
+    const targets = (await gvs('searchTargets')).filter((p) => !hidden.has(p))
     if (gen !== searchGen) return
     store.searchPending = [...targets]
     await Promise.all(
@@ -169,6 +226,7 @@ async function openDetailWith(load: () => Promise<DetailView>, hint?: DetailHint
   store.picked = []
   store.detailCollection = ''
   store.detailHint = hint ?? null
+  store.qualityInline = false
   try {
     const d = await load()
     if (gen !== detailGen) return
@@ -194,9 +252,11 @@ export function openVideo(vid: string, hint?: DetailHint): Promise<void> {
   return openDetailWith(() => gvs('detailFromLink', { kind: 'youku', vid }, hint), hint)
 }
 
-/** 卡片统一入口：能开详情就开详情，只能搜就搜，预约类不动作 */
-export function openCard(c: Card): void {
+/** 卡片统一入口：能开详情就开详情，只能搜就搜，预约类不动作。alternates：同一部剧的其它平台结果 */
+export function openCard(c: Card, alternates: Card[] = []): void {
   if (c.target === 'unavailable') return
+  store.detailAlternates = alternates.filter((a) => a.target !== 'unavailable')
+  store.detailCard = c
   const hint = { title: c.title, poster: c.poster, mediaKind: c.mediaKind }
   if (c.provider === 'mgtv' || c.provider === 'bilibili' || c.provider === 'migu') { if (c.id) void openDetail(c.provider,c.id,hint) }
   else if (c.video && c.provider === 'tencent') void openDetailWith(() => gvs('detailFromLink', { kind: 'tencent', vid: c.id, cid: '', url: '' }, hint), hint)
@@ -214,7 +274,9 @@ export async function openQuality(): Promise<void> {
   store.probe = null
   store.probeError = ''
   store.probing = true
-  go('quality')
+  // 画质面板嵌在剧集页内；不在剧集页时（旧入口）仍跳到独立画质页
+  if (store.view === 'detail') store.qualityInline = true
+  else go('quality')
   const gen = ++probeGen
   try {
     const result = await gvs('probe', d.provider, eps)
