@@ -1043,12 +1043,14 @@ export class Core {
       mode: str(s.mode),
       available: s.available !== false,
       reason: str(s.reason) || undefined,
+      ...(provider === 'migu' && (s.sourceTerminal === 'tv' || s.sourceTerminal === 'mobile') ? {sourceTerminal:s.sourceTerminal} : {}),
     }))
   }
 
   async browse(provider: Provider, section: Section, cursor = ''): Promise<BrowseResult> {
     if (!section.available) return { cards: [], channels: [], more: false, next: '', notice: section.reason || '此栏目暂不可用' }
     const input: Record<string, unknown> = { mode: section.mode }
+    if (provider === 'migu' && section.sourceTerminal) input.terminal = section.sourceTerminal
     if (section.id.startsWith('legacy-')) {
       if (provider === 'hongguo') input.sub = section.id.replace('legacy-', '')
     } else input.sectionId = section.id

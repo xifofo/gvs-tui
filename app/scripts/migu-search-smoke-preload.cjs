@@ -14,8 +14,13 @@ contextBridge.exposeInMainWorld('gvs',{
     if(method==='state')return clone(state)
     if(method==='jobs')return []
     if(method==='updateState')return {status:'idle',version:'smoke',message:'离线测试',auto:false}
-    if(method==='catalog')return [{id:'fixture',title:'离线测试',mode:'home',available:true}]
-    if(method==='browse')return {cards:[],channels:[],more:false,next:'',notice:'离线测试，无源站请求'}
+    if(method==='catalog')return args[0]==='migu' ? [
+      {id:'mobile:recommend',title:'推荐',mode:'home',available:true,sourceTerminal:'mobile'},
+      {id:'tv:recommend',title:'推荐',mode:'home',available:true,sourceTerminal:'tv'},
+      {id:'mobile:series',title:'电视剧',mode:'rank',available:true,sourceTerminal:'mobile'},
+      {id:'tv:series',title:'电视剧',mode:'home',available:true,sourceTerminal:'tv'},
+    ] : [{id:'fixture',title:'离线测试',mode:'home',available:true}]
+    if(method==='browse')return {cards:args[0]==='migu'?clone(cards.filter(c=>c.sourceTerminal===args[1].sourceTerminal&&c.title==='伟大的长征')):[],channels:[],more:false,next:'',notice:''}
     if(method==='parseLink')return {kind:'none'}
     if(method==='searchTargets')return providers
     if(method==='searchProvider')return {provider:args[0],cards:args[0]==='migu'?clone(cards):[card('youku','youku-show','其他平台作品')],error:''}

@@ -11,6 +11,7 @@ export type Section = {
   available: boolean
   paginated?: boolean
   reason?: string
+  sourceTerminal?: 'mobile' | 'tv'
   filters?: Array<{
     key: string
     title: string
@@ -266,7 +267,7 @@ export class Discovery {
           const data = supportsBrowse(provider) ? await this.invoke(provider, 'browse_catalog', {}) : { sections: [{ id: 'hami-link', title: '粘贴 Hami 产品链接或 ID', mode: 'link', available: false, reason: '当前网关没有 Hami 搜索/榜单接口，请到搜索页输入产品链接或 ID' }] }
           if (!Array.isArray(data.sections)) throw new Error('INVALID_CATALOG')
           catalog = {
-            sections: data.sections as Section[],
+            sections: (data.sections as Section[]).map(s => provider === 'migu' && s.sourceTerminal ? {...s,title:`${s.sourceTerminal === 'tv' ? '咪咕 TV' : '咪咕 App'} · ${s.title}`} : s),
             at: this.now(),
             compatibility: false,
           }
@@ -395,6 +396,7 @@ export class Discovery {
         mode: section.mode,
         ...this.view.filters,
       }
+      if (this.view.provider === 'migu' && section.sourceTerminal) input.terminal = section.sourceTerminal
       if (!this.view.compatibility) input.sectionId = section.id
       else if (this.view.provider === 'hongguo')
         input.sub = section.id.replace('legacy-', '')

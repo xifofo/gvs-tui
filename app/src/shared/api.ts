@@ -66,7 +66,7 @@ export type AppState = {
   platform: string
 }
 
-export type Section = { id: string; title: string; mode: string; available: boolean; reason?: string }
+export type Section = { id: string; title: string; mode: string; available: boolean; reason?: string; sourceTerminal?: 'mobile' | 'tv' }
 
 export type Card = {
   provider: Provider
