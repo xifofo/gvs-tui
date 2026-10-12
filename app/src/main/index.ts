@@ -42,6 +42,7 @@ function send(channel: string, payload: unknown): void {
 }
 
 let stateTimer: NodeJS.Timeout | null = null
+let multiSig = ''
 const core = new Core({
   state: () => {
     if (stateTimer) return
@@ -50,6 +51,9 @@ const core = new Core({
       const st = core.state()
       if (st.configured) {
         accounts.migrate(st.providers)
+        // 网关多账号能力（重连 / 换网关后）变了就重新同步当前账号
+        const sig = st.providers.filter((p) => core.gatewayMultiAccount(p)).join(',')
+        if (sig !== multiSig) { multiSig = sig; accounts.syncGateway() }
         for (const a of st.accounts) accounts.recordStatus(a.provider)
       }
       send('gvs:state', st)
@@ -73,6 +77,14 @@ const accounts = new AccountStore({
   importCookie: (p, cookie) => core.importAccountCookie(p, cookie),
   statusOf: (p) => core.state().accounts.find((a) => a.provider === p),
   changed: (view) => send('gvs:accounts', view),
+  gateway: {
+    supports: (p) => core.gatewayMultiAccount(p),
+    ensure: (p, a, name) => core.ensureGatewayAccount(p, a, name),
+    rename: (p, a, name) => core.renameGatewayAccount(p, a, name),
+    remove: (p, a) => core.deleteGatewayAccount(p, a),
+    setActive: (p, a) => core.setGatewayActive(p, a),
+    run: (p, a, fn) => core.runAsAccount(p, a, fn),
+  },
   log: runLog,
 })
 

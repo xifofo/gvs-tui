@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { userMessage, errorCode } from '@tui/user-message.ts'
 import { ProviderSessions, type SessionCommand, type ProviderSessionView } from '@tui/provider-session.ts'
 import { supportsSearch, supportsBrowse, isManifestProvider } from '@tui/providers.ts'
@@ -15,7 +16,7 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import QRCode from 'qrcode'
-import { GwClient, ReloginRequired, type KeyInfo } from '@tui/client.ts'
+import { GwClient, ReloginRequired, GW_DEFAULT_ACCOUNT, type KeyInfo } from '@tui/client.ts'
 import { selectAudioTracks } from '@tui/audio-selection.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from '@tui/vault-migrate.ts'
@@ -101,7 +102,10 @@ type Emit = {
 }
 
 /** 任务是按 pin 里的配置跑的，所以显示的路径也用 pin，别串到用户后来改的设置上。 */
-type JobRecord = { view: JobView; task: DlTask; pin: Pin }
+type JobRecord = { view: JobView; task: DlTask; pin: Pin; /** 入队时锁定的网关账号（多账号网关） */ account?: string }
+
+/** 本次调用（及其派生的异步链）指定的网关账号 */
+const gwScope = new AsyncLocalStorage<{ provider: string; account: string }>()
 
 /** 入队那一刻钉住的配置：继续下载要写回同样的路径与分片布局。key / cookie / sign 永不落盘。 */
 export type Pin = {
@@ -117,7 +121,7 @@ export type Pin = {
 }
 
 /** jobs.json：重启后把排队/进行中的任务还成「已暂停」。 */
-type JobsFile = { version: 1; jobs: Array<{ view: JobView; task: DlTask; pin: Pin }> }
+type JobsFile = { version: 1; jobs: Array<{ view: JobView; task: DlTask; pin: Pin; account?: string }> }
 const JOBS_VERSION = 1
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -289,6 +293,10 @@ export class Core {
   private iqStatusCheck: 'idle' | 'checking' | 'checked' | 'failed' = 'idle'
   private connectionRevision = 0
   private cli: GwClient | null = null
+  /** 网关支持多账号的平台（旧网关为空 → 全部走旧的单会话 + Cookie 重导入） */
+  private gwMulti = new Set<string>()
+  /** provider → 界面「当前账号」对应的网关账号 id（扫码/状态等交互操作用它） */
+  private gwActive: Record<string, string> = {}
   private keyInfo: KeyInfo | null = null
   private keyError = ''
   private connecting = false
@@ -397,7 +405,7 @@ export class Core {
         view.err = ''
         changed = true
       }
-      this.jobs.set(id, { view, task: rec.task as DlTask, pin: rec.pin as Pin })
+      this.jobs.set(id, { view, task: rec.task as DlTask, pin: rec.pin as Pin, account: typeof rec.account === 'string' ? rec.account : undefined })
       if (id > max) max = id
     }
     // Only recover a source hint; download-time matching verifies the original VID.
@@ -440,6 +448,7 @@ export class Core {
         view: { ...r.view, busy: undefined },
         task: r.task,
         pin: r.pin,
+        account: r.account,
       })),
     }
     try {
@@ -505,6 +514,8 @@ export class Core {
     this.keyError = ''
     this.emit.state()
     const cli = new GwClient(this.cfg.host, this.cfg.key, () => this.cfg, 'electron_process')
+    cli.accountFor = (p) => this.gatewayAccountFor(p)
+    this.gwMulti = new Set()
     this.cli = cli
     try {
       const info = await cli.keyInfo()
@@ -518,6 +529,10 @@ export class Core {
       this.emit.state()
       throw e
     }
+    const multi = await cli.accountsInfo()
+    if (revision !== this.connectionRevision) return
+    this.gwMulti = new Set(multi?.providers ?? [])
+    runLog(`gateway multi-account: ${multi ? [...this.gwMulti].join(',') || 'none' : 'unsupported (legacy single session)'}`)
     await this.startTunnel(revision)
     if (revision !== this.connectionRevision) return
     this.emit.state()
@@ -620,6 +635,49 @@ export class Core {
 
   private providers(): Provider[] {
     return PROVIDERS.filter((p) => this.has(p))
+  }
+
+  /** 网关是否为该平台托管多份会话（feature-detect 的结果） */
+  gatewayMultiAccount(provider: string): boolean {
+    return !!this.cli && this.gwMulti.has(provider)
+  }
+
+  private gatewayAccountFor(provider: string): string | undefined {
+    if (!this.gwMulti.has(provider)) return undefined
+    const s = gwScope.getStore()
+    if (s && s.provider === provider) return s.account
+    return this.gwActive[provider]
+  }
+
+  /** 在指定网关账号下跑 fn（并发安全：只影响 fn 自己的异步链） */
+  runAsAccount<T>(provider: string, account: string, fn: () => Promise<T>): Promise<T> {
+    if (!this.gwMulti.has(provider)) return fn()
+    return gwScope.run({ provider, account: account || GW_DEFAULT_ACCOUNT }, fn)
+  }
+
+  /** 界面切换「当前账号」：之后的扫码、状态检查都落在这个网关账号上 */
+  setGatewayActive(provider: string, account: string): void {
+    if (this.gwActive[provider] === account) return
+    this.gwActive[provider] = account
+    if (this.gwMulti.has(provider) && this.has(provider)) {
+      this.providerAccounts.delete(provider)
+      void this.providerSession({ provider: provider as SessionCommand['provider'], op: 'status' } as SessionCommand).catch(() => {})
+    }
+  }
+
+  async ensureGatewayAccount(provider: string, account: string, name: string): Promise<void> {
+    if (!this.gwMulti.has(provider) || account === GW_DEFAULT_ACCOUNT) return
+    await this.client().ensureAccount(provider, account, name)
+  }
+
+  async renameGatewayAccount(provider: string, account: string, name: string): Promise<void> {
+    if (!this.gwMulti.has(provider)) return
+    await this.client().renameAccount(provider, account, name)
+  }
+
+  async deleteGatewayAccount(provider: string, account: string): Promise<void> {
+    if (!this.gwMulti.has(provider) || account === GW_DEFAULT_ACCOUNT) return
+    await this.client().deleteAccount(provider, account)
   }
 
   private client(): GwClient {
@@ -1272,6 +1330,19 @@ export class Core {
 
   /** 多账号切换：把某个账号保存的 Cookie 重新导入网关（复用原有导入流程） */
   async importAccountCookie(provider: string, cookie: string): Promise<void> {
+    const scoped = this.gatewayAccountFor(provider)
+    if (scoped && scoped !== GW_DEFAULT_ACCOUNT) {
+      // 多账号网关：Cookie 直接导进这个账号自己的会话，不碰全局配置
+      if (provider === 'iq') {
+        await this.client().invoke('iq', 'login', { op: 'status', iq_cookie: cookie })
+        await this.providerSession({ provider: 'iq', op: 'status' }).catch(() => undefined)
+      } else if (provider === 'bilibili') {
+        const v = await this.providerSession({ provider: 'bilibili', op: 'import', cookie })
+        if (!v.authenticated) throw new Error(v.summary || 'B 站 Cookie 导入失败')
+      } else throw new Error('这个平台不支持 Cookie 切换账号')
+      this.emit.state()
+      return
+    }
     if (provider === 'tencent') await this.saveSettings({ tencentCookie: cookie })
     else if (provider === 'douyin') await this.saveSettings({ douyinCookie: cookie })
     else if (provider === 'iq') {
@@ -1370,7 +1441,8 @@ export class Core {
   }
 
   enqueue(req: EnqueueRequest): number {
-    const cli = this.client()
+    const account = this.gatewayAccountFor(req.detail.provider)
+    const cli = this.client().fixedAccount(req.detail.provider, account)
     const { tasks, qualityLabel } = this.buildTasks(req)
     const groupId = `${req.detail.provider}:${req.detail.id}:${Date.now()}`
     const pin = pinOf(this.cfg)
@@ -1382,6 +1454,7 @@ export class Core {
       this.jobs.set(id, {
         task: t,
         pin,
+        account,
         view: {
           id,
           groupId,
@@ -1455,6 +1528,11 @@ export class Core {
     return runCfg(this.cfg, rec.pin)
   }
 
+  private jobClient(rec: JobRecord): GwClient {
+    const cli = this.client()
+    return rec.account === undefined ? cli : cli.fixedAccount(rec.view.provider, rec.account)
+  }
+
   private persist(soon: boolean): void {
     this.scheduleJobsSave(soon)
   }
@@ -1505,7 +1583,7 @@ export class Core {
     if (!rec || rec.view.busy) return
     if (rec.view.state !== 'paused' && rec.view.state !== 'failed') return
     // 没有网关连接就不排：不然状态会变成「排队中」然后再也没有下文。
-    const cli = this.client()
+    const cli = this.jobClient(rec)
     rec.view.busy = true
     rec.view.state = 'queued'
     rec.view.status = '排队中'
@@ -1578,7 +1656,7 @@ export class Core {
   retryJob(id: number): void {
     const rec = this.jobs.get(id)
     if (!rec || rec.view.state !== 'failed') return
-    const cli = this.client() // 没有连接时保持 failed，别把按钮按成「排队中」
+    const cli = this.jobClient(rec) // 没有连接时保持 failed，别把按钮按成「排队中」
     Object.assign(rec.view, { status: '排队中', pct: 0, log: '', err: '', note: '', state: 'queued' })
     this.hub.enqueue(this.runCfg(rec), cli, id, rec.task)
     this.pushJobs()
