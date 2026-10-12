@@ -219,7 +219,7 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
               <span class="mono small dim pc">{{ pct(j) }}%</span>
             </div>
             <div class="ja">
-              <button v-if="j.provider === 'tencent'" class="btn sm" @click="diagnosticsJob = j.id; showDiagnostics = true">腾讯诊断</button>
+              <button v-if="j.provider === 'tencent'" type="button" class="btn sm diag" title="腾讯诊断" @click="diagnosticsJob = j.id; showDiagnostics = true"><Icon name="info" :size="14" /><span class="diag-t">腾讯诊断</span></button>
               <template v-if="j.state === 'failed'">
                 <button type="button" class="btn sm" :disabled="busy.has(j.id)" @click="call(() => gvs('retryJob', j.id), [j.id])">
                   <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="retry" :size="15" />重试
@@ -252,7 +252,11 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
       <DownloadPagination v-model:page="currentPage" v-model:page-size="pageSize" :total-pages="totalPages" :group-count="shown.length" />
     </footer>
 
-    <TencentDiagnostics v-if="showDiagnostics" :job-id="diagnosticsJob" @close="showDiagnostics = false" />
+    <Transition name="drawer">
+      <div v-if="showDiagnostics" class="diag-layer" @click.self="showDiagnostics = false" @keydown.esc="showDiagnostics = false">
+        <TencentDiagnostics class="diag-drawer" :job-id="diagnosticsJob" @close="showDiagnostics = false" />
+      </div>
+    </Transition>
     <ConfirmDialog
       v-if="pendingConfirm?.job"
       title="删除这个任务？"
@@ -304,12 +308,12 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
 .fold[aria-expanded="false"] { transform: rotate(-90deg); }
 .jobs { border-top: 1px solid var(--line); }
 .job {
-  min-height: 58px; padding: 8px 18px; display: grid; grid-template-columns: 72px minmax(0, 1fr) minmax(160px, 240px) 104px;
-  align-items: center; column-gap: 18px; border-top: 1px solid var(--line);
+  min-height: 58px; padding: 8px 18px; display: grid; grid-template-columns: 72px minmax(0, 1fr) minmax(140px, 240px) max-content;
+  grid-template-areas: "lbl st bar ja"; align-items: center; column-gap: 18px; row-gap: 6px; border-top: 1px solid var(--line);
 }
 .job:first-child { border-top: 0; }
-.lbl { font-size: 14px; font-weight: 500; }
-.st { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.lbl { grid-area: lbl; font-size: 14px; font-weight: 500; }
+.st { grid-area: st; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .status-line { display: flex; align-items: baseline; gap: 8px; }
 .completed-at { font-size: 12px; white-space: nowrap; }
 .stt { font-size: 14px; font-weight: 700; }
@@ -319,13 +323,27 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
 .stt.queued { color: var(--ink-3); font-weight: 500; }
 .sub { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .job-note { color: var(--orange-text); }
-.bar { display: flex; align-items: center; gap: 10px; }
+.bar { grid-area: bar; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.bar .progress { flex: 1; min-width: 0; }
 .progress.pause > div { background: var(--ink-3); }
-.pc { width: 38px; text-align: right; }
-.ja { display: flex; gap: 6px; justify-content: flex-end; }
+.pc { width: 38px; flex-shrink: 0; text-align: right; }
+.ja { grid-area: ja; display: flex; flex-wrap: nowrap; gap: 6px; justify-content: flex-end; min-width: 104px; }
+.diag { white-space: nowrap; }
 .del:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
 @media (max-width: 1200px) {
   .gbar { width: 200px; }
-  .job { grid-template-columns: 66px minmax(0, 1fr) minmax(120px, 180px) 104px; column-gap: 12px; }
+  .job { grid-template-columns: 66px minmax(0, 1fr) minmax(120px, 180px) max-content; column-gap: 12px; }
 }
+/* 窄窗：进度条换到第二行，按钮列永远不和进度/百分比重叠 */
+@media (max-width: 1080px) {
+  .job { grid-template-columns: 66px minmax(0, 1fr) max-content; grid-template-areas: "lbl st ja" ". bar bar"; }
+  .gbar { width: 160px; }
+}
+@media (max-width: 900px) { .diag-t { display: none; } }
+.diag-layer { position: fixed; inset: 0; z-index: 60; background: rgb(0 0 0 / 38%); display: flex; justify-content: flex-end; }
+.diag-drawer { width: min(520px, 92vw); height: 100%; margin: 0 !important; border-radius: 16px 0 0 16px; overflow: auto; box-shadow: var(--ui-shadow-surface); }
+.drawer-enter-active, .drawer-leave-active { transition: opacity var(--ui-duration-base, .2s) var(--ui-ease-out, ease); }
+.drawer-enter-active .diag-drawer, .drawer-leave-active .diag-drawer { transition: transform var(--ui-duration-base, .2s) var(--ui-ease-out, ease); }
+.drawer-enter-from, .drawer-leave-to { opacity: 0; }
+.drawer-enter-from .diag-drawer, .drawer-leave-to .diag-drawer { transform: translateX(32px); }
 </style>
