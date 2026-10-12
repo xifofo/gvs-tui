@@ -273,6 +273,8 @@ export interface GvsApi {
   youkuQrStart(): Promise<QRStart>
   iqcnQrStart(): Promise<QRStart>
   iqcnQrPoll(): Promise<QRPoll>
+  bilibiliQrStart(): Promise<QRStart>
+  bilibiliQrPoll(): Promise<QRPoll>
   youkuQrPoll(): Promise<QRPoll>
   youkuRenew(): Promise<string>
   tencentQrStart(): Promise<QRStart>

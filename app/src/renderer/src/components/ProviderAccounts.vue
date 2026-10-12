@@ -79,8 +79,9 @@ onBeforeUnmount(() => { revision++ })
     <p v-if="views.mgtv" aria-live="polite">{{ views.mgtv.summary }}</p>
   </div>
   <div v-if="allowed('bilibili')" class="provider-account">
-    <h3>哔哩哔哩 · Web Cookie</h3>
-    <p>匿名可用。高画质可导入本人 Web Cookie Header；只在网关内存保存，重启需重新导入。</p>
+    <h3>哔哩哔哩 · 扫码 / Web Cookie</h3>
+    <p>匿名可用。高画质推荐用哔哩哔哩 App 扫码登录；也可导入本人 Web Cookie Header。会话只在网关内存保存，重启需重新登录。</p>
+    <div class="controls"><button class="btn sm" :disabled="busy" @click="store.qr = 'bilibili'">B 站扫码登录</button></div>
     <textarea v-model="cookie" class="input" autocomplete="off" spellcheck="false" aria-label="本人 B 站 Web Cookie" placeholder="SESSDATA=…; bili_jct=…" />
     <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'bilibili',op:'import',cookie})">验证并导入 B 站 Cookie</button><button class="btn sm" :disabled="busy" @click="command({provider:'bilibili',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'bilibili',op:'logout'})">退出</button></div>
     <p v-if="views.bilibili" aria-live="polite">{{ views.bilibili.summary }}</p>

@@ -75,3 +75,26 @@ test('Bilibili credential is only sent to import and never returned in the view'
   await s.command({provider:'bilibili',op:'status'})
   expect(calls).toEqual([{op:'import',cookie:'SESSDATA=PRIVATE'},{op:'status'}]);expect(JSON.stringify(view)).not.toContain('PRIVATE')
 })
+test('Bilibili QR login maps gateway qr/poll states and paces polling',async()=>{
+  let now=1000;const calls:Record<string,unknown>[]=[]
+  const replies=[{state:'qr_pending',qrUrl:'https://account.bilibili.com/h5/account-h5/auth/scan-web?qrcode_key=K',expiresIn:180},{state:'qr_scanned'},{loggedIn:true,state:'authenticated',name:'测试'}]
+  const s=new ProviderSessions(async(p,a,i)=>{expect([p,a]).toEqual(['bilibili','login']);calls.push(i);return replies.shift()!},()=>now)
+  const start=await s.command({provider:'bilibili',op:'start'})
+  expect(start.state).toBe('pending');expect(start.url).toContain('bilibili.com')
+  expect((await s.command({provider:'bilibili',op:'poll'})).state).toBe('pending')
+  expect(calls.length).toBe(1)
+  now+=2000;const scanned=await s.command({provider:'bilibili',op:'poll'})
+  expect(scanned.summary).toContain('确认')
+  now+=2000;expect((await s.command({provider:'bilibili',op:'poll'})).authenticated).toBe(true)
+  expect(calls).toEqual([{op:'qr'},{op:'poll'},{op:'poll'}])
+  await expect(s.command({provider:'bilibili',op:'poll'})).rejects.toThrow('过期')
+})
+test('Bilibili QR rejects untrusted QR hosts and surfaces expiry',async()=>{
+  const bad=new ProviderSessions(async()=>({state:'qr_pending',qrUrl:'https://evil.example/?qrcode_key=K'}))
+  await expect(bad.command({provider:'bilibili',op:'start'})).rejects.toThrow('无效')
+  const replies=[{state:'qr_pending',qrUrl:'https://account.bilibili.com/x',expiresIn:180},{state:'qr_expired',loggedIn:false}]
+  let now=0;const s=new ProviderSessions(async()=>replies.shift()!,()=>now)
+  await s.command({provider:'bilibili',op:'start'});now+=2000
+  const v=await s.command({provider:'bilibili',op:'poll'})
+  expect(v.state).toBe('expired');expect(v.summary).toContain('过期')
+})

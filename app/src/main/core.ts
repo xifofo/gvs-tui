@@ -307,7 +307,7 @@ export class Core {
   private readonly hub: JobHub
   private probeToken = 0
   private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[] }>()
-  private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | null = null
+  private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | { kind: 'bilibili' } | null = null
 
   constructor(private readonly emit: Emit) {
     this.hub = new JobHub((e) => this.onJob(e))
@@ -688,7 +688,7 @@ export class Core {
     return this.providers().map((p): AccountView => {
       if (p === 'mgtv' || p === 'bilibili' || p === 'migu') {
         const account = this.providerAccounts.get(p)
-        return {provider:p,short:account?.authenticated ? '已登录' : p === 'bilibili' ? '匿名' : '待登录',summary:account?.summary || (p === 'bilibili' ? '匿名可用，可导入 Web Cookie' : p === 'migu' ? '到账号设置使用咪咕视频 App 扫码' : '到账号设置使用芒果 TV App 扫码'),tone:account?.authenticated ? 'ok' : 'muted'}
+        return {provider:p,short:account?.authenticated ? '已登录' : p === 'bilibili' ? '匿名' : '待登录',summary:account?.summary || (p === 'bilibili' ? '匿名可用，可扫码登录或导入 Web Cookie' : p === 'migu' ? '到账号设置使用咪咕视频 App 扫码' : '到账号设置使用芒果 TV App 扫码'),tone:account?.authenticated ? 'ok' : 'muted'}
       }
       if (p === 'youku') {
         if (!this.cfg.youkuSign && !this.ykLogin?.ok && !this.ykAcct)
@@ -966,6 +966,21 @@ export class Core {
     const view = await this.providerSession({ provider: 'iqcn', op: 'poll' })
     if (view.authenticated) this.qr = null
     return { done: view.authenticated, message: view.summary, tone: view.authenticated ? 'ok' : ['expired', 'denied'].includes(view.state) ? 'warn' : 'muted' }
+  }
+
+  async bilibiliQrStart(): Promise<QRStart> {
+    const view = await this.providerSession({ provider: 'bilibili', op: 'start' })
+    if (!view.url) throw new Error('网关没有返回 B 站二维码')
+    this.qr = { kind: 'bilibili' }
+    const image = await QRCode.toDataURL(view.url, { margin: 1, width: 420, errorCorrectionLevel: 'M' })
+    return { images: [{ title: '哔哩哔哩 App 扫码', image }], hint: view.summary }
+  }
+
+  async bilibiliQrPoll(): Promise<QRPoll> {
+    if (this.qr?.kind !== 'bilibili') return { done: false, message: '二维码已失效，请刷新', tone: 'warn' }
+    const view = await this.providerSession({ provider: 'bilibili', op: 'poll' })
+    if (view.authenticated || view.state === 'expired') this.qr = null
+    return { done: view.authenticated, message: view.summary, tone: view.authenticated ? 'ok' : view.state === 'expired' ? 'warn' : 'muted' }
   }
 
   async qrCancel(): Promise<void> {

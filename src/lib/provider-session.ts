@@ -4,7 +4,7 @@ export type ProviderSessionView = { provider: SessionProvider; state: string; au
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
 const positive = (v: unknown, fallback: number) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback
-const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['import','status','logout']), migu:new Set(['start','poll','status','logout']) }
+const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']) }
 
 /** Source credentials are transient: never persist or log command inputs. */
 export class ProviderSessions {
@@ -19,11 +19,12 @@ export class ProviderSessions {
   private views = new Map<string, ProviderSessionView>()
   private cnFlow?: { id: string; expires: number; nextPoll: number }
   private mangoFlow?: { id: string; expires: number; nextPoll: number }
+  private biliFlow?: { expires: number; nextPoll: number }
   private miguFlow?: { id: string; expires: number; nextPoll: number; terminal:'mobile'|'tv'|'unified' }
   constructor(private readonly invoke: Invoke, private readonly now = Date.now) {}
   setScope(scope: string): void {
     if (scope === this.scope) return
-    this.scope = scope; this.scopeRevision++; this.busy.clear(); this.flow = ''; this.flowExpires = 0; this.nextPoll = 0; this.nextSMS = 0; this.activation = undefined; this.cnFlow = undefined; this.mangoFlow = undefined; this.miguFlow = undefined; this.views.clear()
+    this.scope = scope; this.scopeRevision++; this.busy.clear(); this.flow = ''; this.flowExpires = 0; this.nextPoll = 0; this.nextSMS = 0; this.activation = undefined; this.cnFlow = undefined; this.mangoFlow = undefined; this.biliFlow = undefined; this.miguFlow = undefined; this.views.clear()
   }
   command(c: SessionCommand): Promise<ProviderSessionView> {
     const operation = c.op + (c.provider === 'migu' ? ':'+(c.terminal || 'unified') : '')
@@ -61,6 +62,13 @@ export class ProviderSessions {
       if (!flow || this.now() >= flow.expires) throw new Error('芒果二维码已过期，请重新开始')
       if (this.now() < flow.nextPoll) return this.views.get(key)!
       input.sessionId = flow.id
+    }
+    if (c.provider === 'bilibili' && c.op === 'start') input.op = 'qr'
+    if (c.provider === 'bilibili' && c.op === 'poll') {
+      // qrcode_key stays in gateway memory; the client only paces polling.
+      const flow = this.biliFlow
+      if (!flow || this.now() >= flow.expires) throw new Error('B 站二维码已过期，请重新开始')
+      if (this.now() < flow.nextPoll) return this.views.get(key)!
     }
     if (c.provider === 'iqcn' && (c.op === 'poll' || c.op === 'cancel')) {
       if (!this.cnFlow) throw new Error('二维码已过期，请重新开始')
@@ -148,7 +156,21 @@ export class ProviderSessions {
       view.summary = authenticated ? '芒果已登录；播放以账号授权为准' : state === 'pending' ? '使用芒果 TV App 扫码并确认' : state === 'expired' ? '二维码已过期，请刷新' : '芒果尚未登录，可扫码登录'
       if (authenticated || c.op === 'logout' || state === 'expired') this.mangoFlow = undefined
     }
-    if (c.provider === 'bilibili') view.summary = authenticated ? 'B 站 Web 会话已验证；网关重启需重新导入' : state === 'expired' ? 'B 站 Cookie 已失效，请重新导入' : '匿名可用；高画质可导入本人 Web Cookie'
+    if (c.provider === 'bilibili') {
+      if (['qr_pending','qr_waiting','qr_scanned'].includes(state)) view.state = 'pending'
+      if (state === 'qr_expired') view.state = 'expired'
+      if (c.op === 'start') {
+        const url = new URL(text(data.qrUrl))
+        if (url.protocol !== 'https:' || !(url.hostname === 'bilibili.com' || url.hostname.endsWith('.bilibili.com')) || url.username || url.password || url.port) throw new Error('网关返回的 B 站二维码无效')
+        view.url = url.href; view.interval = 2; view.expiresAt = this.now() + positive(data.expiresIn, 180) * 1000
+        this.biliFlow = { expires: view.expiresAt, nextPoll: this.now() + 2000 }
+      } else if (view.state === 'pending') {
+        view.url = previous?.url; view.expiresAt = this.biliFlow?.expires; view.interval = 2
+        if (this.biliFlow) this.biliFlow.nextPoll = this.now() + 2000
+      }
+      view.summary = authenticated ? 'B 站 Web 会话已验证；网关重启需重新登录' : state === 'qr_scanned' ? '已扫码，请在 B 站 App 中确认登录' : view.state === 'pending' ? '使用哔哩哔哩 App 扫码并确认' : state === 'qr_expired' ? '二维码已过期，请刷新' : state === 'expired' ? 'B 站登录已失效，请重新扫码或导入 Cookie' : '匿名可用；高画质可扫码登录或导入本人 Web Cookie'
+      if (authenticated || c.op === 'logout' || view.state === 'expired') this.biliFlow = undefined
+    }
     if (c.provider === 'iqcn') {
       view.summary = text(data.summary) || (authenticated ? '爱奇艺国内版已登录' : state === 'pending' ? '用爱奇艺 App 扫码并确认' : state === 'expired' ? '二维码已过期，请刷新' : '登录未完成，请重试')
       if (c.op === 'start') {

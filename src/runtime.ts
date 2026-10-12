@@ -209,6 +209,7 @@ export class Runtime {
   private qrIQCN = false
   private qrMGTV = false
   private qrMIGU = false
+  private qrBILI = false
   /** When true, qr scene polls App+TV in parallel. */
   private qrTencentDual = false
   private qrDualDone = { app: false, tv: false }
@@ -581,7 +582,7 @@ export class Runtime {
     if (this.has('mewatch')) f.push('mewatch 激活', 'mewatch 检查授权', 'mewatch 状态', 'mewatch profiles', 'mewatch profile', 'mewatch 退出')
     if (this.has('hamivideo')) f.push('Hami 会话类型', 'Hami TV Cookie', 'Hami TV 续期', 'Hami Web 准备', 'Hami 手机号（确认发码）', 'Hami 短信码', 'Hami 状态', 'Hami 退出')
     if (this.has('mgtv')) f.push('芒果扫码','芒果状态','芒果退出')
-    if (this.has('bilibili')) f.push('B 站 Cookie','B 站状态','B 站退出')
+    if (this.has('bilibili')) f.push('B 站扫码','B 站 Cookie','B 站状态','B 站退出')
     if (this.has('migu')) f.push('咪咕扫码','咪咕状态','咪咕退出')
     if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯诊断日志')
     f.push('运行日志')
@@ -1828,7 +1829,7 @@ export class Runtime {
     if (f === 'Hami 会话类型') { this.cfg.hamiClient = this.cfg.hamiClient === 'web' ? 'tv' : 'web'; this.persistConfig(); this.emit(); return }
     const loginCommands: Record<string, SessionCommand> = {
       '芒果扫码':{provider:'mgtv',op:'start'},'芒果状态':{provider:'mgtv',op:'status'},'芒果退出':{provider:'mgtv',op:'logout'},
-      'B 站状态':{provider:'bilibili',op:'status'},'B 站退出':{provider:'bilibili',op:'logout'},
+      'B 站扫码':{provider:'bilibili',op:'start'},'B 站状态':{provider:'bilibili',op:'status'},'B 站退出':{provider:'bilibili',op:'logout'},
       '咪咕扫码':{provider:'migu',op:'start'},'咪咕状态':{provider:'migu',op:'status'},'咪咕退出':{provider:'migu',op:'logout'},
       '爱奇艺国内版扫码': {provider:'iqcn',op:'start'}, '爱奇艺国内版状态': {provider:'iqcn',op:'status'}, '爱奇艺国内版退出': {provider:'iqcn',op:'logout'},
       'IQ 账号状态': {provider:'iq',op:'status'}, 'IQ 换TV': {provider:'iq',op:'exchange_tv'}, 'IQ 检查授权': {provider:'iq',op:'poll'}, 'IQ 退出': {provider:'iq',op:'logout'},
@@ -2060,6 +2061,12 @@ export class Runtime {
           this.cancelQRScene();this.qrMGTV=true;this.scene='qr'
           this.qrAscii=await QRCode.toString(view.url,{type:'terminal',small:true});this.qrHint='使用芒果 TV App 扫码并确认';this.startQRPoll()
         } else if (this.qrMGTV && (view.authenticated || view.state === 'expired')) {this.cancelQRScene();this.scene='settings'}
+      }
+      if (command.provider === 'bilibili') {
+        if (command.op === 'start' && view.url) {
+          this.cancelQRScene();this.qrBILI=true;this.scene='qr'
+          this.qrAscii=await QRCode.toString(view.url,{type:'terminal',small:true});this.qrHint='使用哔哩哔哩 App 扫码并确认';this.startQRPoll()
+        } else if (this.qrBILI && (view.authenticated || view.state === 'expired')) {this.cancelQRScene();this.scene='settings'}
       }
       // iqCookie 不再本地保存：IQ/Hami 会话由网关按 API key 加密持久化。
       if (command.op === 'web_verify' && view.authenticated) { this.cfg.hamiClient = 'web'; this.persistConfig() }
@@ -2992,7 +2999,7 @@ export class Runtime {
     void this.pollQR()
     this.qrTimer = setInterval(() => {
       void this.pollQR()
-    }, this.qrMGTV || this.qrMIGU ? 3000 : this.qrTencent || this.qrTencentDual ? 3500 : 1500)
+    }, this.qrMGTV || this.qrMIGU ? 3000 : this.qrBILI ? 2000 : this.qrTencent || this.qrTencentDual ? 3500 : 1500)
   }
 
   private stopQR(): void {
@@ -3007,6 +3014,7 @@ export class Runtime {
     this.qrIQCN = false
     this.qrMGTV = false
     this.qrMIGU = false
+    this.qrBILI = false
     this.providerLoginGeneration++
     this.mewatchQR = false
     this.stopQR()
@@ -3021,6 +3029,7 @@ export class Runtime {
     if (this.scene !== 'qr' || !this.cli || this.qrBusy) return
     if (this.qrMGTV) {await this.providerLogin({provider:'mgtv',op:'poll'});return}
     if (this.qrMIGU) {await this.providerLogin({provider:'migu',op:'poll'});return}
+    if (this.qrBILI) {await this.providerLogin({provider:'bilibili',op:'poll'});return}
     if (this.qrIQCN) { await this.providerLogin({provider:'iqcn',op:'poll'}); return }
     if (this.mewatchQR) { await this.providerLogin({provider:'mewatch',op:'poll'}); return }
     if (!this.qrTencentDual && !this.qrTencent && !this.qrTicket && !this.qrLoginToken) return
