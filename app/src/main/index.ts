@@ -1,9 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, Tray } from 'electron'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import trayIconPath from '../../build/icon.png?asset'
 import { SubscriptionManager } from './subscriptions'
 import { fetchCalendar } from './calendar-source'
+import { AccountStore } from './account-store'
+import { badgesFromQualities, HintQueue, type QualityHint } from '@shared/quality-badges'
+import type { Provider } from '@shared/api'
 import type { Subscription } from '@shared/api'
 import type { GvsApi, JobView, Tone } from '@shared/api'
 import { captureProxyEnv, installIQSourceProxy, patchGlobalWebSocket } from './env'
@@ -44,18 +47,60 @@ const core = new Core({
     if (stateTimer) return
     stateTimer = setTimeout(() => {
       stateTimer = null
-      send('gvs:state', core.state())
+      const st = core.state()
+      if (st.configured) {
+        accounts.migrate(st.providers)
+        for (const a of st.accounts) accounts.recordStatus(a.provider)
+      }
+      send('gvs:state', st)
     }, 50)
   },
   jobs: (jobs: JobView[]) => send('gvs:jobs', jobs),
   toast: (message: string, tone: Tone) => send('gvs:toast', { message, tone }),
 })
 
+// ---------------------------------------------------------------- 多账号
+const accountsPath = () => join(app.getPath('userData'), 'accounts.json')
+const accounts = new AccountStore({
+  load: () => (existsSync(accountsPath()) ? readFileSync(accountsPath(), 'utf8') : null),
+  save: (json) => {
+    const p = accountsPath()
+    writeFileSync(p + '.tmp', json)
+    renameSync(p + '.tmp', p)
+  },
+  encrypt: (plain) => (safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(plain).toString('base64') : null),
+  decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+  importCookie: (p, cookie) => core.importAccountCookie(p, cookie),
+  statusOf: (p) => core.state().accounts.find((a) => a.provider === p),
+  changed: (view) => send('gvs:accounts', view),
+  log: runLog,
+})
+
+/** 探测画质：会员 / 登录类错误时换号重试，并提示 */
+function probeWithAccounts(p: Provider, eps: Parameters<typeof core.probe>[1], accountId?: string) {
+  return accounts.withFallback(p, () => core.probe(p, eps), (slot) => {
+    send('gvs:toast', { message: `当前账号受限，已切换到「${slot.name}」重试`, tone: 'warn' })
+  }, accountId)
+}
+
+// ---------------------------------------------------------------- 搜索结果画质
+const hints = new HintQueue<QualityHint>(async (key) => {
+  const i = key.indexOf(':')
+  const provider = key.slice(0, i) as Provider
+  const id = key.slice(i + 1)
+  const d = await core.detail(provider, id)
+  const ep = d.episodes.find((e) => !e.collection || e.collection === '正片') ?? d.episodes[0]
+  if (!ep) throw new Error('no episode')
+  const r = await core.probe(provider, [ep])
+  core.forgetProbe(r.token)
+  return badgesFromQualities(r.qualities, r.audios)
+}, { concurrency: 2, timeoutMs: 12_000, ttlMs: 6 * 3600_000, failTtlMs: 30 * 60_000, max: 400 })
+
 // ---------------------------------------------------------------- 订阅
 const subsPath = () => join(app.getPath('userData'), 'subscriptions.json')
 const subs = new SubscriptionManager({
   detail: (p, id) => core.detail(p, id),
-  probe: (p, eps) => core.probe(p, eps),
+  probe: (p, eps, accountId) => probeWithAccounts(p, eps, accountId),
   enqueue: (req) => core.enqueue(req),
   notify: (title, body, sub) => notify(title, body, sub),
   changed: (view) => {
@@ -127,11 +172,11 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   searchProvider: (p, q) => core.searchProvider(p, q),
   detail: (p, id, hint) => core.detail(p, id, hint),
   detailFromLink: (l, hint) => core.detailFromLink(l, hint),
-  probe: (p, eps) => core.probe(p, eps),
+  probe: (p, eps, accountId) => probeWithAccounts(p, eps, accountId),
   namingPreview: (r) => core.namingPreview(r),
   tmdbSearch: (t, tv) => core.tmdbSearch(t, tv),
   tmdbSeasons: (id) => core.tmdbSeasons(id),
-  enqueue: (r) => core.enqueue(r),
+  enqueue: (r) => (r.accountId ? accounts.use(r.detail.provider, r.accountId, async () => core.enqueue(r)) : core.enqueue(r)),
   jobs: () => core.jobList(),
   retryJob: (id) => core.retryJob(id),
   pauseJob: (id) => core.pauseJob(id),
@@ -180,6 +225,17 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   setSubscriptionInterval: (minutes) => subs.setInterval(minutes),
   markSubscriptionsSeen: (id) => subs.markSeen(id),
   calendar: () => fetchCalendar(),
+  accounts: () => accounts.view(),
+  addAccount: async (p, name, cookie) => {
+    const r = await accounts.add(p, name, cookie)
+    return { id: r.slot.id, needsLogin: r.needsLogin }
+  },
+  renameAccount: (id, name) => accounts.rename(id, name),
+  removeAccount: (id) => accounts.remove(id),
+  setDefaultAccount: (id) => accounts.setDefault(id),
+  activateAccount: async (id) => ({ needsLogin: (await accounts.activate(id)).needsLogin }),
+  updateAccountCookie: async (id, cookie) => { await accounts.updateCookie(id, cookie) },
+  qualityHint: (p, id) => hints.get(`${p}:${id}`),
 }
 
 ipcMain.handle('gvs:call', async (_e, method: string, args: unknown[]) => {

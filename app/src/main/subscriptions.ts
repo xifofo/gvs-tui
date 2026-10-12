@@ -11,7 +11,7 @@ import {
  */
 export type SubDeps = {
   detail(provider: Provider, id: string): Promise<DetailView>
-  probe(provider: Provider, episodes: EpisodeView[]): Promise<ProbeResult>
+  probe(provider: Provider, episodes: EpisodeView[], accountId?: string): Promise<ProbeResult>
   enqueue(req: EnqueueRequest): number
   notify(title: string, body: string, sub: Subscription): void
   changed(view: SubsView): void
@@ -111,6 +111,7 @@ export class SubscriptionManager {
       autoDownload: req.autoDownload ?? true,
       upgrade: req.upgrade ?? false,
       window: req.window ?? null,
+      accountId: req.accountId || undefined,
       updateText: req.updateText ?? '', total: 0, episodes: [], newCount: 0, lastCheck: null,
       nextCheckAt: now, createdAt: now,
     }
@@ -210,10 +211,10 @@ export class SubscriptionManager {
   /** 新集按规则组挑最好的版本下载；返回一句状态 */
   private async download(sub: Subscription, d: DetailView, eps: EpisodeView[]): Promise<string> {
     if (!eps.length) return '无可下载视频'
-    const probe = await this.deps.probe(d.provider, eps)
+    const probe = await this.deps.probe(d.provider, eps, sub.accountId)
     const m = pickBest(sub.rules, candidatesOf(probe))
     if (!m) return '规则组没有一档满足，等待更好的版本'
-    const n = this.deps.enqueue(this.request(d, eps, probe.token, m.index, m.audioIds))
+    const n = this.deps.enqueue({ ...this.request(d, eps, probe.token, m.index, m.audioIds), accountId: sub.accountId })
     for (const e of eps) {
       const rec = sub.episodes.find((x) => x.vid === e.vid)
       if (rec) rec.downloaded = { tier: m.tier, label: m.label, at: this.now() }
@@ -228,10 +229,10 @@ export class SubscriptionManager {
     if (!rec) return ''
     const ep = d.episodes.find((e) => e.vid === rec.vid)
     if (!ep) return ''
-    const probe = await this.deps.probe(d.provider, [ep])
+    const probe = await this.deps.probe(d.provider, [ep], sub.accountId)
     const m = pickBest(sub.rules, candidatesOf(probe))
     if (!shouldUpgrade(rec.downloaded!.tier, m)) return ''
-    this.deps.enqueue(this.request(d, [ep], probe.token, m!.index, m!.audioIds))
+    this.deps.enqueue({ ...this.request(d, [ep], probe.token, m!.index, m!.audioIds), accountId: sub.accountId })
     const from = rec.downloaded!.label
     rec.downloaded = { tier: m!.tier, label: m!.label, at: this.now() }
     this.deps.notify(`《${sub.title}》洗版`, `第 ${rec.number} 集 ${from} → ${m!.label}`, sub)

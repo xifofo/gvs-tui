@@ -1265,6 +1265,25 @@ export class Core {
     }
   }
 
+  /** 后台画质探测用完就丢，免得挤掉用户正在用的画质 token */
+  forgetProbe(token: number): void {
+    this.probes.delete(token)
+  }
+
+  /** 多账号切换：把某个账号保存的 Cookie 重新导入网关（复用原有导入流程） */
+  async importAccountCookie(provider: string, cookie: string): Promise<void> {
+    if (provider === 'tencent') await this.saveSettings({ tencentCookie: cookie })
+    else if (provider === 'douyin') await this.saveSettings({ douyinCookie: cookie })
+    else if (provider === 'iq') {
+      await this.saveSettings({ iqCookie: cookie })
+      await this.providerSession({ provider: 'iq', op: 'status' }).catch(() => undefined)
+    } else if (provider === 'bilibili') {
+      const v = await this.providerSession({ provider: 'bilibili', op: 'import', cookie })
+      if (!v.authenticated) throw new Error(v.summary || 'B 站 Cookie 导入失败')
+    } else throw new Error('这个平台不支持 Cookie 切换账号')
+    this.emit.state()
+  }
+
   async tmdbSearch(title: string, tv: boolean): Promise<TmdbHit[]> {
     if (!this.cfg.tmdbKey.trim()) return []
     const hits = await tmdbSearch(this.cfg.tmdbKey, this.cfg.tmdbLang, title, { proxy: this.cfg.tmdbProxy })

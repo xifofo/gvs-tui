@@ -5,6 +5,10 @@ import { PROVIDER_IDS, PROVIDER_LABELS } from '../../../src/lib/providers'
 import type { UiPrefs } from './ui-prefs'
 import type { SubscribeRequest, Subscription, SubscriptionPatch, SubsView } from './subscription'
 import type { CalendarDay } from './calendar'
+import type { AccountsView } from './accounts'
+import type { QualityHint } from './quality-badges'
+export type { AccountsView, AccountSlot, AccountBook, AccountStatus } from './accounts'
+export type { QualityHint, QualityBadge } from './quality-badges'
 export type { SubscribeRequest, Subscription, SubscriptionPatch, SubsView, CheckWindow, SubState } from './subscription'
 export type { CalendarDay, CalendarItem } from './calendar'
 export type { UiPrefs, QualityCap } from './ui-prefs'
@@ -192,6 +196,8 @@ export type EnqueueRequest = {
   tmdb: TmdbHit | null
   /** Explicit season from the matched TMDB show's list; episode IDs/numbers stay unchanged. */
   tmdbSeason?: number
+  /** 多账号：用哪个账号下载（空 = 平台默认账号） */
+  accountId?: string
 }
 
 export type JobView = {
@@ -254,7 +260,8 @@ export interface GvsApi {
   /** hint：卡片上已有的标题/海报，详情接口没给时兜底 */
   detail(provider: Provider, id: string, hint?: DetailHint): Promise<DetailView>
   detailFromLink(link: LinkTarget, hint?: DetailHint): Promise<DetailView>
-  probe(provider: Provider, episodes: EpisodeView[]): Promise<ProbeResult>
+  /** accountId：用指定账号探测（空 = 默认）；会员/登录错误时自动换号重试 */
+  probe(provider: Provider, episodes: EpisodeView[], accountId?: string): Promise<ProbeResult>
   namingPreview(req: EnqueueRequest): Promise<NamingPreview>
   tmdbSearch(title: string, tv: boolean): Promise<TmdbHit[]>
   tmdbSeasons(id: number): Promise<TmdbSeasonList>
@@ -305,6 +312,19 @@ export interface GvsApi {
   markSubscriptionsSeen(id?: string): Promise<void>
   /** 平台排播（目前只有芒果 TV；其它平台由订阅推算） */
   calendar(): Promise<{ days: CalendarDay[]; error: string; fetchedAt: number }>
+
+  // ---- 多账号
+  accounts(): Promise<AccountsView>
+  /** cookie 为空 = 扫码槽位（返回 needsLogin，界面接着走原有扫码流程） */
+  addAccount(provider: Provider, name: string, cookie?: string): Promise<{ id: string; needsLogin: boolean }>
+  renameAccount(id: string, name: string): Promise<void>
+  removeAccount(id: string): Promise<void>
+  setDefaultAccount(id: string): Promise<void>
+  activateAccount(id: string): Promise<{ needsLogin: boolean }>
+  updateAccountCookie(id: string, cookie: string): Promise<void>
+
+  // ---- 搜索结果画质（懒加载探测，限流 + 缓存）
+  qualityHint(provider: Provider, id: string): Promise<QualityHint | null>
 }
 
 export type GvsEvents = {
@@ -313,6 +333,7 @@ export type GvsEvents = {
   toast: { message: string; tone: Tone }
   update: UpdateState
   subs: SubsView
+  accounts: AccountsView
   /** 托盘菜单 / 通知点击要求界面跳到某页 */
   navigate: { view: string; subId?: string }
 }

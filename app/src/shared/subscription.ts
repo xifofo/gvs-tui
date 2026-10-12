@@ -31,6 +31,8 @@ export type Subscription = {
   autoDownload: boolean
   upgrade: boolean
   window?: CheckWindow | null
+  /** 多账号：检查与下载用的账号（空 = 默认账号） */
+  accountId?: string
   /** 平台的更新说明，例如「更新至08集 每日19:30更新」 */
   updateText: string
   total: number
@@ -43,8 +45,8 @@ export type Subscription = {
 }
 
 export type SubscribeRequest = Pick<Subscription, 'provider' | 'showId' | 'title' | 'poster' | 'kind'> &
-  Partial<Pick<Subscription, 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'updateText'>>
-export type SubscriptionPatch = Partial<Pick<Subscription, 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'paused' | 'title'>>
+  Partial<Pick<Subscription, 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'updateText' | 'accountId'>>
+export type SubscriptionPatch = Partial<Pick<Subscription, 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'paused' | 'title' | 'accountId'>>
 
 export type SubsView = {
   subs: Subscription[]
