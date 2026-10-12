@@ -18,6 +18,14 @@ type IQMuxOptions = {
   emit: (status: string, pct: number, log: string) => void
 }
 
+export class IQAudioValidationError extends Error {
+  readonly errorCode = 'IQ_AUDIO_VALIDATION_FAILED'
+  constructor(detail: string) {
+    super(`IQ 音轨解码检查失败：${detail}`)
+    this.name = 'IQAudioValidationError'
+  }
+}
+
 function ffmpeg(bin: string, args: string[], signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, ['-hide_banner', '-loglevel', 'error', '-nostats', '-nostdin', ...args],
@@ -57,7 +65,12 @@ export async function muxIQ(bin: string, options: IQMuxOptions): Promise<{ index
     args.push('-n', output)
     await ffmpeg(bin, args, signal)
     emit('音轨验收', 0.97, '检查所有合流音轨')
-    await ffmpeg(bin, ['-i', output, '-map', '0:a', '-f', 'null', '-'], signal)
+    try {
+      await ffmpeg(bin, ['-i', output, '-map', '0:a', '-f', 'null', '-'], signal)
+    } catch (error) {
+      signal?.throwIfAborted()
+      throw new IQAudioValidationError(error instanceof Error ? error.message : String(error))
+    }
     signal?.throwIfAborted()
     if (reservation) {
       const current = lstatSync(dest)

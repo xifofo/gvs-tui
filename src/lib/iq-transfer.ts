@@ -1,16 +1,23 @@
 import { createHash } from 'node:crypto'
-import { createWriteStream, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createWriteStream, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { fetchMediaProbe } from './proxy.ts'
 import { sleep } from './util.ts'
 
 type Part = { url: string; path: string }
+
+/** Keep bytes for diagnostics, but force a fresh whole GET after decode failure. */
+export function invalidateIQAudioParts(paths: readonly string[]): void {
+  for (const path of paths) {
+    try { unlinkSync(`${path}.complete.json`) } catch { /* preserve the original validation error */ }
+  }
+}
+
 export async function downloadIQParts(parts: Part[], options: {
   identity: string; threads: number; headers: Record<string,string>; signal?: AbortSignal
   progress?: (bytes: number, completed: number, total: number) => void
   fetcher?: (url: string, init: RequestInit) => Promise<Response>
-  downloadRanges?: (url: string, path: string, threads: number, received: (bytes: number) => void, signal: AbortSignal) => Promise<void>
 }): Promise<void> {
   options.signal?.throwIfAborted()
   const controller = new AbortController()
@@ -19,7 +26,9 @@ export async function downloadIQParts(parts: Part[], options: {
   const identities = parts.map((part,index) => {
     const u = new URL(part.url)
     if (!['http:','https:'].includes(u.protocol) || u.username || u.password) throw new Error('IQ 音轨地址格式无效')
-    return createHash('sha256').update(JSON.stringify([options.identity,index,u.pathname,...['m','qd_uri','start','end','contentlength'].map(k=>u.searchParams.get(k))])).digest('hex')
+    // Older nested byte-range transfers can have the right length but wrong
+    // bytes. Never reuse their completion records after switching to whole GETs.
+    return createHash('sha256').update(JSON.stringify(['iq-audio-whole-v2',options.identity,index,u.pathname,...['m','qd_uri','start','end','contentlength'].map(k=>u.searchParams.get(k))])).digest('hex')
   })
   const report = () => options.progress?.(bytes.reduce((a,b)=>a+b,0),complete.filter(Boolean).length,parts.length)
   parts.forEach((part,index)=>{
@@ -35,19 +44,19 @@ export async function downloadIQParts(parts: Part[], options: {
       signal.throwIfAborted()
       const index=next++, part=parts[index]!
       if(complete[index])continue
-      if(options.downloadRanges){
-        await options.downloadRanges(part.url,part.path,options.threads,n=>{bytes[index]=n;report()},signal)
-        bytes[index]=statSync(part.path).size
-        if(!bytes[index])throw new Error('IQ 音轨分块为空')
-        writeFileSync(`${part.path}.complete.json`,JSON.stringify({identity:identities[index],bytes:bytes[index]}))
-        complete[index]=true;report();continue
-      }
       for(let attempt=0;;attempt++){
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
         try {
           bytes[index]=0
-          const response=await (options.fetcher??fetchMediaProbe)(part.url,{headers:options.headers,signal})
+          // IQ already splits the audio into physical files. Some CDN/cache
+          // combinations return misleading partial data; fetch each whole file
+          // and parallelize between files instead of splitting it again.
+          const headers = new Headers(options.headers)
+          headers.delete('range')
+          headers.delete('if-range')
+          const response=await (options.fetcher??fetchMediaProbe)(part.url,{headers,signal,cache:'no-store'})
           if(!response.ok||!response.body){await response.body?.cancel().catch(()=>{});throw new Error(`IQ CDN HTTP ${response.status}`)}
+          if(response.status===206){await response.body.cancel().catch(()=>{});throw new Error('IQ 音轨完整下载收到局部内容')}
           const expected=Number(response.headers.get('content-length'))||0
           reader=response.body.getReader()
           async function* chunks(){
@@ -65,9 +74,7 @@ export async function downloadIQParts(parts: Part[], options: {
       }
     }
   }
-  // Range mode uses the whole connection budget inside one file, including
-  // the last remaining chunk. Do not multiply it by a second worker pool.
-  const count=options.downloadRanges?1:Math.min(parts.length,Math.max(1,Math.min(16,Math.floor(options.threads)||1)))
+  const count=Math.min(parts.length,Math.max(1,Math.min(16,Math.floor(options.threads)||1)))
   const workers=Array.from({length:count},worker)
   try {await Promise.all(workers)}
   catch(error){controller.abort(error);await Promise.allSettled(workers);throw error}

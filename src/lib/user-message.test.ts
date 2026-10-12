@@ -1,6 +1,19 @@
 import { expect, test } from 'bun:test'
 import { userMessage, userFacing } from './user-message'
 import { errorCatalog } from './user-message-catalog'
+import { IQAudioValidationError } from './iq-mux'
+
+test('IQ audio validation has an actionable display message while retaining diagnostic details',()=>{
+  const error=new IQAudioValidationError('ffmpeg: Invalid data /private/path token=PRIVATE')
+  const message=userMessage(error)
+  expect(message).toContain('音轨检查未通过')
+  expect(message).toContain('重新下载音轨')
+  expect(message).toContain('视频会保留')
+  expect(message).not.toMatch(/PRIVATE|token|ffmpeg|private/)
+  expect(error.message).toContain('Invalid data')
+  expect(userMessage(error.message)).toBe(message)
+  expect(userMessage('IQ 封装或音轨验收失败 (234): Error submitting packet to decoder')).toContain('音视频封装或音轨检查未通过')
+})
 
 test('unknown and legacy errors become readable text without speculative causes', () => {
   for (const input of [

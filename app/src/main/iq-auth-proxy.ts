@@ -1,3 +1,5 @@
+import { createIQCatalogMode } from '../../../src/lib/iq-catalog-mode.ts'
+
 type Fetcher = (url: string, init: RequestInit) => Promise<Response>
 type IQAuthNetwork = {
   fetch: (url: string, init: RequestInit, proxy: string) => Promise<Response>
@@ -22,6 +24,7 @@ export function isIQSourceURL(url: URL): boolean {
 }
 
 export function createIQSourceRoute(network: IQAuthNetwork): (url: URL) => Promise<Fetcher | undefined> {
+  const catalogMode = createIQCatalogMode({ log: network.log })
   return async url => {
     if (!isIQSourceURL(url)) return undefined
     const label = isIQAuthURL(url) ? 'iq_auth_transport' : 'iq_source_transport'
@@ -42,7 +45,8 @@ export function createIQSourceRoute(network: IQAuthNetwork): (url: URL) => Promi
       // Log routing and HTTP status, never paths, queries, credentials or bodies.
       network.log(`${label} host=${url.hostname} route=${route}`)
       try {
-        const response = await network.fetch(input, { ...init, credentials: 'omit', cache: 'no-store' }, proxy)
+        const target = await catalogMode(input, init, proxy, (address, request) => network.fetch(address, request, proxy))
+        const response = await network.fetch(target, { ...init, credentials: 'omit', cache: 'no-store' }, proxy)
         network.log(`${label} host=${url.hostname} route=${route} http=${response.status}`)
         return response
       } catch (error) {

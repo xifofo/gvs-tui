@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { finalizeCompletedName, reserveOutputPath } from './completed-naming.ts'
 import { probeFinishedMedia } from './gvs-record.ts'
-import { defaultIQSubtitleIndex, muxIQ, orderedIQSubtitles } from './iq-mux.ts'
+import { defaultIQSubtitleIndex, IQAudioValidationError, muxIQ, orderedIQSubtitles } from './iq-mux.ts'
 import { sourceTag } from './name.ts'
 
 const realMediaTest = ['ffmpeg', 'ffprobe'].every(bin => spawnSync(bin, ['-version'],
@@ -191,6 +191,42 @@ test('IQ invalid reservations, mux failures and cancellation keep existing outpu
     expect(readdirSync(root).some(file => file.startsWith('.gvs-iq-mux-'))).toBe(false)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+realMediaTest('IQ audio decode failure is classified for a fresh audio retry and never publishes the staged file', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gvs-iq-decode-error-'))
+  try {
+    const video = join(root, 'video.mkv'), audio = join(root, 'audio.m4a')
+    ff(['-f', 'lavfi', '-i', 'testsrc2=size=64x48:rate=25', '-t', '0.3', '-c:v', 'mpeg4', video])
+    ff(['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '20', '-c:a', 'aac', audio])
+    // Keep the MP4 header and initial packets valid: stream copy must succeed,
+    // while decoding the later damaged AAC packets must reject publication.
+    const bytes = readFileSync(audio)
+    let damaged = false
+    for (let offset = 0; offset + 8 <= bytes.length;) {
+      const size = bytes.readUInt32BE(offset)
+      if (size < 8 || offset + size > bytes.length) break
+      if (bytes.toString('ascii', offset + 4, offset + 8) === 'mdat') {
+        bytes.fill(0xff, Math.max(offset + 8, offset + size - 5000), offset + size)
+        damaged = true
+        break
+      }
+      offset += size
+    }
+    expect(damaged).toBe(true)
+    writeFileSync(audio, bytes)
+    const dest = reserveOutputPath(join(root, 'not-published.mkv'))
+    let failure: unknown
+    try {
+      await muxIQ('ffmpeg', { video, audios: [{ path: audio, language: 'jpn', title: '', isDefault: true }],
+        subtitles: [], dest, reservedOutput: true, emit: () => {} })
+    } catch (error) { failure = error }
+    expect(failure instanceof IQAudioValidationError).toBe(true)
+    expect((failure as IQAudioValidationError).errorCode).toBe('IQ_AUDIO_VALIDATION_FAILED')
+    expect((failure as Error).message).toContain('IQ 音轨解码检查失败')
+    expect(statSync(dest).size).toBe(0)
+    expect(readdirSync(root).some(file => file.startsWith('.gvs-iq-mux-'))).toBe(false)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}, 30000)
 
 realMediaTest('IQ final MKV contains an OpenCC Chinese pair, excludes AI alternatives and keeps AI-only provenance', async () => {
   const root = mkdtempSync(join(tmpdir(), 'gvs-iq-opencc-final-'))

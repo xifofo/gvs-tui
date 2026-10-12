@@ -5,6 +5,22 @@ import { hlsKeyArgs } from './media.ts'
 import { PROVIDER_IDS, PROVIDER_LABELS } from './providers.ts'
 import { needsTunnel } from './tunnel-policy.ts'
 import { resolveDefaultAudioId, selectAudioTracks } from './audio-selection.ts'
+import { normalizeIQAudioLanguage } from './iq-audio-language.ts'
+
+test('IQ Japanese audio ID 6 is corrected in the picker and mux metadata without changing codec IDs',()=>{
+  const original={id:'6:1:500',lid:6,label:'法语 · 杜比 5.1',lang:'法语',language:'fra',codec:'eac3',default:true}
+  expect(normalizeIQAudioLanguage(original)).toMatchObject({id:'6:1:500',lid:6,label:'日语 · 杜比 5.1',lang:'日语',language:'jpn',codec:'eac3',default:true})
+  expect(original.language).toBe('fra')
+  const {audios}=iqOptions({audios:[original,{id:'6:2:100',lang:'法语',language:'fra',label:'法语 · AAC',codec:'aac'}]})
+  expect(audios.map(a=>[a.id,a.label,a.lang,a.selected])).toEqual([
+    ['6:1:500','日语 · 杜比 5.1','日语',true],['6:2:100','日语 · AAC','日语',true],
+  ])
+  // The audio endpoint returns an ID without lid; the mux must still use jpn.
+  expect(normalizeIQAudioLanguage({id:'6:1:500',language:'fra',title:'法语'})).toMatchObject({language:'jpn',title:'日语'})
+  expect(normalizeIQAudioLanguage({id:'6:2:100',language:'jpn',title:'日语'})).toMatchObject({language:'jpn',title:'日语'})
+  const french={id:'99:2:100',lid:99,language:'fra',lang:'法语',label:'法语 · AAC'}
+  expect(normalizeIQAudioLanguage(french)).toBe(french)
+})
 
 test('IQ overseas is a distinct provider and starts its scoped tunnel',()=>{
   expect(PROVIDER_IDS.includes('iq')).toBe(true)
