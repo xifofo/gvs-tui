@@ -1,11 +1,12 @@
 import { nextTick, onBeforeUnmount, onMounted, type Ref } from 'vue'
 
 /** Keep keyboard navigation inside the active dialog and restore the opener. */
-export function useDialogFocus(root: Ref<HTMLElement | null>, close: () => void): void {
+export function useDialogFocus(root: Ref<HTMLElement | null>, close: () => void, active: () => boolean = () => true): void {
   let previous: HTMLElement | null = null
   const controls = () => [...(root.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]') ?? [])]
     .filter(el => el.getClientRects().length > 0)
   function key(event: KeyboardEvent) {
+    if (!active()) return
     if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); close(); return }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); event.stopImmediatePropagation(); return }
     if (event.key !== 'Tab') return

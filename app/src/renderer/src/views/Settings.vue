@@ -1,17 +1,19 @@
 <script setup lang="ts">
-import TencentDiagnostics from '../components/TencentDiagnostics.vue'
-import ProviderAccounts from '../components/ProviderAccounts.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { PROVIDER_NAME, type Provider, type SettingsPatch } from '@shared/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Skeleton from '../components/Skeleton.vue'
-import { back, errText, gvs, hasProvider, human, store, toast, type SettingsTab } from '../store'
+import { back, errText, gvs, hasProvider, human, prefs, savePrefs, store, toast, type SettingsTab } from '../store'
+import type { QualityCap } from '@shared/ui-prefs'
+
+const QUALITY_OPTIONS: Array<{ value: QualityCap; label: string }> = [
+  { value: 'best', label: '最高' }, { value: '2160', label: '4K' }, { value: '1080', label: '1080P' }, { value: '720', label: '720P' },
+]
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'download', label: '下载' },
-  { key: 'account', label: '平台账号' },
   { key: 'gateway', label: '网关' },
   { key: 'naming', label: '命名与刮削' },
   { key: 'about', label: '关于' },
@@ -49,7 +51,6 @@ watch(() => store.state?.settings, next => {
   lastSettings = { ...next }
 }, { immediate: true })
 
-const diagnosticsOpen = ref(false)
 const saving = ref('')
 let saveQueue: Promise<void> = Promise.resolve()
 async function save(patch: SettingsPatch, what: string) {
@@ -76,16 +77,6 @@ async function pickDir(which: 'out' | 'tmp') {
   await save(which === 'tmp' ? { tmpDir: dir } : { outDir: dir }, which)
 }
 
-async function renew() {
-  saving.value = 'renew'
-  try {
-    toast(await gvs('youkuRenew'), 'ok')
-  } catch (e) {
-    toast(errText(e), 'err')
-  } finally {
-    saving.value = ''
-  }
-}
 
 function step(d: number) {
   form.threads = Math.min(16, Math.max(1, form.threads + d))
@@ -158,8 +149,6 @@ async function checkUpdate() {
   }
 }
 
-const account = (p: Provider) => store.state?.accounts.find((a) => a.provider === p)
-const tone: Record<string, string> = { ok: 'ok', warn: 'warn', err: 'err', muted: '' }
 const onSystemDrive = computed(() => store.state?.platform === 'win32' && /^c:[\\/]/i.test(form.outDir))
 const tmpOnSystem = computed(() => !!form.tmpDir && store.state?.platform === 'win32' && /^c:[\\/]/i.test(form.tmpDir))
 const tmpText = computed(() => form.tmpDir || '自动（下载目录所在盘）')
@@ -168,14 +157,12 @@ const tunnelText = computed(() => {
   if (!t.enabled) return { cls: '', text: '无需隧道' }
   return t.ok ? { cls: 'ok', text: '隧道正常' } : { cls: 'warn', text: t.err ? `隧道：${t.err}` : '隧道连接中' }
 })
-const showTencentCookie = ref(false)
-const showDouyinCookie = ref(false)
 const plat = (p: Provider) => hasProvider(p)
 </script>
 
 <template>
   <div class="page">
-    <button v-if="store.history.at(-1) === 'quality'" type="button" class="back" @click="back('quality')"><Icon name="back" :size="16" />返回画质选择</button>
+    <button v-if="store.history.at(-1) === 'quality' || (store.history.at(-1) === 'detail' && store.qualityInline)" type="button" class="back" @click="back(store.history.at(-1))"><Icon name="back" :size="16" />返回画质选择</button>
     <h1 class="h1">设置</h1>
 
     <div class="cols">
@@ -231,89 +218,23 @@ const plat = (p: Provider) => hasProvider(p)
 
           <div class="srow">
             <div class="sl">
+              <span class="st">默认画质</span>
+              <span class="sd">打开画质面板时自动选中的档位：不超过所选分辨率的最高画质。随时可以手动改。</span>
+            </div>
+            <div class="sc">
+              <div class="seg qseg" role="radiogroup" aria-label="默认画质">
+                <button v-for="q in QUALITY_OPTIONS" :key="q.value" type="button" role="radio" :aria-checked="prefs().defaultQuality === q.value" :class="{ on: prefs().defaultQuality === q.value }" @click="savePrefs({ defaultQuality: q.value })">{{ q.label }}</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="srow">
+            <div class="sl">
               <span class="st">缓存</span>
               <span class="sd">{{ cacheError || cacheText }}</span>
             </div>
             <div class="sc">
               <button type="button" class="btn sm" :disabled="clearing || !!cacheError" @click="askClear = true"><span v-if="clearing" class="spin" /><Icon v-else name="trash" :size="15" />清理</button>
-            </div>
-          </div>
-        </section>
-
-        <!-- 平台账号 -->
-        <section v-else-if="store.settingsTab === 'account'" class="card">
-          <h2 class="h2s">平台账号</h2>
-          <ProviderAccounts />
-          <TencentDiagnostics v-if="diagnosticsOpen" @close="diagnosticsOpen = false" />
-
-          <div v-if="plat('youku')" class="srow">
-            <div class="sl">
-              <span class="st acct"><PlatformLogo provider="youku" :size="20" />{{ PROVIDER_NAME.youku }}
-                <span class="chip" :class="tone[account('youku')?.tone ?? 'muted']">{{ account('youku')?.short }}</span>
-              </span>
-              <span class="sd">{{ account('youku')?.summary }}</span>
-            </div>
-            <div class="sc">
-              <button type="button" class="btn sm" :disabled="saving === 'renew'" @click="renew"><span v-if="saving === 'renew'" class="spin" />续期</button>
-              <button type="button" class="btn sm" @click="store.qr = 'youku'"><Icon name="qr" :size="15" />扫码</button>
-            </div>
-          </div>
-
-          <div v-if="plat('tencent')" class="srow wrap">
-            <div class="sl">
-              <span class="st acct"><PlatformLogo provider="tencent" :size="20" />{{ PROVIDER_NAME.tencent }}
-                <span class="chip" :class="tone[account('tencent')?.tone ?? 'muted']">{{ account('tencent')?.short }}</span>
-              </span>
-              <span class="sd">{{ account('tencent')?.summary }}</span>
-            </div>
-            <div class="sc">
-              <button type="button" class="btn sm" @click="diagnosticsOpen = true">风控处理日志</button>
-              <button type="button" class="btn sm" title="向支持的网关记录真实进程指标；不代表已向腾讯发送事件" @click="save({ tencentObservations: !s.tencentObservations }, 'tx-observe')">操作观测：{{ s.tencentObservations ? '开' : '关' }}</button>
-              <button type="button" class="btn sm" @click="store.qr = 'tencent'"><Icon name="qr" :size="15" />双扫码</button>
-              <button type="button" class="btn sm" @click="showTencentCookie = !showTencentCookie">{{ showTencentCookie ? '收起' : '粘贴 Cookie' }}</button>
-            </div>
-            <div v-if="showTencentCookie" class="field-full">
-              <textarea v-model="form.tencentCookie" class="input" spellcheck="false" placeholder="粘贴腾讯视频网页 Cookie" />
-              <div class="field-act">
-                <button type="button" class="btn sm" :disabled="form.tencentCookie === s.tencentCookie" @click="save({ tencentCookie: form.tencentCookie }, 'tx')">保存 Cookie</button>
-              </div>
-            </div>
-          </div>
-
-          <div v-for="p in (['hongguo', 'huangguo'] as Provider[]).filter(plat)" :key="p" class="srow">
-            <div class="sl">
-              <span class="st acct"><PlatformLogo :provider="p" :size="20" />{{ PROVIDER_NAME[p] }}<span class="chip">无需登录</span></span>
-              <span class="sd">公开接口，不需要账号。</span>
-            </div>
-          </div>
-
-          <div v-if="plat('douyin')" class="srow wrap">
-            <div class="sl">
-              <span class="st acct"><PlatformLogo provider="douyin" :size="20" />{{ PROVIDER_NAME.douyin }}
-                <span class="chip" :class="tone[account('douyin')?.tone ?? 'muted']">{{ account('douyin')?.short }}</span>
-              </span>
-              <span class="sd">{{ account('douyin')?.summary }}</span>
-            </div>
-            <div class="sc">
-              <button type="button" class="btn sm" @click="showDouyinCookie = !showDouyinCookie">{{ showDouyinCookie ? '收起' : '粘贴 Cookie' }}</button>
-            </div>
-            <div v-if="showDouyinCookie" class="field-full">
-              <textarea v-model="form.douyinCookie" class="input" spellcheck="false" placeholder="网页登录 Cookie（需含 sessionid）" />
-              <div class="field-act">
-                <button type="button" class="btn sm" :disabled="form.douyinCookie === s.douyinCookie" @click="save({ douyinCookie: form.douyinCookie }, 'dy')">保存 Cookie</button>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="plat('iq')" class="srow wrap">
-            <div class="sl"><span class="st acct"><PlatformLogo provider="iq" :size="20" />{{ PROVIDER_NAME.iq }}</span><span class="sd">本人 IQ 海外版会话；普通话独立音轨与字幕随下载合流。</span></div>
-            <div class="field-full">
-              <textarea v-model="form.iqCookie" class="input" spellcheck="false" placeholder="IQ Cookie Header" />
-              <div class="field-actions"><button type="button" class="btn sm" @click="save({ iqCookie: form.iqCookie }, 'iq')">保存会话</button></div>
-              <details><summary>高级设备资料（网关已配置设备证书时可留空）</summary>
-                <textarea v-model="form.iqProfile" class="input" spellcheck="false" placeholder='设备资料 JSON：deviceId、ccsn；不填写逐集 key' />
-                <button type="button" class="btn sm" @click="save({ iqProfile: form.iqProfile }, 'iq-profile')">保存设备资料</button>
-              </details>
             </div>
           </div>
         </section>
@@ -473,4 +394,5 @@ textarea.input { height: 72px; }
   .cols { gap: 18px; }
   .tabs { width: 160px; }
 }
+.qseg { width: 300px; }
 </style>

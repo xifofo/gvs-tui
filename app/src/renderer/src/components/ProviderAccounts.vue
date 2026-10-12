@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type { SessionCommand, ProviderSessionView } from '@shared/api'
 import { gvs, store, toast, errText } from '../store'
-const allowed = (p: string) => (store.state?.providers || []).some(v => v === p)
+const props = defineProps<{ only?: string }>()
+const allowed = (p: string) => (store.state?.providers || []).some(v => v === p) && (!props.only || props.only === p)
 const busy = ref(false)
 const views = reactive<Record<string, ProviderSessionView>>({})
 const cookie = ref(''), phone = ref(''), code = ref(''), profile = ref(''), pin = ref('')
@@ -160,7 +161,7 @@ onBeforeUnmount(() => { revision++ })
 </template>
 
 <style scoped>
-.provider-account{padding:18px 22px;border-bottom:1px solid var(--line,#333)}
+.provider-account{padding:4px 0 14px}
 h3{font-size:14px;margin:0 0 10px} p{font-size:12px;line-height:1.65;opacity:.8;overflow-wrap:anywhere}
 .controls{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.controls .input{width:auto;min-width:150px;flex:1}
 textarea{min-height:80px;margin:10px 0} strong{display:block;margin:10px 0}label{display:flex;align-items:center;gap:12px}label span{white-space:nowrap;flex-shrink:0}label select{min-width:0;flex:1}
