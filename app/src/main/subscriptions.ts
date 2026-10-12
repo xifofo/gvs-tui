@@ -111,7 +111,7 @@ export class SubscriptionManager {
       autoDownload: req.autoDownload ?? true,
       upgrade: req.upgrade ?? false,
       window: req.window ?? null,
-      updateText: '', total: 0, episodes: [], newCount: 0, lastCheck: null,
+      updateText: req.updateText ?? '', total: 0, episodes: [], newCount: 0, lastCheck: null,
       nextCheckAt: now, createdAt: now,
     }
     this.subs.unshift(sub)

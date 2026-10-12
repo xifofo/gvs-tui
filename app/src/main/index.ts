@@ -1,5 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray } from 'electron'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import trayIconPath from '../../build/icon.png?asset'
+import { SubscriptionManager } from './subscriptions'
+import { fetchCalendar } from './calendar-source'
+import type { Subscription } from '@shared/api'
 import type { GvsApi, JobView, Tone } from '@shared/api'
 import { captureProxyEnv, installIQSourceProxy, patchGlobalWebSocket } from './env'
 import { Core } from './core'
@@ -26,6 +31,8 @@ registerPosterScheme()
 if (!app.requestSingleInstanceLock()) app.quit()
 
 let win: BrowserWindow | null = null
+let quitting = false
+let trayHintShown = false
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, userFacing(payload))
@@ -43,6 +50,64 @@ const core = new Core({
   jobs: (jobs: JobView[]) => send('gvs:jobs', jobs),
   toast: (message: string, tone: Tone) => send('gvs:toast', { message, tone }),
 })
+
+// ---------------------------------------------------------------- 订阅
+const subsPath = () => join(app.getPath('userData'), 'subscriptions.json')
+const subs = new SubscriptionManager({
+  detail: (p, id) => core.detail(p, id),
+  probe: (p, eps) => core.probe(p, eps),
+  enqueue: (req) => core.enqueue(req),
+  notify: (title, body, sub) => notify(title, body, sub),
+  changed: (view) => {
+    send('gvs:subs', view)
+    refreshTray()
+  },
+  load: () => (existsSync(subsPath()) ? readFileSync(subsPath(), 'utf8') : null),
+  save: (json) => {
+    const p = subsPath()
+    writeFileSync(p + '.tmp', json)
+    renameSync(p + '.tmp', p)
+  },
+  log: runLog,
+})
+
+function notify(title: string, body: string, sub?: Subscription): void {
+  if (!Notification.isSupported()) return
+  const n = new Notification({ title, body, silent: false, icon: trayIconPath })
+  n.on('click', () => {
+    showMainWindow()
+    send('gvs:navigate', { view: 'subscriptions', subId: sub?.id })
+  })
+  n.show()
+}
+
+// ---------------------------------------------------------------- 托盘
+let tray: Tray | null = null
+function refreshTray(): void {
+  if (!tray) return
+  const paused = subs.isPaused()
+  const v = subs.view()
+  const fresh = v.subs.reduce((n, s) => n + s.newCount, 0)
+  tray.setToolTip(`GVS · ${v.subs.length} 个订阅${fresh ? ` · ${fresh} 集新更新` : ''}${paused ? ' · 已暂停检查' : ''}`)
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '打开 GVS', click: showMainWindow },
+      { label: '订阅', click: () => { showMainWindow(); send('gvs:navigate', { view: 'subscriptions' }) } },
+      { type: 'separator' },
+      { label: paused ? '恢复订阅检查' : '暂停订阅检查', click: () => subs.setPaused(!paused) },
+      { label: v.running ? '正在检查…' : '立即检查全部订阅', enabled: !v.running, click: () => void subs.checkNow() },
+      { type: 'separator' },
+      { label: '退出 GVS', click: () => app.quit() },
+    ]),
+  )
+}
+function createTray(): void {
+  const img = nativeImage.createFromPath(trayIconPath).resize({ width: 16, height: 16 })
+  tray = new Tray(img)
+  tray.on('click', showMainWindow)
+  tray.on('double-click', showMainWindow)
+  refreshTray()
+}
 
 const updater = new Updater((u) => {
   send('gvs:update', u)
@@ -102,6 +167,19 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   updateState: () => updater.view(),
   checkUpdate: () => updater.check(true),
   installUpdate: () => updater.install(),
+  subscriptions: () => subs.view(),
+  subscribe: (req) => {
+    const sub = subs.subscribe(req)
+    void subs.checkNow(sub.id)
+    return sub
+  },
+  updateSubscription: (id, patch) => subs.update(id, patch),
+  unsubscribe: (id) => subs.remove(id),
+  checkSubscriptions: (id) => subs.checkNow(id),
+  setSubscriptionsPaused: (paused) => subs.setPaused(paused),
+  setSubscriptionInterval: (minutes) => subs.setInterval(minutes),
+  markSubscriptionsSeen: (id) => subs.markSeen(id),
+  calendar: () => fetchCalendar(),
 }
 
 ipcMain.handle('gvs:call', async (_e, method: string, args: unknown[]) => {
@@ -133,7 +211,19 @@ function createWindow(): void {
       spellcheck: false,
     },
   })
-  win.once('ready-to-show', () => win?.show())
+  win.once('ready-to-show', () => {
+    if (!process.argv.includes('--hidden')) win?.show()
+  })
+  // 关窗口 = 收到托盘继续检查订阅；真正退出走托盘菜单「退出」
+  win.on('close', (e) => {
+    if (quitting || !tray) return
+    e.preventDefault()
+    win?.hide()
+    if (!trayHintShown) {
+      trayHintShown = true
+      notify('GVS 仍在后台运行', '订阅会继续按时检查；右键托盘图标可以暂停或退出。')
+    }
+  })
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
@@ -166,15 +256,21 @@ app.whenReady().then(() => {
       : null,
   )
   handlePosterProtocol()
+  if (process.platform === 'win32') app.setAppUserModelId('shop.videohack.gvs')
   createWindow()
+  try {
+    createTray()
+  } catch (e) {
+    runLog(`tray: create failed ${e instanceof Error ? e.message : e}`)
+  }
   void core.boot().catch(() => {})
+  subs.start()
   updater.start()
   app.on('activate', showMainWindow)
 })
 
 // Windows 上 Electron 退出不会顺手杀子进程（N_m3u8DL-RE / ffmpeg 会继续占着文件写），
 // 所以第一次 before-quit 先拦住退出，等 core 把任务停干净并落盘 jobs.json，再真正退出。
-let quitting = false
 app.on('before-quit', (e) => {
   if (quitting) return
   quitting = true
@@ -182,6 +278,9 @@ app.on('before-quit', (e) => {
   // 用户如果就是不想等就强杀（任务管理器 / cmd 里按 Ctrl+C），别让系统干等。
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => app.exit(0))
   updater.stop()
+  subs.stop()
+  tray?.destroy()
+  tray = null
   void (async () => {
     try {
       await core.shutdown()
@@ -194,6 +293,7 @@ app.on('before-quit', (e) => {
     app.quit()
   })()
 })
+// 有托盘时窗口只是隐藏，不会走到这里；托盘创建失败时保持原来的行为
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  if (process.platform !== 'darwin' && !tray) app.quit()
 })

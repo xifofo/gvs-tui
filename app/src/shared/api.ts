@@ -3,6 +3,10 @@ import type { ActualVersion, CompletedMedia } from '../../../src/lib/actual-vers
 export type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
 import { PROVIDER_IDS, PROVIDER_LABELS } from '../../../src/lib/providers'
 import type { UiPrefs } from './ui-prefs'
+import type { SubscribeRequest, Subscription, SubscriptionPatch, SubsView } from './subscription'
+import type { CalendarDay } from './calendar'
+export type { SubscribeRequest, Subscription, SubscriptionPatch, SubsView, CheckWindow, SubState } from './subscription'
+export type { CalendarDay, CalendarItem } from './calendar'
 export type { UiPrefs, QualityCap } from './ui-prefs'
 // 主进程 ↔ 界面之间的契约。只放可序列化的纯数据。
 
@@ -287,6 +291,20 @@ export interface GvsApi {
   updateState(): Promise<UpdateState>
   checkUpdate(): Promise<UpdateState>
   installUpdate(): Promise<void>
+
+  // ---- 订阅 / 追剧日历
+  subscriptions(): Promise<SubsView>
+  subscribe(req: SubscribeRequest): Promise<Subscription>
+  updateSubscription(id: string, patch: SubscriptionPatch): Promise<Subscription>
+  unsubscribe(id: string): Promise<void>
+  /** 立即检查（省略 id = 全部未暂停的订阅） */
+  checkSubscriptions(id?: string): Promise<void>
+  setSubscriptionsPaused(paused: boolean): Promise<SubsView>
+  setSubscriptionInterval(minutes: number): Promise<SubsView>
+  /** 清掉「有更新」角标（省略 id = 全部） */
+  markSubscriptionsSeen(id?: string): Promise<void>
+  /** 平台排播（目前只有芒果 TV；其它平台由订阅推算） */
+  calendar(): Promise<{ days: CalendarDay[]; error: string; fetchedAt: number }>
 }
 
 export type GvsEvents = {
@@ -294,6 +312,9 @@ export type GvsEvents = {
   jobs: JobView[]
   toast: { message: string; tone: Tone }
   update: UpdateState
+  subs: SubsView
+  /** 托盘菜单 / 通知点击要求界面跳到某页 */
+  navigate: { view: string; subId?: string }
 }
 
 export interface GvsBridge {
