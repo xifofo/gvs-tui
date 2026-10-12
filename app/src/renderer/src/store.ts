@@ -18,12 +18,13 @@ import type {
   UpdateState,
   Tone,
 } from '@shared/api'
+import { viewTransition } from './motion'
 import { DEFAULT_UI_PREFS, pushRecent, type UiPrefs } from '@shared/ui-prefs'
 import { visibleProviders } from '@shared/provider-registry'
 
 export type View = 'home' | 'discover' | 'search' | 'detail' | 'quality' | 'downloads' | 'settings' | 'accounts' | 'calendar' | 'subscriptions'
 /** 'account' 保留为兼容别名：账号已移到独立的「账号」页。 */
-export type SettingsTab = 'download' | 'account' | 'gateway' | 'naming' | 'about'
+export type SettingsTab = 'download' | 'appearance' | 'account' | 'gateway' | 'naming' | 'about'
 
 // 参数可能是 Vue 响应式代理，IPC 的结构化克隆不认；统一转成纯数据再发。
 export const gvs = <K extends keyof GvsApi>(method: K, ...args: Parameters<GvsApi[K]>): ReturnType<GvsApi[K]> =>
@@ -134,13 +135,13 @@ export function go(view: View): void {
   leaveView(view)
   store.history.push(store.view)
   if (store.history.length > 30) store.history.shift()
-  store.view = view
+  viewTransition(() => { store.view = view }, view === 'detail')
 }
 
 export function back(fallback: View = 'home'): void {
   const next = store.history.pop() ?? fallback
   leaveView(next)
-  store.view = next
+  viewTransition(() => { store.view = next }, next === 'detail', store.view === 'detail')
 }
 
 export function openSettings(tab: SettingsTab): void {

@@ -1,0 +1,111 @@
+/*
+ * GVS 设计令牌（Hdhive 设计体系）。与网关 Web 控制台共用同一份 --ui-* 令牌。
+ * html.dark（默认）/ html.light 切换；旧变量名（--paper/--ink/--orange…）映射到 --ui-*，组件不用逐个改。
+ */
+html.dark {
+  color-scheme: dark;
+  --ui-background: #09090e;
+  --ui-surface: #111119;
+  --ui-surface-raised: #171722;
+  --ui-surface-hover: #20202c;
+  --ui-input: #0d0d14;
+  --ui-border: #282838;
+  --ui-border-strong: #3a3a50;
+  --ui-text: #eeeef6;
+  --ui-text-muted: #9c9cb2;
+  --ui-text-subtle: #707085;
+  --ui-accent: #d08700;
+  --ui-accent-hover: #f0b100;
+  --ui-accent-channel: 208 135 0;
+  --ui-accent-contrast: #0a0a0a;
+  --ui-accent-text: #f0b100;
+  --ui-danger: #fb7185;
+  --ui-success: #34d399;
+  --ui-warning: #fbbf24;
+  --ui-overlay: rgb(2 3 8 / 72%);
+  --ui-glass: rgb(17 17 25 / 82%);
+  --ui-glass-strong: rgb(18 18 28 / 96%);
+  --ui-glass-border: rgb(255 255 255 / 14%);
+  --ui-shadow-surface: 0 16px 42px rgb(0 0 0 / 24%);
+  --ui-shadow-float: 0 24px 70px rgb(0 0 0 / 42%);
+  --ui-shadow-dialog: 0 28px 90px rgb(0 0 0 / 52%);
+  --ui-inset: inset 0 1px 0 rgb(255 255 255 / 6%);
+  --ui-poster-shadow: 0 12px 34px rgb(0 0 0 / 30%);
+}
+html.light {
+  color-scheme: light;
+  --ui-background: #f5f6f9;
+  --ui-surface: #ffffff;
+  --ui-surface-raised: #ffffff;
+  --ui-surface-hover: #eff0f5;
+  --ui-input: #fafafd;
+  --ui-border: #dcdeea;
+  --ui-border-strong: #c4c7d7;
+  --ui-text: #181822;
+  --ui-text-muted: #626276;
+  --ui-text-subtle: #89899c;
+  --ui-accent: #f0b100;
+  --ui-accent-hover: #d08700;
+  --ui-accent-channel: 240 177 0;
+  --ui-accent-contrast: #18140a;
+  --ui-accent-text: #a16207;
+  --ui-danger: #be123c;
+  --ui-success: #047857;
+  --ui-warning: #a16207;
+  --ui-overlay: rgb(25 25 38 / 42%);
+  --ui-glass: rgb(255 255 255 / 86%);
+  --ui-glass-strong: rgb(248 249 252 / 97%);
+  --ui-glass-border: rgb(220 222 234 / 88%);
+  --ui-shadow-surface: 0 14px 38px rgb(40 40 70 / 10%);
+  --ui-shadow-float: 0 24px 70px rgb(40 40 70 / 16%);
+  --ui-shadow-dialog: 0 28px 90px rgb(40 40 70 / 24%);
+  --ui-inset: inset 0 1px 0 rgb(255 255 255 / 70%);
+  --ui-poster-shadow: 0 10px 26px rgb(40 40 70 / 18%);
+  --amb-1: .35;
+  --amb-2: .25;
+}
+:root {
+  --ui-radius-sm: 7px;
+  --ui-radius-md: 11px;
+  --ui-radius-lg: 16px;
+  --ui-duration-fast: 160ms;
+  --ui-duration-base: 220ms;
+  --ui-duration-theme: 280ms;
+  --ui-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ui-font-sans: 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --ui-glow: inset 0 1px 0 rgb(255 255 255 / 22%), 0 7px 18px rgb(var(--ui-accent-channel) / 22%);
+
+  /* 旧变量名 → Hdhive 令牌 */
+  --paper: var(--ui-background);
+  --paper-2: var(--ui-surface-hover);
+  --card: var(--ui-surface);
+  --raised: var(--ui-surface-raised);
+  --ink: var(--ui-text);
+  --ink-2: var(--ui-text-muted);
+  --ink-3: var(--ui-text-subtle);
+  --line: var(--ui-border);
+  --line-2: var(--ui-border-strong);
+  --grid: var(--ui-border);
+  --orange: var(--ui-accent);
+  --orange-2: var(--ui-accent-hover);
+  --orange-text: var(--ui-accent-text);
+  --orange-soft: rgb(var(--ui-accent-channel) / 12%);
+  --on-orange: var(--ui-accent-contrast);
+  --ok: var(--ui-success);
+  --ok-bg: color-mix(in srgb, var(--ui-success) 13%, var(--ui-surface));
+  --err: var(--ui-danger);
+  --err-bg: color-mix(in srgb, var(--ui-danger) 13%, var(--ui-surface));
+  --warn: var(--ui-warning);
+  --side: color-mix(in srgb, var(--ui-background) 94%, var(--ui-surface));
+  --side-2: var(--ui-surface-hover);
+  --side-fg: var(--ui-text);
+  --side-muted: var(--ui-text-muted);
+  --side-ok: var(--ui-success);
+  --side-warn: var(--ui-warning);
+
+  --font-body: var(--ui-font-sans);
+  --font-display: var(--ui-font-sans);
+  --font-mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+  --shadow-ink: var(--ui-shadow-surface);
+  --shadow-orange: 0 0 0 1px var(--orange);
+}

@@ -3,6 +3,7 @@
  * Pure data + sanitizers so main process and renderer agree and tests can cover them.
  */
 export type QualityCap = 'best' | '2160' | '1080' | '720'
+export type ThemePref = 'dark' | 'light' | 'system'
 
 export type UiPrefs = {
   /** Sidebar collapsed to the 64px icon rail. */
@@ -15,6 +16,10 @@ export type UiPrefs = {
   recentSearches: string[]
   /** Default quality pick on the quality panel: highest available at or below this height. */
   defaultQuality: QualityCap
+  /** 外观：深色（默认）/ 浅色 / 跟随系统 */
+  theme: ThemePref
+  /** 背景粒子光效与页面动效（系统「减少动态效果」时始终关闭） */
+  motion: boolean
 }
 
 export const RECENT_LIMIT = 12
@@ -26,6 +31,8 @@ export const DEFAULT_UI_PREFS: UiPrefs = {
   hiddenProviders: [],
   recentSearches: [],
   defaultQuality: 'best',
+  theme: 'dark',
+  motion: true,
 }
 
 const strList = (v: unknown, limit = 64): string[] => {
@@ -49,6 +56,8 @@ export function sanitizeUiPrefs(raw: unknown): UiPrefs {
     hiddenProviders: strList(r.hiddenProviders),
     recentSearches: strList(r.recentSearches, RECENT_LIMIT),
     defaultQuality: QUALITY_CAPS.includes(r.defaultQuality as QualityCap) ? (r.defaultQuality as QualityCap) : 'best',
+    theme: r.theme === 'light' || r.theme === 'system' ? r.theme : 'dark',
+    motion: r.motion !== false,
   }
 }
 

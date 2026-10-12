@@ -6,7 +6,7 @@ import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Skeleton from '../components/Skeleton.vue'
 import { back, errText, gvs, hasProvider, human, prefs, savePrefs, store, toast, type SettingsTab } from '../store'
-import type { QualityCap } from '@shared/ui-prefs'
+import type { QualityCap, ThemePref } from '@shared/ui-prefs'
 
 const QUALITY_OPTIONS: Array<{ value: QualityCap; label: string }> = [
   { value: 'best', label: '最高' }, { value: '2160', label: '4K' }, { value: '1080', label: '1080P' }, { value: '720', label: '720P' },
@@ -14,9 +14,16 @@ const QUALITY_OPTIONS: Array<{ value: QualityCap; label: string }> = [
 
 const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'download', label: '下载' },
+  { key: 'appearance', label: '外观与动效' },
   { key: 'gateway', label: '网关' },
   { key: 'naming', label: '命名与刮削' },
   { key: 'about', label: '关于' },
+]
+
+const THEMES: Array<{ value: ThemePref; label: string; icon: string }> = [
+  { value: 'dark', label: '深色', icon: 'moon' },
+  { value: 'light', label: '浅色', icon: 'sun' },
+  { value: 'system', label: '跟随系统', icon: 'system' },
 ]
 
 const s = computed(() => store.state!.settings)
@@ -269,6 +276,31 @@ const plat = (p: Provider) => hasProvider(p)
           </div>
         </section>
 
+        <!-- 外观 -->
+        <section v-else-if="store.settingsTab === 'appearance'" class="card">
+          <h2 class="h2s">外观与动效</h2>
+          <div class="srow">
+            <div class="sl">
+              <span class="st">主题</span>
+              <span class="sd">默认深色；「跟随系统」会随 Windows 的浅色 / 深色模式自动切换。</span>
+            </div>
+            <div class="sc">
+              <div class="seg acc" role="radiogroup" aria-label="主题">
+                <button v-for="t in THEMES" :key="t.value" type="button" role="radio" :aria-checked="prefs().theme === t.value" :class="{ on: prefs().theme === t.value }" @click="savePrefs({ theme: t.value })"><Icon :name="t.icon" :size="15" />{{ t.label }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="srow">
+            <div class="sl">
+              <span class="st">背景光效与动画</span>
+              <span class="sd">背景粒子光晕、页面切换和列表入场动画。系统开启「减少动态效果」时始终关闭；窗口隐藏时自动暂停，不占 CPU。</span>
+            </div>
+            <div class="sc">
+              <label class="toggle"><input type="checkbox" :checked="prefs().motion" aria-label="背景光效与动画" @change="savePrefs({ motion: ($event.target as HTMLInputElement).checked })" /><span class="track"><span class="knob" /></span></label>
+            </div>
+          </div>
+        </section>
+
         <!-- 命名与刮削 -->
         <section v-else-if="store.settingsTab === 'naming'" class="card">
           <h2 class="h2s">命名与刮削</h2>
@@ -369,11 +401,12 @@ const plat = (p: Provider) => hasProvider(p)
 .cols { display: flex; gap: 28px; align-items: flex-start; }
 .tabs { width: 156px; flex-shrink: 0; position: sticky; top: 0; display: flex; flex-direction: column; gap: 4px; }
 .tab {
-  height: 40px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-2);
-  font-size: 14px; font-weight: 500; text-align: left; cursor: pointer;
+  height: 38px; padding: 0 12px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ink-2);
+  font-size: 13.5px; font-weight: 700; text-align: left; cursor: pointer; transition: background var(--ui-duration-fast), color var(--ui-duration-fast);
 }
-.tab:hover { background: var(--paper-2); }
-.tab.on { background: var(--ink); color: var(--paper); font-weight: 700; }
+.tab:hover { background: var(--paper-2); color: var(--ink); }
+.tab.on { background: var(--paper-2); color: var(--ink); border-color: var(--line); box-shadow: var(--ui-inset); }
+.tab.on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--orange); margin-right: 8px; vertical-align: 2px; box-shadow: 0 0 8px rgb(var(--ui-accent-channel) / 70%); }
 .panel { flex-grow: 1; min-width: 0; max-width: 760px; }
 .card { overflow: hidden; }
 .card > .h2s { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }

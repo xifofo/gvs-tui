@@ -14,6 +14,13 @@ test('merge keeps untouched fields', () => {
     expect([merged.sidebarCollapsed, merged.hiddenProviders, merged.defaultQuality]).toEqual([true, ['iq'], '1080'])
   })
 
+test('theme and motion prefs sanitize to dark + on', () => {
+    expect([sanitizeUiPrefs({}).theme, sanitizeUiPrefs({}).motion]).toEqual(['dark', true])
+    expect([sanitizeUiPrefs({ theme: 'light' }).theme, sanitizeUiPrefs({ theme: 'system' }).theme, sanitizeUiPrefs({ theme: 'neon' }).theme]).toEqual(['light', 'system', 'dark'])
+    expect([sanitizeUiPrefs({ motion: false }).motion, sanitizeUiPrefs({ motion: 0 }).motion]).toEqual([false, true])
+    expect(mergeUiPrefs({ theme: 'light' }, { motion: false })).toEqual({ ...DEFAULT_UI_PREFS, theme: 'light', motion: false })
+  })
+
 test('pushRecent de-duplicates case/space-insensitively and caps', () => {
     expect(pushRecent(['庆余年', 'Abc  Def'], 'abc def')).toEqual(['abc def', '庆余年'])
     expect(pushRecent([], '   ')).toEqual([])

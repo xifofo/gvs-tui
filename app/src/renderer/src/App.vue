@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
-import { back, modalOpen, store } from './store'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { back, modalOpen, prefs, store } from './store'
+import { applyMotion, applyTheme, vtActive } from './motion'
+import Ambient from './components/Ambient.vue'
 import Sidebar from './components/Sidebar.vue'
 import TopBar from './components/TopBar.vue'
 import Toasts from './components/Toasts.vue'
@@ -25,11 +27,15 @@ function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape' && (e.target as HTMLElement)?.closest('input, textarea, select, [contenteditable="true"]')) return
   if (e.key === 'Escape' || (e.altKey && e.key === 'ArrowLeft')) { e.preventDefault(); back(store.search ? 'search' : 'home') }
 }
+let themed = false
+watch(() => (store.state ? prefs().theme : null), (t) => { if (!t) return; applyTheme(t, themed); themed = true }, { immediate: true })
+watch(() => (store.state ? prefs().motion : null), (m) => { if (m !== null) applyMotion(m) }, { immediate: true })
 onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <template>
+  <Ambient :enabled="store.state ? prefs().motion : true" />
   <div v-if="!store.state" class="boot"><span class="spin" /></div>
   <Setup v-else-if="!store.state.configured || store.onboarding" />
   <div v-else class="shell">
@@ -37,7 +43,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     <main class="main">
       <TopBar />
       <div class="body">
-        <Transition name="page" mode="out-in" :duration="140">
+        <Transition :name="vtActive ? 'vt' : 'page'" mode="out-in" :duration="vtActive ? 0 : undefined">
           <KeepAlive :include="['DiscoverView', 'QualityView']">
             <Home v-if="store.view === 'home'" key="home" />
             <Discover v-else-if="store.view === 'discover'" key="discover" />
@@ -61,7 +67,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 <style scoped>
 .boot { height: 100%; display: flex; align-items: center; justify-content: center; }
-.shell { height: 100%; display: flex; }
+.shell { position: relative; z-index: 1; height: 100%; display: flex; }
+.boot { position: relative; z-index: 1; }
 .main { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; }
 .body { flex-grow: 1; min-height: 0; }
 </style>
