@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import type { AudioView, EnqueueRequest, NamingPreview, TmdbHit, TmdbSeason } from '@shared/api'
 import { supportsTmdb } from '@shared/api'
 import { resolveDefaultAudioId } from '@shared/audio-selection'
 import { defaultTmdbHit } from '@shared/tmdb-selection'
+import { audioChannels, audioCodec, hdrKind, resolutionTier, videoCodec } from '@shared/media-specs'
+import { DEFAULT_RULES, parseRules, pickBest, type RuleCandidate } from '@shared/rule-groups'
 import Icon from '../components/Icon.vue'
 import Skeleton from '../components/Skeleton.vue'
 import IQCNAudioPicker from '../components/IQCNAudioPicker.vue'
 import { preferredQualityIndex } from '@shared/ui-prefs'
-import { accountsOf, back, errText, go, gvs, human, openQuality, openSettings, prefs, store, toast } from '../store'
+import { accountsOf, back, errText, go, gvs, human, openQuality, openSettings, prefs, store, subscriptionOf, toast } from '../store'
 import AccountPicker from '../components/AccountPicker.vue'
 
 defineOptions({ name: 'QualityView' })
@@ -311,10 +313,46 @@ function qname(q: { stream: string; hdr: string; label: string }): string {
 const sep = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).slice(-2).join('/')
 const tmpFull = computed(() => store.state?.settings.tmpDir || '')
 const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目录同盘 .gvs-tmp'))
+
+/* ---- 卡片展示用的规格 ---- */
+const vRes = (q: { height: number; width: number }) => resolutionTier(q.height, q.width)
+const vCodec = (q: { codec: string; stream: string }) => videoCodec(q.codec, q.stream)
+const vHdr = (q: { hdr: string; stream: string; label: string }) => hdrKind(q.hdr, q.stream, q.label) || range(q)
+const aCodec = (a: AudioView) => audioCodec(a.codec, a.label)
+const aCh = (a: AudioView) => audioChannels(a.label, a.codec)
+
+/* ---- 规则组匹配预览：订阅里的规则优先，否则用默认规则 ---- */
+const ruleSub = computed(() => (d.value ? subscriptionOf(d.value.provider, d.value.id) : null))
+const ruleText = computed(() => ruleSub.value?.rules || DEFAULT_RULES)
+const ruleGroup = computed(() => parseRules(ruleText.value))
+const ruleCands = computed<RuleCandidate[]>(() => (probe.value?.qualities ?? []).map((q) => ({
+  index: q.index, height: q.height, width: q.width, codec: `${q.codec} ${q.stream}`, hdr: vHdr(q), label: q.label, size: q.size, fps: q.fps,
+  audios: (q.audios.length ? q.audios : probe.value?.audios ?? []).map((a) => ({ id: a.id, label: a.label, codec: a.codec, lang: a.lang })),
+})))
+const ruleMatch = computed(() => (ruleCands.value.length ? pickBest(ruleGroup.value, ruleCands.value) : null))
+const ruleQuality = computed(() => probe.value?.qualities.find((q) => q.index === ruleMatch.value?.index) ?? null)
+const ruleApplied = computed(() => {
+  const m = ruleMatch.value
+  if (!m || m.index !== qIndex.value) return false
+  return m.audioIds.every((id) => audioIds.value.includes(id) || audios.value.some((a) => a.id === id && a.embedded))
+})
+const tierText = (i: number) => ruleGroup.value.tiers[i]?.map((t) => (t.neg ? '!' : '') + t.key.toUpperCase().replace('ANY', '任意')).join(' & ') ?? ''
+async function applyRule() {
+  const m = ruleMatch.value
+  if (!m) return
+  qIndex.value = m.index
+  await nextTick() // 让 qIndex 的 watcher 先按新画质重置音轨，再叠加规则选中的音轨
+  const ids = m.audioIds.filter((id) => audios.value.some((a) => a.id === id && !a.embedded))
+  if (ids.length) {
+    audioIds.value = ids
+    reconcileDefaultAudio()
+  }
+}
 </script>
 
+
 <template>
-  <div class="page" :class="{ 'quality-page': store.probing || (probe && !store.probeError), embedded }">
+  <div class="page qpage" :class="{ 'quality-page': !embedded && (store.probing || (probe && !store.probeError)), embedded }">
     <button v-if="!embedded" type="button" class="back" @click="back('detail')"><Icon name="back" :size="16" />{{ d?.title ?? '返回' }}</button>
     <div class="h1-row">
       <h1 v-if="!embedded" class="h1">选择画质</h1>
@@ -322,120 +360,151 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
       <span class="muted">已选 {{ count }} {{ noun }}<template v-if="count > 1"> · 按{{ isMovie ? '首个版本' : '第一集' }}探测，整批沿用</template></span>
     </div>
 
-    <div v-if="store.probing" class="cols">
-      <div class="left">
-        <fieldset class="fs abox">
-          <legend class="sr-only">音轨</legend>
-          <div class="alegend">
-            <span class="atitle">音轨</span>
-            <span class="muted small row"><span class="spin" />正在向平台取画质…</span>
+    <div v-if="store.probing" class="qbody">
+      <div class="qmain">
+        <section class="qsec">
+          <div class="qsec-h"><Icon name="movie" :size="16" /><span>视频</span><span class="muted small row"><span class="spin" />正在向平台取画质…</span></div>
+          <div class="vgrid">
+            <div v-for="i in 4" :key="i" class="vcard sk"><Skeleton w="64" h="28" r="7" /><Skeleton w="70%" h="14" /><Skeleton w="50%" h="12" /></div>
           </div>
-          <div class="agroup">
-            <Skeleton w="56" h="30" r="8" />
-            <div class="achips"><Skeleton w="96" h="34" r="8" /><Skeleton w="112" h="34" r="8" /><Skeleton w="88" h="34" r="8" /></div>
+        </section>
+        <section class="qsec">
+          <div class="qsec-h"><Icon name="volume" :size="16" /><span>音轨</span></div>
+          <div class="agrid">
+            <div v-for="i in 3" :key="i" class="acard sk"><Skeleton w="48" h="14" /><Skeleton w="80%" h="16" /></div>
           </div>
-          <div class="agroup">
-            <Skeleton w="56" h="30" r="8" />
-            <div class="achips"><Skeleton w="80" h="34" r="8" /><Skeleton w="104" h="34" r="8" /></div>
-          </div>
-        </fieldset>
-        <fieldset class="fs">
-          <legend>视频</legend>
-          <div v-for="i in 4" :key="i" class="opt sk-opt">
-            <Skeleton w="20" h="20" r="50%" />
-            <span class="ot"><Skeleton w="128" h="16" /><Skeleton w="180" h="12" /></span>
-            <Skeleton w="150" h="13" />
-          </div>
-        </fieldset>
+        </section>
       </div>
-      <aside class="card hard out out-loading">
-        <h2 class="h2s">输出</h2>
-
-        <div class="blk"><Skeleton w="72" h="13" /><Skeleton w="100%" h="38" r="8" /></div>
-        <div class="blk"><Skeleton w="84" h="13" /><Skeleton w="100%" h="58" r="8" /></div>
-        <Skeleton w="100%" h="16" />
-        <Skeleton w="100%" h="52" r="8" />
+      <aside class="qside">
+        <div class="card side-card"><Skeleton w="72" h="13" /><Skeleton w="100%" h="38" r="8" /><Skeleton w="100%" h="58" r="8" /></div>
       </aside>
     </div>
     <div v-else-if="store.probeError" class="error-box">
       取画质失败：{{ store.probeError }}
       <div style="margin-top: 10px"><button type="button" class="btn sm" @click="openQuality">重试</button></div>
     </div>
-    <div v-else-if="probe" class="cols">
-      <div v-if="!manual" class="left auto">
-        <AccountPicker v-if="d && accountsOf(d.provider).length > 1" :provider="d.provider" @change="openQuality()" />
-        <div v-if="probe.warning" class="warn-box">{{ probe.warning }}</div>
-        <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
-        <div class="card autosum">
-          <span class="lab">已按默认规则自动选择</span>
-          <div class="arow"><span class="muted">视频</span><b>{{ quality ? qname(quality) : '—' }}</b><span class="dim small">{{ quality ? spec(quality) : '' }}</span></div>
-          <div class="arow"><span class="muted">音轨</span><b>{{ embeddedOnly ? '随视频内嵌' : audioSummary || '—' }}</b></div>
-          <span class="muted small">默认画质：{{ { best: '最高可用', '2160': '不超过 4K', '1080': '不超过 1080P', '720': '不超过 720P' }[prefs().defaultQuality] }}（可在设置里修改）</span>
-          <button type="button" class="btn sm" @click="manual = true">手动选择画质 / 音轨<Icon name="down" :size="14" /></button>
-        </div>
-      </div>
-      <div v-else class="left">
-        <button v-if="embedded" type="button" class="linkish collapse" @click="manual = false"><Icon name="up" :size="14" />收起手动选择</button>
-        <div v-if="probe.warning" class="warn-box">{{ probe.warning }}</div>
-        <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
-        <fieldset class="fs video-options">
-          <legend>视频画质</legend>
-          <label v-for="q in probe.qualities" :key="q.index" class="opt" :class="{ on: q.index === qIndex }">
-            <input v-model="qIndex" type="radio" name="quality" :value="q.index" class="sr-only" />
-            <span class="radio"><span v-if="q.index === qIndex" /></span>
-            <span class="ot"><span class="on-t">{{ qname(q) }}</span><span v-if="streamCode(q)" class="mono muted code">{{ streamCode(q) }}</span></span>
-            <span class="spec dim">{{ spec(q) }}</span>
-          </label>
-        </fieldset>
-        <div v-if="embeddedOnly" class="abox aline">
-          <span class="atitle">音轨</span>
-          <span class="muted">随视频内嵌{{ embeddedNote ? `：${embeddedNote}` : '，无需选择' }}</span>
-        </div>
-        <details v-else-if="audios.length" class="audio-options">
-        <summary><span class="atitle">音轨 <span class="muted small">已选 {{ pickedCount }}</span></span><span class="audio-summary">{{ audioSummary || '选择音轨' }}</span><span class="muted small">调整</span></summary>
-        <IQCNAudioPicker v-if="d?.provider === 'iqcn'" :audios="audios" :selected-ids="audioIds" :default-id="defaultAudioId"
-          @toggle="toggleAudio" @set-default="setDefaultAudio" @all="pickAll" @only-default="pickDefault" />
-        <fieldset v-else class="fs abox">
-          <legend class="sr-only">音轨</legend>
-          <div class="alegend">
-            <span class="atitle">音轨</span>
-            <span class="muted small">已选 {{ pickedCount }} / {{ audios.length }}</span>
-            <span class="aq">
-              <button type="button" class="linkish" @click="pickAll">全选</button>
-              <button type="button" class="linkish" @click="pickDefault">只要默认</button>
-            </span>
-          </div>
-          <div v-for="g in audioGroups" :key="g.lang" class="agroup">
-            <span class="glang">{{ g.lang }}</span>
-            <div class="achips">
-              <div v-for="a in g.items" :key="a.id" class="atrack">
-                <label class="achip" :class="{ on: audioIds.includes(a.id) || a.embedded, dis: a.embedded }" :title="a.embedded ? '已内嵌在视频里' : a.codec">
-                  <input type="checkbox" class="sr-only" :checked="audioIds.includes(a.id) || a.embedded"
-                    :disabled="a.embedded || (audioIds.length === 1 && audioIds.includes(a.id))" @change="toggleAudio(a)" />
-                  <Icon v-if="audioIds.includes(a.id) || a.embedded" name="check" :size="13" :stroke="3" />
-                  {{ a.label }}
-                </label>
-                <button v-if="!a.embedded" type="button" class="audio-default" :class="{ active: defaultAudioId === a.id }"
-                  :aria-pressed="defaultAudioId === a.id" :aria-label="`${a.lang} ${a.label} ${defaultAudioId === a.id ? '默认播放' : '设为默认'}`"
-                  title="下载后默认播放这条音轨" @click="setDefaultAudio(a)">
-                  {{ defaultAudioId === a.id ? '默认播放' : '设为默认' }}
-                </button>
+    <template v-else-if="probe">
+      <div class="qbody">
+        <div class="qmain">
+          <div v-if="probe.warning" class="warn-box">{{ probe.warning }}</div>
+          <div v-if="probe.vip?.hasTrial" class="warn-box">当前账号只能拿到试看片段，完整版需要会员登录</div>
+
+          <div class="toprow">
+            <div v-if="d && accountsOf(d.provider).length > 1" class="card mini">
+              <span class="mini-h"><Icon name="user" :size="14" />下载账号</span>
+              <AccountPicker :provider="d.provider" label="" @change="openQuality()" />
+            </div>
+            <div class="card mini rulecard" :class="{ hit: ruleApplied }">
+              <span class="mini-h"><Icon name="rules" :size="14" />规则组匹配<span class="muted small">{{ ruleSub ? '来自订阅' : '默认规则' }}</span></span>
+              <div class="tiers" :aria-label="ruleText">
+                <template v-for="(_, i) in ruleGroup.tiers" :key="i">
+                  <span v-if="i" class="tsep">›</span>
+                  <span class="tier" :class="{ on: ruleMatch?.tier === i }">{{ tierText(i) }}</span>
+                </template>
+              </div>
+              <div class="rule-res">
+                <template v-if="ruleMatch && ruleQuality">
+                  <span>命中第 {{ ruleMatch.tier + 1 }} 档 · <b>{{ qname(ruleQuality) }}</b></span>
+                  <span v-if="ruleApplied" class="chip ok"><Icon name="check" :size="12" :stroke="3" />已采用</span>
+                  <button v-else type="button" class="btn sm primary" @click="applyRule">按规则选择</button>
+                </template>
+                <span v-else class="muted">没有画质满足规则，可手动选择</span>
               </div>
             </div>
           </div>
-          <div v-if="d?.provider === 'iq'" class="muted small">初始只选平台默认语言的音轨，其他配音可手动选择。</div>
-          <div class="muted small">已选音轨默认优先 DTS，其次杜比 / 全景声，再选 AAC；也可手动指定，整批下载沿用此选择。</div>
-          <div v-if="hasDts" class="muted small">选了 DTS 音轨，会用 MP4Box 封装成 MP4</div>
-        </fieldset>
-        </details>
 
-      </div>
+          <div v-if="!manual" class="card autosum">
+            <span class="lab">已按默认规则自动选择</span>
+            <div class="arow"><span class="muted">视频</span><b>{{ quality ? qname(quality) : '—' }}</b><span class="dim small">{{ quality ? spec(quality) : '' }}</span></div>
+            <div class="arow"><span class="muted">音轨</span><b>{{ embeddedOnly ? '随视频内嵌' : audioSummary || '—' }}</b></div>
+            <span class="muted small">默认画质：{{ { best: '最高可用', '2160': '不超过 4K', '1080': '不超过 1080P', '720': '不超过 720P' }[prefs().defaultQuality] }}（可在设置里修改）</span>
+            <button type="button" class="btn sm" @click="manual = true">手动选择画质 / 音轨<Icon name="down" :size="14" /></button>
+          </div>
+          <template v-else>
+            <button v-if="embedded" type="button" class="linkish collapse-btn" @click="manual = false"><Icon name="up" :size="14" />收起手动选择</button>
+            <fieldset class="qsec fs video-options">
+              <legend class="qsec-h"><Icon name="movie" :size="16" /><span>视频画质</span><span class="muted small">{{ probe.qualities.length }} 档</span></legend>
+              <div class="vgrid stagger">
+                <label v-for="q in probe.qualities" :key="q.index" class="vcard opt" :class="{ on: q.index === qIndex, rule: ruleMatch?.index === q.index }">
+                  <input v-model="qIndex" type="radio" name="quality" :value="q.index" class="sr-only" />
+                  <span class="vtop">
+                    <span class="res">{{ vRes(q) }}</span>
+                    <span v-if="vHdr(q)" class="hdr" :class="{ dv: vHdr(q) === '杜比视界' }">{{ vHdr(q) }}</span>
+                    <span class="radio"><span v-if="q.index === qIndex" /></span>
+                  </span>
+                  <span class="on-t">{{ qname(q) }}</span>
+                  <span class="vspec">
+                    <span v-if="vCodec(q)" class="mono">{{ vCodec(q) }}</span>
+                    <span v-if="q.width && q.height" class="mono">{{ q.width }}×{{ q.height }}</span>
+                    <span v-if="q.fps" class="mono">{{ q.fps }}帧</span>
+                  </span>
+                  <span class="vfoot">
+                    <span class="size mono">{{ q.size ? `${isMovie ? '' : '每集 '}≈ ${human(q.size)}` : '大小未知' }}</span>
+                    <span v-if="streamCode(q)" class="mono muted code">{{ streamCode(q) }}</span>
+                    <span v-if="ruleMatch?.index === q.index" class="rtag">规则推荐</span>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
 
-      <aside class="card hard out">
-        <div class="out-content">
-          <h2 class="h2s">下载确认</h2>
-          <div class="selection-summary"><strong>{{ quality ? qname(quality) : '请选择画质' }}</strong><span class="muted small">{{ audioSummary || embeddedNote || '随视频音轨' }}</span><span class="muted small">{{ count }} {{ noun }} · 整批沿用当前选择</span></div>
-          <details class="output-options"><summary>命名与刮削</summary><div class="output-options-body">
+            <section class="qsec">
+              <div class="qsec-h">
+                <Icon name="volume" :size="16" /><span>音轨</span>
+                <span v-if="!embeddedOnly && audios.length" class="muted small">已选 {{ pickedCount }} / {{ audios.length }}</span>
+                <span v-if="!embeddedOnly && audios.length && d?.provider !== 'iqcn'" class="aq">
+                  <button type="button" class="linkish" @click="pickAll">全选</button>
+                  <button type="button" class="linkish" @click="pickDefault">只要默认</button>
+                </span>
+              </div>
+              <div v-if="embeddedOnly" class="card note"><Icon name="info" :size="15" />随视频内嵌{{ embeddedNote ? `：${embeddedNote}` : '，无需选择' }}</div>
+              <div v-else-if="!audios.length" class="card note"><Icon name="info" :size="15" />平台没有返回独立音轨</div>
+              <IQCNAudioPicker v-else-if="d?.provider === 'iqcn'" class="card iqcn" :audios="audios" :selected-ids="audioIds" :default-id="defaultAudioId"
+                @toggle="toggleAudio" @set-default="setDefaultAudio" @all="pickAll" @only-default="pickDefault" />
+              <fieldset v-else class="fs">
+                <legend class="sr-only">音轨</legend>
+                <div class="agrid stagger">
+                  <div v-for="a in audios" :key="a.id" class="acard" :class="{ on: audioIds.includes(a.id) || a.embedded, def: defaultAudioId === a.id }">
+                    <label class="achip" :class="{ dis: a.embedded }" :title="a.embedded ? '已内嵌在视频里' : a.codec">
+                      <input type="checkbox" class="sr-only" :checked="audioIds.includes(a.id) || a.embedded"
+                        :disabled="a.embedded || (audioIds.length === 1 && audioIds.includes(a.id))" @change="toggleAudio(a)" />
+                      <span class="cbox"><Icon v-if="audioIds.includes(a.id) || a.embedded" name="check" :size="12" :stroke="3" /></span>
+                      <span class="alang">{{ a.lang || '音轨' }}</span>
+                      <span class="alabel">{{ a.label }}</span>
+                      <span class="aspec">
+                        <span v-if="aCodec(a)" class="mono">{{ aCodec(a) }}</span>
+                        <span v-if="aCh(a)" class="mono">{{ aCh(a) }}</span>
+                        <span v-if="a.embedded" class="muted">内嵌</span>
+                      </span>
+                    </label>
+                    <button v-if="!a.embedded" type="button" class="audio-default" :class="{ active: defaultAudioId === a.id }"
+                      :aria-pressed="defaultAudioId === a.id" :aria-label="`${a.lang} ${a.label} ${defaultAudioId === a.id ? '默认播放' : '设为默认'}`"
+                      title="下载后默认播放这条音轨" @click="setDefaultAudio(a)">
+                      {{ defaultAudioId === a.id ? '默认播放' : '设为默认' }}
+                    </button>
+                  </div>
+                </div>
+              </fieldset>
+              <div v-if="d?.provider === 'iq'" class="muted small">初始只选平台默认语言的音轨，其他配音可手动选择。</div>
+              <div v-if="!embeddedOnly && audios.length" class="muted small">已选音轨默认优先 DTS，其次杜比 / 全景声，再选 AAC；也可手动指定，整批下载沿用此选择。</div>
+              <div v-if="hasDts" class="muted small">选了 DTS 音轨，会用 MP4Box 封装成 MP4</div>
+            </section>
+
+            <section class="qsec">
+              <div class="qsec-h"><Icon name="cc" :size="16" /><span>字幕</span></div>
+              <div class="agrid">
+                <div class="acard on sub-card">
+                  <span class="achip dis"><span class="cbox"><Icon name="check" :size="12" :stroke="3" /></span><span class="alang">跟随视频</span><span class="alabel">平台内嵌 / 硬字幕</span></span>
+                </div>
+              </div>
+              <span class="muted small">该平台没有返回可单独下载的字幕轨，字幕随视频画面保留。</span>
+            </section>
+          </template>
+        </div>
+
+        <aside class="qside">
+          <div class="card side-card">
+            <h3 class="side-h">输出</h3>
+            <details class="output-options" :open="!embedded"><summary>命名与刮削</summary><div class="output-options-body">
 
           <div v-if="canMatchTmdb" class="blk">
             <span class="lab">内容类型</span>
@@ -488,121 +557,149 @@ const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目�
           </div>
 
           </div></details>
-          <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">
-            <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
-          </button>
-          <button type="button" class="dir mono tmp" :title="tmpFull" @click="openSettings('download')">
-            <Icon name="file" :size="16" />临时文件：{{ tmpText }}
-          </button>
-        </div>
+            <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">
+              <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
+            </button>
+            <button type="button" class="dir mono tmp" :title="tmpFull" @click="openSettings('download')">
+              <Icon name="file" :size="16" />临时文件：{{ tmpText }}
+            </button>
+          </div>
+        </aside>
+      </div>
 
-        <div class="out-actions">
-          <div v-if="totalSize" class="sum"><span class="dim">预计占用</span><span class="mono">约 {{ human(totalSize) }} · {{ count }} {{ noun }}</span></div>
-
-          <button type="button" class="btn primary big" :disabled="starting || !quality || tmdbLoading" @click="start">
-            <span v-if="starting" class="spin" /><Icon v-else name="download" />开始下载 {{ count }} {{ noun }}
-          </button>
+      <div class="actionbar">
+        <div class="selection-summary">
+          <strong>{{ quality ? qname(quality) : '请选择画质' }}</strong>
+          <span class="muted small">{{ audioSummary || embeddedNote || '随视频音轨' }} · {{ count }} {{ noun }} · 整批沿用当前选择</span>
         </div>
-      </aside>
-    </div>
+        <div v-if="totalSize" class="sum"><span class="dim">预计占用</span><span class="mono">约 {{ human(totalSize) }}</span></div>
+        <button type="button" class="btn primary big" :disabled="starting || !quality || tmdbLoading" @click="start">
+          <span v-if="starting" class="spin" /><Icon v-else name="download" />开始下载 {{ count }} {{ noun }}
+        </button>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.quality-page { overflow: hidden; }
-.page.embedded { height: min(640px, 78vh); padding: 18px 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+.qpage { position: relative; }
+.quality-page { overflow: visible; }
+.page.embedded { height: auto; padding: 20px 22px 0; border: 1px solid var(--line); border-radius: var(--ui-radius-lg, 16px); background: var(--card); }
 .page.embedded .h1-row { gap: 12px; }
-.h2s { font-size: 17px; font-weight: 700; }
+.h2s { font-size: 18px; font-weight: 900; }
+.back { margin-bottom: -8px; }
+.small { font-size: 12.5px; font-weight: 400; }
+.row { display: flex; align-items: center; gap: 8px; }
+.qbody { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+.qmain { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.qside { position: sticky; top: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.toprow { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.mini { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mini :deep(.ap > svg), .mini :deep(.ap > .muted:empty) { display: none; }
+.mini-h { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 850; }
+.mini-h .muted { margin-left: auto; font-weight: 600; }
+.rulecard { transition: border-color var(--ui-duration-base, .2s), box-shadow var(--ui-duration-base, .2s); }
+.rulecard.hit { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.tiers { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tier { height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; font-weight: 700; color: var(--ink-3); display: inline-flex; align-items: center; font-family: var(--font-mono, ui-monospace); }
+.tier.on { color: var(--on-orange); background: var(--orange); border-color: var(--orange); box-shadow: var(--ui-glow); }
+.tsep { color: var(--ink-3); }
+.rule-res { display: flex; align-items: center; gap: 10px; font-size: 13px; flex-wrap: wrap; }
+.rule-res .btn, .rule-res .chip { margin-left: auto; }
 .autosum { padding: 18px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
-.autosum .lab { font-size: 13px; font-weight: 700; color: var(--orange-text); }
+.autosum .lab { font-size: 13px; font-weight: 800; color: var(--orange-text); }
 .arow { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
 .arow .muted { width: 36px; }
-.collapse { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }
-.back { margin-bottom: -8px; }
+.collapse-btn { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }
+.fs { margin: 0; padding: 0; border: 0; min-width: 0; }
+.qsec { display: flex; flex-direction: column; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.qsec-h { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 900; padding: 0; width: 100%; }
+.aq { margin-left: auto; display: flex; gap: 12px; }
+/* Keep hidden inputs inside their visible labels so focusing them scrolls the quality list. */
+.opt, .achip { position: relative; }
+.vgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.vcard {
+  padding: 14px 14px 12px; border-radius: var(--ui-radius-md, 11px); border: 1.5px solid var(--line); background: var(--raised); display: flex; flex-direction: column; gap: 8px; cursor: pointer; min-width: 0;
+  transition: border-color var(--ui-duration-fast, .12s), transform var(--ui-duration-fast, .12s), box-shadow var(--ui-duration-base, .2s), background var(--ui-duration-fast, .12s);
+}
+.vcard:hover { border-color: var(--line-2); transform: translateY(-2px); }
+.vcard.on { border-color: var(--orange); background: var(--orange-soft); box-shadow: 0 10px 28px -16px rgb(var(--ui-accent-channel, 208 135 0) / 70%); }
+.vcard:focus-within { outline: 2px solid var(--orange); outline-offset: 2px; }
+.vcard.sk { cursor: default; }
+.vtop { display: flex; align-items: center; gap: 8px; }
+.res { font-family: var(--font-display); font-size: 24px; font-weight: 900; letter-spacing: -.5px; line-height: 1; }
+.vcard.on .res { color: var(--orange-text); }
+.hdr { height: 20px; padding: 0 7px; border-radius: 6px; font-size: 11px; font-weight: 850; display: inline-flex; align-items: center; color: var(--orange-text); border: 1px solid color-mix(in srgb, var(--orange) 40%, var(--line)); }
+.hdr.dv { color: #fff; border: 0; background: linear-gradient(135deg, #7c3aed, #a78bfa); }
+.radio { margin-left: auto; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.vcard.on .radio { border-color: var(--orange); }
+.radio span { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); }
+.on-t { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vspec, .aspec { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+.vspec > span, .aspec > span { padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.vfoot { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.size { font-weight: 700; }
+.code { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.rtag { margin-left: auto; flex-shrink: 0; font-size: 10.5px; font-weight: 850; color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 40%, var(--line)); border-radius: 999px; padding: 0 6px; }
+.agrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.acard { padding: 12px 14px; border-radius: var(--ui-radius-md, 11px); border: 1.5px solid var(--line); background: var(--raised); display: flex; flex-direction: column; gap: 10px; min-width: 0; transition: border-color var(--ui-duration-fast, .12s), background var(--ui-duration-fast, .12s); }
+.acard:hover { border-color: var(--line-2); }
+.acard.on { border-color: color-mix(in srgb, var(--orange) 70%, var(--line)); background: var(--orange-soft); }
+.acard.sk { gap: 8px; }
+.achip { display: grid; grid-template-columns: auto 1fr; grid-template-areas: "box lang" ". label" ". spec"; column-gap: 10px; row-gap: 3px; cursor: pointer; user-select: none; min-width: 0; }
+.achip.dis { cursor: default; }
+.achip:focus-within { outline: 2px solid var(--orange); outline-offset: 2px; border-radius: 6px; }
+.cbox { grid-area: box; width: 18px; height: 18px; border-radius: 5px; border: 2px solid var(--line-2); display: flex; align-items: center; justify-content: center; color: var(--on-orange); margin-top: 1px; }
+.acard.on .cbox { background: var(--orange); border-color: var(--orange); }
+.alang { grid-area: lang; font-size: 12px; font-weight: 800; color: var(--ink-2); }
+.alabel { grid-area: label; font-size: 14px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aspec { grid-area: spec; }
+.audio-default { align-self: flex-start; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: transparent; color: var(--ink-2); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+.audio-default:hover { border-color: var(--line-2); color: var(--ink); }
+.audio-default.active { border-color: var(--orange); background: var(--orange); color: var(--on-orange); font-weight: 800; }
+.audio-default:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.note { padding: 12px 14px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.iqcn { padding: 14px 16px; }
+.side-card { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.side-h { font-size: 15px; font-weight: 900; }
 .kind-options { display: flex; gap: 8px; }
 .season-select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }
 .season-select:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
-.cols { flex: 1; min-height: 0; display: flex; gap: 22px; align-items: flex-start; }
-.left { flex-grow: 1; min-width: 0; min-height: 0; height: 100%; overflow-y: auto; padding: 4px 8px 8px 4px; display: flex; flex-direction: column; gap: 20px; }
-.left > * { flex-shrink: 0; }
-.fs { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
-.small { font-size: 13px; font-weight: 400; }
-/* Keep hidden inputs inside their visible labels so focusing them scrolls the quality list. */
-.opt, .achip { position: relative; }
-.opt {
-  padding: 9px 16px; background: var(--card); border: 1.5px solid var(--line); border-radius: 10px; display: flex; align-items: center; gap: 14px; cursor: pointer;
-}
-.opt:hover { border-color: var(--ink-3); }
-.opt.on { border-color: var(--orange-text); background: var(--orange-soft); }
-.opt:focus-within { outline: 2px solid var(--orange); outline-offset: 2px; }
-.radio { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.radio span { width: 10px; height: 10px; border-radius: 50%; background: var(--orange); }
-.ot { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.on-t { font-size: 14px; font-weight: 600; }
-.code { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.spec { margin-left: auto; font-size: 13px; white-space: nowrap; }
-.abox { padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; gap: 10px; }
-.alegend { display: flex; align-items: baseline; gap: 10px; }
-.atitle { font-size: 16px; font-weight: 700; }
-.aline { display: flex; align-items: baseline; gap: 12px; }
-.aq { margin-left: auto; display: flex; gap: 12px; }
-.agroup { display: flex; align-items: center; gap: 14px; }
-.glang { width: 56px; flex-shrink: 0; font-size: 13px; font-weight: 700; color: var(--ink-2); }
-.achips { display: flex; flex-wrap: wrap; gap: 8px; }
-.atrack { display: inline-flex; align-items: center; gap: 8px; }
-.achip {
-  height: 34px; padding: 0 12px; border-radius: 8px; border: 1.5px solid var(--line); background: var(--card);
-  display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; user-select: none;
-}
-.achip:hover { border-color: var(--ink-3); }
-.achip.on { border-color: var(--ink); background: var(--orange); font-weight: 700; }
-.achip.dis { cursor: default; opacity: .8; }
-.achip:focus-within { outline: 2px solid var(--orange); outline-offset: 2px; }
-.audio-default { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; background: var(--card); color: var(--ink-2); font-size: 12px; cursor: pointer; white-space: nowrap; }
-.audio-default:hover { border-color: var(--ink); color: var(--ink); }
-.audio-default.active { border-color: var(--ink); background: var(--paper-2); color: var(--ink); font-weight: 700; }
-.audio-default:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
-.out { width: 300px; flex-shrink: 0; max-height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.audio-options { order: -1; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
-.audio-options > summary { display: flex; align-items: center; gap: 12px; padding: 13px 16px; cursor: pointer; list-style: none; }
-.audio-summary { flex: 1; min-width: 0; color: var(--ink-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.audio-options .abox { border: 0; border-top: 1px solid var(--line); }
-.output-options > summary { cursor: pointer; font-size: 13px; color: var(--ink-2); padding: 10px 0; }
-.output-options-body { display: flex; flex-direction: column; gap: 16px; padding: 8px 0; }
-.selection-summary { display: flex; flex-direction: column; gap: 8px; line-height: 1.5; }
-.selection-summary strong { font-size: 14px; font-weight: 600; }
-.warn-box { order: -2; }
-.spec { font-variant-numeric: tabular-nums; }
-@media (max-width: 1180px) {
-  .cols { gap: 16px; }
-  .out { width: 268px; }
-  .opt { flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; }
-  .spec { width: 100%; margin-left: 32px; font-size: 12px; }
-  .out-content { padding: 16px; }
-  .out-actions { padding: 16px; }
-}
-.out-content { min-height: 0; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-.out-content > * { flex-shrink: 0; }
-.out-actions { flex-shrink: 0; padding: 16px 20px 20px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
-.out-loading { padding: 20px; gap: 16px; overflow-y: auto; }
-.h2s { font-size: 17px; font-weight: 700; }
+.output-options > summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--ink-2); padding: 4px 0; }
+.output-options-body { display: flex; flex-direction: column; gap: 16px; padding: 10px 0 2px; }
 .blk { display: flex; flex-direction: column; gap: 6px; }
 .lab { font-size: 13px; color: var(--ink-3); }
-.row { display: flex; align-items: center; gap: 8px; }
 .match { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--ok-bg); color: var(--ok); border-radius: 8px; font-size: 14px; font-weight: 500; }
 .match.none { background: var(--paper-2); color: var(--ink-2); }
 .match .linkish { margin-left: auto; }
 .hits { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.hit { padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: var(--card); text-align: left; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+.hit { padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: var(--card); color: var(--ink); text-align: left; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
 .hit:last-child { border-bottom: 0; }
 .hit:hover, .hit.on { background: var(--paper-2); }
 .name { padding: 10px 12px; background: var(--ui-input); border: 1px solid var(--line); color: var(--ink-2); border-radius: 8px; font-size: 12px; line-height: 1.7; word-break: break-all; }
 .name span { color: var(--orange); }
-.dir { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
+.dir { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
 .dir:hover { color: var(--orange-text); }
 .tmp { color: var(--ink-3); font-size: 12px; }
-.sk-opt { cursor: default; gap: 14px; }
-.sk-opt .ot { flex-grow: 1; gap: 6px; }
-.sum { display: flex; justify-content: space-between; font-size: 14px; }
+/* 底部常驻操作条：跟随页面滚动吸底 */
+.actionbar {
+  position: sticky; bottom: -32px; z-index: 5; margin: 18px -22px 0; padding: 14px 22px 18px; display: flex; align-items: center; gap: 18px;
+  background: color-mix(in srgb, var(--card) 90%, transparent); backdrop-filter: blur(14px); border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--ui-radius-lg, 16px) var(--ui-radius-lg, 16px);
+}
+.page:not(.embedded) .actionbar { margin: 18px 0 0; border: 1px solid var(--line); border-radius: var(--ui-radius-lg, 16px); bottom: 0; box-shadow: var(--ui-shadow-surface); }
+.selection-summary { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.selection-summary strong { font-size: 15px; font-weight: 850; }
+.selection-summary .small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sum { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 13px; flex-shrink: 0; }
+.sum .mono { font-size: 15px; font-weight: 800; }
+.actionbar .btn.big { flex-shrink: 0; min-width: 200px; border-radius: 11px; }
+@media (max-width: 1180px) {
+  .qbody { grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; }
+}
+@media (max-width: 980px) {
+  .qbody { grid-template-columns: 1fr; }
+  .qside { position: static; }
+  .actionbar { flex-wrap: wrap; }
+}
 </style>
