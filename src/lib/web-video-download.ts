@@ -31,7 +31,10 @@ export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileCo
       await verifyMiguManifest(source.url, source.headers, signal)
     }
     await downloadPlaylist({src:source.url,dest,ref:'https://www.miguvideo.com/',headers:source.headers,threads:cfg.threads,select:'muxed',muxTracks:true,transport:'re',workDir:work,workTag:'migu',signal,cb:(n,total,info)=>emit(playlistStatus('下载',info?.phase||'download'),.05+.85*(total>1?n/total:n),info?.log||'咪咕 CDN → 本机')})
-    await verifyCoverage(dest,task.duration || Number(source.source.duration) || undefined,signal)
+    // Existing queued tasks may contain the old minute-prefix duration (45:25 → 45).
+    const resolvedDuration = Number(source.source.duration)
+    const expected = Math.max(task.duration || 0, Number.isFinite(resolvedDuration) ? resolvedDuration : 0)
+    await verifyCoverage(dest,expected || undefined,signal)
     return
   }
   if (task.provider === 'mgtv') {

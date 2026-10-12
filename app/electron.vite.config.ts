@@ -7,10 +7,10 @@ const LIB = resolve(__dirname, '../src/lib')
 
 /**
  * TUI 的 lib 直接复用；只有两处依赖 Bun / 源码目录布局，构建时换成桌面端实现：
- *   proxy.ts      Bun fetch 的 `proxy` 选项 → Electron net.fetch（跟随系统代理）
+ *   proxy.ts      桌面服务用 Chromium；媒体清单用 Node HTTP 并跟随系统代理
  *   tool-paths.ts 按源码位置找 bin/ → 开发用仓库 bin/，安装包用 resources/bin
  */
-function tuiShims(): Plugin {
+export function tuiShims(): Plugin {
   const swap: Record<string, string> = {
     [resolve(LIB, 'proxy.ts')]: resolve(__dirname, 'src/main/shims/proxy.ts'),
     [resolve(LIB, 'tool-paths.ts')]: resolve(__dirname, 'src/main/shims/tool-paths.ts'),

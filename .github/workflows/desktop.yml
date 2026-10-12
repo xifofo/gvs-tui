@@ -81,6 +81,16 @@ jobs:
           bun test src/lib/iq-subtitles.test.ts src/lib/iqcn-subtitles.test.ts
           bun test src/lib/jobs-hub.test.ts --test-name-pattern "Douyin passes configured concurrency"
       - run: bun x electron-vite build
+      - name: Verify Migu manifest transport in Electron (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          bun x vite build --config scripts/media-probe-smoke.config.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $probeEntry = (Resolve-Path '../.build/media-probe-smoke/smoke.cjs').Path
+          $probe = Start-Process -FilePath 'node_modules/electron/dist/electron.exe' -ArgumentList $probeEntry -WorkingDirectory '..' -WindowStyle Hidden -PassThru -Wait
+          Get-Content -LiteralPath '../.build/media-probe-smoke/result.json'
+          exit $probe.ExitCode
       - name: Verify separate Migu App and TV search filters (Windows)
         if: runner.os == 'Windows'
         working-directory: .

@@ -3,6 +3,16 @@ import { anyInt, firstStr, isObj } from './util.ts'
 import { parseSeriesTitle } from './series-title.ts'
 import { tencentEpisodePlayParams } from './tencent-edition.ts'
 
+function episodeSeconds(value: unknown): number {
+  if (typeof value === 'string' && value.includes(':')) {
+    if (!/^\d+:\d{2}(?::\d{2})?$/.test(value)) return 0
+    const parts = value.split(':').map(Number)
+    if (parts.slice(1).some(part => part >= 60)) return 0
+    return parts.reduce((total, part) => total * 60 + part, 0)
+  }
+  return Math.max(0, anyInt(value))
+}
+
 /** One parser for the terminal and desktop clients. Official collections must
  * survive even when their titles contain 彩蛋/采访/预告. */
 export function parseEpisodes(data: Record<string, unknown>): Episode[] {
@@ -28,7 +38,7 @@ export function parseEpisodes(data: Record<string, unknown>): Episode[] {
     if (!vid || seen.has(vid)) continue
     const title = firstStr(it, 'title', 'name')
     const group = firstStr(it, 'group', 'kind')
-    const duration = anyInt(it.duration) || anyInt(it.duration_ms ? Number(it.duration_ms) / 1000 : 0)
+    const duration = episodeSeconds(it.duration) || episodeSeconds(it.duration_ms ? Number(it.duration_ms) / 1000 : 0)
     const extra = /周边|花絮|彩蛋|预告|预约|trailer|advert|extra|clip/i.test(`${group} ${title}`) || it.is_trailer === true
     if (!official && extra && duration < 600) continue
     const n = anyInt(it.ep) || anyInt(it.number) || anyInt(it.episodeNumber) || Number.parseInt(String(it.stage ?? ''), 10)
