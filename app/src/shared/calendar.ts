@@ -151,3 +151,49 @@ export function expectedTimes(info: UpdateInfo, now: number, days = 14): number[
   }
   return out
 }
+
+type SubLike = {
+  id: string; provider: string; showId: string; title: string; poster: string; updateText: string; paused: boolean
+  window?: { kind: string; days?: number[]; start?: string; times?: number[] } | null
+  episodes: Array<{ number: number; firstSeen: number; downloaded?: { at: number; label: string } }>
+  lastCheck?: { ok: boolean } | null
+}
+
+/**
+ * 订阅 → 日历条目：已检测到的集（按发现时间；已下载 / 已更新未下载）+ 预计更新（每周窗口、按集时间、平台更新文案）。
+ * 只返回 [from, to) 内的条目。
+ */
+export function subscriptionItems(subs: SubLike[], from: number, to: number, now = Date.now()): CalendarItem[] {
+  const out: CalendarItem[] = []
+  const hhmm = (ms: number) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}` }
+  for (const s of subs) {
+    const base = { provider: s.provider, id: s.showId, title: s.title, info: '我的订阅', poster: s.poster, posterHor: '', url: '', onlineText: '', source: 'subscription' as const }
+    const byDay = new Map<string, { at: number; nums: number[]; done: boolean }>()
+    for (const e of s.episodes) {
+      if (e.firstSeen < from || e.firstSeen >= to) continue
+      const k = dateKey(e.firstSeen)
+      const g = byDay.get(k) ?? { at: e.firstSeen, nums: [], done: true }
+      if (e.number > 0) g.nums.push(e.number)
+      g.done &&= !!e.downloaded
+      g.at = Math.min(g.at, e.firstSeen)
+      byDay.set(k, g)
+    }
+    // 首次检查时一次性记下的存量集不算「更新」：同一时刻发现超过 3 集的跳过
+    for (const g of byDay.values()) {
+      if (g.nums.length > 3 && s.episodes.filter((e) => e.firstSeen === g.at).length > 3) continue
+      out.push({ ...base, episodes: g.nums.length ? `第 ${g.nums.sort((a, b) => a - b).join(',')} 集` : '新视频', time: hhmm(g.at), onlineAt: g.at, status: g.done ? 'downloaded' : 'new' })
+    }
+    if (s.paused) continue
+    let expected: number[] = []
+    const w = s.window
+    if (w?.kind === 'episodes' && w.times) expected = w.times
+    else if (w?.kind === 'weekly' && w.days?.length) expected = expectedTimes({ latest: 0, total: 0, finished: false, days: w.days, time: w.start || '20:00' }, from, Math.ceil((to - from) / 86_400_000))
+    else if (s.updateText) expected = expectedTimes(parseUpdateText(s.updateText), from, Math.ceil((to - from) / 86_400_000))
+    for (const t of expected) {
+      if (t < from || t >= to || t < now - 3600_000) continue
+      if (out.some((x) => x.id === s.showId && x.source === 'subscription' && dateKey(x.onlineAt) === dateKey(t))) continue
+      out.push({ ...base, episodes: '预计更新', time: hhmm(t), onlineAt: t, status: 'pending' })
+    }
+  }
+  return out.sort((a, b) => a.onlineAt - b.onlineAt)
+}

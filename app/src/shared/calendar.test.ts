@@ -41,3 +41,21 @@ test('expectedTimes projects the schedule', () => {
   expect(t).toEqual([new Date(2026, 9, 13, 19, 30).getTime(), new Date(2026, 9, 20, 19, 30).getTime()])
   expect(expectedTimes({ latest: 0, total: 0, finished: true, days: [1], time: '' }, now)).toEqual([])
 })
+
+test('subscriptionItems: detected (downloaded/new), skips baseline bulk, projects weekly window', async () => {
+  const { subscriptionItems } = await import('./calendar')
+  const d = (day: number, h: number) => new Date(2026, 9, day, h).getTime()
+  const base = Array.from({ length: 10 }, (_, i) => ({ number: i + 1, firstSeen: d(10, 9) }))
+  const subs = [{
+    id: 's', provider: 'tencent', showId: 'c1', title: '剧', poster: '', updateText: '', paused: false,
+    window: { kind: 'weekly', days: [3], start: '20:00' },
+    episodes: [...base, { number: 11, firstSeen: d(12, 20), downloaded: { at: d(12, 21), label: '1080P' } }, { number: 12, firstSeen: d(13, 20) }],
+  }]
+  const items = subscriptionItems(subs, d(12, 0), d(19, 0), d(12, 12))
+  expect(items.map((i) => [i.episodes, i.status, i.time])).toEqual([
+    ['第 11 集', 'downloaded', '20:00'],
+    ['第 12 集', 'new', '20:00'],
+    ['预计更新', 'pending', '20:00'],
+  ])
+  expect(subscriptionItems(subs, d(10, 0), d(11, 0), d(12, 12))).toEqual([])
+})

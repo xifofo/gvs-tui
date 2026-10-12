@@ -43,7 +43,7 @@ export type Subscription = {
 }
 
 export type SubscribeRequest = Pick<Subscription, 'provider' | 'showId' | 'title' | 'poster' | 'kind'> &
-  Partial<Pick<Subscription, 'rules' | 'autoDownload' | 'upgrade' | 'window'>>
+  Partial<Pick<Subscription, 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'updateText'>>
 export type SubscriptionPatch = Partial<Pick<Subscription, 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'paused' | 'title'>>
 
 export type SubsView = {
