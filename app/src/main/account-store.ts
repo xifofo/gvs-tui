@@ -2,6 +2,22 @@ import {
   addSlot, emptyBook, fallbackCandidates, isAccountError, migrateBook, removeSlot, renameSlot, resolveSlot, sanitizeBook,
   setActive, setDefault, setStatus, statusFrom, supportsCookieSlot, type AccountBook, type AccountSlot, type AccountsView,
 } from '../shared/accounts'
+import { gatewayAccountId, GW_DEFAULT_ACCOUNT } from '../../../src/lib/client'
+
+/**
+ * 多账号网关（feature-detect 后才有）：每个槽位在网关有自己的会话，切换 = 换请求头，
+ * 不再重导入 Cookie、扫码槽位也不用重扫，也不需要按平台串行切换。
+ */
+export type GatewayAccounts = {
+  supports(provider: string): boolean
+  ensure(provider: string, account: string, name: string): Promise<void>
+  rename(provider: string, account: string, name: string): Promise<void>
+  remove(provider: string, account: string): Promise<void>
+  /** 设定界面当前账号（扫码 / 状态检查用） */
+  setActive(provider: string, account: string): void
+  /** 在该账号下跑 fn */
+  run<T>(provider: string, account: string, fn: () => Promise<T>): Promise<T>
+}
 
 /**
  * 多账号存储 + 切换 + 换号重试。不依赖 Electron：加密、读写、导入网关都由外面注入。
@@ -17,6 +33,8 @@ export type AccountDeps = {
   /** 网关当前会话的状态（来自 Core.state().accounts） */
   statusOf(provider: string): { short: string; summary: string; tone: 'ok' | 'warn' | 'err' | 'muted' } | undefined
   changed(view: AccountsView): void
+  /** 没有 = 旧网关行为 */
+  gateway?: GatewayAccounts
   log?: (line: string) => void
   now?: () => number
 }
@@ -31,6 +49,8 @@ export class AccountStore {
   private readonly now: () => number
   /** 同一平台的切换串行，避免两个任务同时把网关会话换来换去 */
   private locks = new Map<string, Promise<unknown>>()
+  /** 已在网关登记过的账号（provider\0gwId） */
+  private ensured = new Set<string>()
 
   constructor(private readonly deps: AccountDeps) {
     this.now = deps.now ?? Date.now
@@ -43,6 +63,35 @@ export class AccountStore {
       }
     } catch (e) {
       deps.log?.(`accounts: load failed ${e instanceof Error ? e.message : e}`)
+    }
+  }
+
+  /** 网关是否为这个平台托管多份会话 */
+  multi(provider: string): boolean {
+    return !!this.deps.gateway?.supports(provider)
+  }
+
+  /** 槽位在网关的账号 id：迁移来的旧会话槽位 = default，其余按槽位 id 派生 */
+  gatewayId(slot: AccountSlot): string {
+    return slot.mode === 'gateway' ? GW_DEFAULT_ACCOUNT : gatewayAccountId(slot.id)
+  }
+
+  private async ensureGw(slot: AccountSlot): Promise<string> {
+    const gw = this.gatewayId(slot)
+    const k = slot.provider + '\0' + gw
+    if (gw !== GW_DEFAULT_ACCOUNT && !this.ensured.has(k)) {
+      await this.deps.gateway!.ensure(slot.provider, gw, slot.name)
+      this.ensured.add(k)
+    }
+    return gw
+  }
+
+  /** 网关重连 / 能力变化后调用：重新登记，并把当前账号告诉网关客户端 */
+  syncGateway(): void {
+    this.ensured.clear()
+    for (const [p, id] of Object.entries(this.book.active)) {
+      const s = this.slot(id)
+      if (s && this.multi(p)) this.deps.gateway!.setActive(p, this.gatewayId(s))
     }
   }
 
@@ -81,6 +130,14 @@ export class AccountStore {
   async add(provider: string, name: string, cookie?: string): Promise<ActivateResult> {
     const c = cookie?.trim() ?? ''
     if (c && !supportsCookieSlot(provider)) throw new Error('这个平台只能扫码登录')
+    if (!c && this.multi(provider)) {
+      const r = addSlot(this.book, provider, name, 'qr', false, this.now())
+      await this.ensureGw(r.slot)
+      this.book = r.book
+      this.persist()
+      await this.activate(r.slot.id, true)
+      return { slot: r.slot, needsLogin: true }
+    }
     if (c) {
       const enc = this.deps.encrypt(c)
       if (enc === null) throw new Error('本机无法加密保存 Cookie（系统密钥环不可用），请改用扫码添加')
@@ -99,12 +156,26 @@ export class AccountStore {
   rename(id: string, name: string): void {
     this.book = renameSlot(this.book, id, name)
     this.persist()
+    const s = this.slot(id)
+    if (s && this.multi(s.provider) && this.gatewayId(s) !== GW_DEFAULT_ACCOUNT) {
+      void this.deps.gateway!.rename(s.provider, this.gatewayId(s), s.name).catch((e) => this.deps.log?.(`accounts: gateway rename failed ${e instanceof Error ? e.message : e}`))
+    }
   }
 
   remove(id: string): void {
+    const s = this.slot(id)
     this.book = removeSlot(this.book, id)
     delete this.secrets[id]
     this.persist()
+    if (s && this.multi(s.provider)) {
+      const gw = this.gatewayId(s)
+      this.ensured.delete(s.provider + '\0' + gw)
+      // 网关会先注销这个账号的会话再删除登记
+      if (gw !== GW_DEFAULT_ACCOUNT) void this.deps.gateway!.remove(s.provider, gw).catch((e) => this.deps.log?.(`accounts: gateway delete failed ${e instanceof Error ? e.message : e}`))
+      const now = this.activeId(s.provider)
+      const cur = now ? this.slot(now) : undefined
+      if (cur) this.deps.gateway!.setActive(s.provider, this.gatewayId(cur))
+    }
   }
 
   setDefault(id: string): void {
@@ -132,6 +203,7 @@ export class AccountStore {
   activate(id: string, force = false): Promise<ActivateResult> {
     const s = this.slot(id)
     if (!s) return Promise.reject(new Error('账号不存在'))
+    if (this.multi(s.provider)) return this.activateMulti(s, force)
     const prev = this.locks.get(s.provider) ?? Promise.resolve()
     const run = prev.catch(() => {}).then(async (): Promise<ActivateResult> => {
       if (!force && this.activeId(s.provider) === id) return { slot: s, needsLogin: false }
@@ -149,8 +221,38 @@ export class AccountStore {
     return run
   }
 
+  /**
+   * 多账号网关：不串行、不重导入。cookie 槽位第一次（或 force）把 Cookie 导进它自己的网关账号；
+   * 扫码槽位只要登录过就直接可用（网关替它保存会话），没登录过才需要扫码。
+   */
+  private async activateMulti(s: AccountSlot, force: boolean): Promise<ActivateResult> {
+    const gw = await this.ensureGw(s)
+    if (s.mode === 'cookie' && this.secrets[s.id] && (force || !this.imported.has(s.id))) {
+      await this.deps.gateway!.run(s.provider, gw, () => this.deps.importCookie(s.provider, this.deps.decrypt(this.secrets[s.id]!)))
+      this.imported.add(s.id)
+    }
+    this.book = setActive(this.book, s.id)
+    this.persist()
+    this.deps.gateway!.setActive(s.provider, gw)
+    const needsLogin = s.mode === 'qr' && s.status?.tone !== 'ok'
+    return { slot: s, needsLogin }
+  }
+
+  /** 本次运行里已导入过网关的 cookie 槽位（网关重启会丢内存会话，遇到登录错误会再导一次） */
+  private imported = new Set<string>()
+
   /** 用指定账号（空 = 默认账号）跑 fn；只有能自动切换的才会切 */
   async use<T>(provider: string, accountId: string | undefined, fn: () => Promise<T>): Promise<T> {
+    if (this.multi(provider)) {
+      const want = resolveSlot(this.book, provider, accountId) ?? (this.activeId(provider) ? this.slot(this.activeId(provider)) : undefined)
+      if (!want) return fn()
+      const gw = await this.ensureGw(want)
+      if (want.mode === 'cookie' && this.secrets[want.id] && !this.imported.has(want.id)) {
+        await this.deps.gateway!.run(provider, gw, () => this.deps.importCookie(provider, this.deps.decrypt(this.secrets[want.id]!)))
+        this.imported.add(want.id)
+      }
+      return this.deps.gateway!.run(provider, gw, fn)
+    }
     const want = resolveSlot(this.book, provider, accountId)
     if (want && want.id !== this.activeId(provider) && want.mode === 'cookie') await this.activate(want.id)
     return fn()
@@ -161,6 +263,7 @@ export class AccountStore {
    * onSwitch 用于提示用户「已切换到 xx」。
    */
   async withFallback<T>(provider: string, fn: () => Promise<T>, onSwitch?: (slot: AccountSlot, err: unknown) => void, accountId?: string): Promise<T> {
+    if (this.multi(provider)) return this.withFallbackMulti(provider, fn, onSwitch, accountId)
     let firstErr: unknown
     try {
       return await this.use(provider, accountId, fn)
@@ -175,6 +278,36 @@ export class AccountStore {
         await this.activate(s.id)
         onSwitch?.(s, firstErr)
         return await fn()
+      } catch (e) {
+        this.markFailed(s.id, e)
+        if (!isAccountError(e)) throw e
+      }
+    }
+    throw firstErr
+  }
+
+  /** 多账号网关：直接在别的账号下重试，不切换「当前账号」；扫码槽位登录过也能顶上 */
+  private async withFallbackMulti<T>(provider: string, fn: () => Promise<T>, onSwitch?: (slot: AccountSlot, err: unknown) => void, accountId?: string): Promise<T> {
+    const first = resolveSlot(this.book, provider, accountId) ?? this.slot(this.activeId(provider))
+    let firstErr: unknown
+    try {
+      return await this.use(provider, first?.id, fn)
+    } catch (e) {
+      if (!isAccountError(e)) throw e
+      firstErr = e
+    }
+    // cookie 槽位可能只是网关重启丢了内存会话：重导一次再试
+    if (first?.mode === 'cookie' && this.secrets[first.id]) {
+      this.imported.delete(first.id)
+      try { return await this.use(provider, first.id, fn) } catch (e) { if (!isAccountError(e)) throw e }
+    }
+    if (first) this.markFailed(first.id, firstErr)
+    const others = this.book.slots.filter((s) => s.provider === provider && s.id !== first?.id && ((s.mode === 'cookie' && s.hasSecret) || s.status?.tone === 'ok'))
+    for (const s of [...fallbackCandidates(this.book, provider, first?.id ?? ''), ...others].filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i)) {
+      try {
+        const out = await this.use(provider, s.id, fn)
+        onSwitch?.(s, firstErr)
+        return out
       } catch (e) {
         this.markFailed(s.id, e)
         if (!isAccountError(e)) throw e
