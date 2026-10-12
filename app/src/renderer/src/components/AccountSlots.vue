@@ -104,7 +104,8 @@ const modeText = { cookie: 'Cookie · 可一键切换', qr: '扫码 · 切换需
 .av { width: 30px; height: 30px; border-radius: 50%; background: var(--paper-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .sm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .sm b { display: flex; gap: 6px; align-items: center; }
-.sa { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 170px; }
+.sa { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 190px; }
+.sa .btn { white-space: nowrap; }
 .tiny { height: 18px; padding: 0 6px; font-size: 11px; }
 .small { font-size: 12px; }
 .err { color: var(--err); } .okc { color: var(--ok); } .vip { color: var(--orange-text); }
