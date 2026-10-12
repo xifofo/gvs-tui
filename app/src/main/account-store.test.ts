@@ -169,3 +169,16 @@ test('legacy gateway keeps the cookie re-import path for unsupported providers',
   expect(h.calls.some((c) => c.includes('tencent'))).toBe(false)
   void t
 })
+
+test('multi-account gateway with tencent/douyin support: no global re-import, per-account import once', async () => {
+  const h = multiHarness()
+  const deps = (h.s as unknown as { deps: AccountDeps }).deps
+  deps.gateway!.supports = (p) => p === 'iq' || p === 'tencent' || p === 'douyin'
+  const t1 = await h.s.add('tencent', 'T1', 'vqq=1')
+  const t2 = await h.s.add('tencent', 'T2', 'vqq=2')
+  expect(h.imported).toEqual([`tencent@${h.s.gatewayId(t1.slot)}:vqq=1`, `tencent@${h.s.gatewayId(t2.slot)}:vqq=2`])
+  await h.s.activate(t1.slot.id)
+  await h.s.activate(t2.slot.id)
+  expect(h.imported).toHaveLength(2) // switching = header change only
+  expect(h.calls.includes(`ensure tencent/${h.s.gatewayId(t2.slot)}`)).toBe(true)
+})

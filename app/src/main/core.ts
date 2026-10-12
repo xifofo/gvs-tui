@@ -1333,7 +1333,12 @@ export class Core {
     const scoped = this.gatewayAccountFor(provider)
     if (scoped && scoped !== GW_DEFAULT_ACCOUNT) {
       // 多账号网关：Cookie 直接导进这个账号自己的会话，不碰全局配置
-      if (provider === 'iq') {
+      if (provider === 'tencent') {
+        // 网关按账号保存腾讯会话（Cookie 导入 = method=cookie）
+        await this.client().invoke('tencent', 'login', { method: 'cookie', cookie })
+      } else if (provider === 'douyin') {
+        await this.client().invoke('douyin', 'login', { op: 'import', cookie })
+      } else if (provider === 'iq') {
         await this.client().invoke('iq', 'login', { op: 'status', iq_cookie: cookie })
         await this.providerSession({ provider: 'iq', op: 'status' }).catch(() => undefined)
       } else if (provider === 'bilibili') {
