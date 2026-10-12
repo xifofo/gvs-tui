@@ -138,7 +138,7 @@ async function subscribe() {
     <template v-if="store.detailLoading">
       <div class="hero">
         <div class="wrap">
-          <Poster v-if="hintPoster" class="poster" :url="hintPoster" :title="hint.title ?? ''" :title-size="22" />
+          <Poster v-if="hintPoster" class="poster hero-target" :url="hintPoster" :title="hint.title ?? ''" :title-size="22" />
           <Skeleton v-else class="poster-sk" w="172" h="244" r="8" />
         </div>
         <div class="info">
@@ -164,7 +164,7 @@ async function subscribe() {
     <div v-else-if="store.detailError" class="error-box">{{ store.detailError }}</div>
     <template v-else-if="d">
       <div class="hero">
-        <div class="wrap"><Poster class="poster" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" /></div>
+        <div class="wrap"><Poster class="poster hero-target" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" /></div>
         <div class="info">
           <div class="src dim"><PlatformLogo :provider="d.provider" :size="18" /><span>{{ PROVIDER_NAME[d.provider] }}</span><span v-if="d.category">· {{ d.category }}</span></div>
           <h1 class="title" :title="d.title">{{ d.title }}</h1>
@@ -270,7 +270,7 @@ async function subscribe() {
 .alts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .alt { height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .alt:hover { border-color: var(--ink); }
-.alt.on { background: var(--ink); color: var(--paper); border-color: var(--ink); cursor: default; }
+.alt.on { background: var(--orange); color: var(--on-orange); border-color: var(--orange); box-shadow: var(--ui-glow); cursor: default; }
 .alt .vip { font-size: 10px; color: var(--orange-text); font-weight: 700; }
 .meta { font-size: 15px; }
 .desc { font-size: 14px; line-height: 1.7; color: var(--ink-2); max-width: 720px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }

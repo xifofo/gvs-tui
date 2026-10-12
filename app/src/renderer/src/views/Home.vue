@@ -38,9 +38,10 @@ const clearRecent = () => void savePrefs({ recentSearches: [] })
 // 今日更新：订阅检测到 / 预计今天更新的集；芒果 TV 排播只显示数量
 const today = computed(() => {
   const d = new Date(); d.setHours(0, 0, 0, 0)
-  return subscriptionItems(store.subs?.subs ?? [], d.getTime(), d.getTime() + 86400e3).slice(0, 5)
+  return subscriptionItems(store.subs?.subs ?? [], d.getTime(), d.getTime() + 86400e3).slice(0, 8)
 })
 const freshSubs = computed(() => (store.subs?.subs ?? []).filter((s) => s.newCount > 0 && !today.value.some((i) => i.id === s.showId)).slice(0, 3))
+const hero = computed(() => today.value.find((i) => i.status === 'new') ?? today.value[0] ?? null)
 const todayText: Record<string, string> = { downloaded: '已下载', pending: '待更新', new: '未下载', failed: '失败' }
 const mgToday = ref(0)
 void gvs('calendar').then((r) => { mgToday.value = r.days.find((x) => x.date === dateKey(Date.now()))?.items.length ?? 0 }).catch(() => {})
@@ -77,6 +78,19 @@ function openSub(provider: string, id: string) {
         <button type="button" class="btn sm browse" @click="go('discover')"><Icon name="compass" :size="15" />按平台浏览</button>
       </div>
 
+      <section v-if="hero" class="hero card" data-card>
+        <div class="hbg" aria-hidden="true"><Poster class="hpo" :url="hero.poster" :provider="hero.provider" :title="''" /></div>
+        <div class="hc">
+          <span class="eyebrow">今日更新 · {{ PROVIDER_NAME[hero.provider as Provider] ?? hero.provider }}</span>
+          <h2 class="ht">{{ hero.title }}</h2>
+          <div class="chips"><span class="chip">{{ hero.episodes }}</span><span class="chip">{{ hero.time }} 更新</span><span class="chip" :class="{ ok: hero.status === 'downloaded', warn: hero.status === 'new' }">{{ todayText[hero.status ?? 'pending'] }}</span></div>
+          <div class="ha">
+            <button v-if="hero.status === 'new'" type="button" class="btn primary" @click="go('calendar')"><Icon name="download" :size="16" />去下载</button>
+            <button type="button" class="btn" @click="openSub(hero.provider, hero.id)">查看详情</button>
+            <button type="button" class="btn ghost" @click="go('calendar')">追剧日历<Icon name="right" :size="14" /></button>
+          </div>
+        </div>
+      </section>
       <div class="grid">
         <div class="col">
           <section class="card box">
@@ -100,11 +114,13 @@ function openSub(provider: string, id: string) {
               {{ store.subs?.subs.length ? '订阅的剧今天还没有更新。' : '订阅在追的剧后，这里会显示今天更新的集数和下载状态。' }}
               <template v-if="mgToday"> 芒果 TV 今天有 {{ mgToday }} 部更新。</template>
             </div>
-            <button v-for="(i, k) in today" :key="i.id + k" type="button" class="today" @click="openSub(i.provider, i.id)">
-              <Poster class="tp" :url="i.poster" :provider="i.provider" :title="i.title" :title-size="9" />
-              <span class="tm"><b><PlatformLogo :provider="i.provider" :size="14" />{{ i.title }}</b><span class="muted small">{{ i.episodes }} · {{ i.time }}</span></span>
-              <span class="chip" :class="{ ok: i.status === 'downloaded', warn: i.status === 'new' }">{{ todayText[i.status ?? 'pending'] }}</span>
-            </button>
+            <div v-if="today.length" class="tgrid stagger">
+              <button v-for="(i, k) in today" :key="i.id + k" type="button" class="tc" data-card :style="{ '--i': k }" @click="openSub(i.provider, i.id)">
+                <span class="tpw lift"><Poster class="tpp" :url="i.poster" :provider="i.provider" :title="i.title" :title-size="13" loading="lazy" />
+                  <span class="bdg l">{{ i.time }}</span><span class="bdg r" :class="i.status">{{ todayText[i.status ?? 'pending'] }}</span></span>
+                <b class="tt">{{ i.title }}</b><span class="muted small">{{ i.episodes }}</span>
+              </button>
+            </div>
             <button v-for="s in freshSubs" :key="s.id" type="button" class="today" @click="go('subscriptions')">
               <Poster class="tp" :url="s.poster" :provider="s.provider" :title="s.title" :title-size="9" />
               <span class="tm"><b><PlatformLogo :provider="s.provider" :size="14" />{{ s.title }}</b><span class="muted small">{{ s.lastCheck?.message }}</span></span>
@@ -137,20 +153,22 @@ function openSub(provider: string, id: string) {
 
 <style scoped>
 .empty-home { margin: auto; width: min(760px, 100%); display: flex; flex-direction: column; align-items: center; gap: 18px; text-align: center; padding: 40px 0; }
-.logo { width: 64px; height: 64px; border-radius: 16px; background: var(--orange); color: var(--ink); font: 800 30px var(--font-display); display: flex; align-items: center; justify-content: center; }
-.big { width: 100%; height: 54px; padding: 0 8px 0 16px; border: 1.5px solid var(--ink); border-radius: 12px; background: var(--card); display: flex; align-items: center; gap: 12px; }
+.logo { width: 64px; height: 64px; border-radius: 16px; background: var(--orange); color: var(--on-orange); font: 800 30px var(--font-display); display: flex; align-items: center; justify-content: center; }
+.big { width: 100%; height: 54px; padding: 0 8px 0 16px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--ui-input); box-shadow: var(--ui-shadow-surface); display: flex; align-items: center; gap: 12px; }
 .big input { flex: 1; border: 0; outline: 0; font-size: 15px; background: transparent; min-width: 0; }
 .big .btn { height: 40px; }
 .tips { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .tip { padding: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left; cursor: pointer; font-size: 14px; }
 .tip span { font-size: 12px; }
-.tip:hover { border-color: var(--ink); }
+.tip { transition: transform var(--ui-duration-base) var(--ui-ease-out), border-color var(--ui-duration-base); }
+.tip:hover { border-color: color-mix(in srgb, var(--orange) 55%, var(--line)); transform: translateY(-2px); }
+.tip :deep(svg) { color: var(--orange-2); }
 .browse { margin-left: auto; }
 .grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .box { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
 .bh { display: flex; align-items: center; justify-content: space-between; }
-.h2s { font-size: 16px; font-weight: 700; }
+.h2s { font-size: 15px; font-weight: 850; }
 .small { font-size: 12px; }
 .pad { padding: 4px 0; }
 .job { display: flex; align-items: center; gap: 12px; }
@@ -162,6 +180,23 @@ function openSub(provider: string, id: string) {
 .att { display: flex; align-items: center; gap: 10px; }
 .am { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
 .ok-line { display: flex; align-items: center; gap: 6px; color: var(--ok); }
+.hero { position: relative; overflow: hidden; min-height: 200px; display: flex; align-items: flex-end; padding: 24px; }
+.hbg { position: absolute; inset: 0; background: linear-gradient(135deg, color-mix(in srgb, rgb(var(--ui-accent-channel)) 22%, var(--card)), color-mix(in srgb, #16222f 45%, var(--card)) 60%, color-mix(in srgb, #2b1631 45%, var(--card))); }
+.hpo { position: absolute; right: 0; top: 0; width: 55%; height: 100%; border: 0; border-radius: 0; opacity: .55; box-shadow: none; }
+.hbg::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, var(--card) 30%, color-mix(in srgb, var(--card) 30%, transparent)); }
+.hc { position: relative; display: flex; flex-direction: column; gap: 10px; }
+.ht { font-size: 30px; font-weight: 900; letter-spacing: -.02em; }
+.ha { display: flex; gap: 8px; margin-top: 4px; }
+.tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 14px 12px; }
+.tc { display: flex; flex-direction: column; gap: 3px; border: 0; background: none; padding: 0; text-align: left; cursor: pointer; min-width: 0; color: inherit; }
+.tpw { position: relative; display: block; }
+.tpp { width: 100%; aspect-ratio: 2 / 3; border-radius: 4px; }
+.tc:hover .tpp { border-color: color-mix(in srgb, var(--orange) 60%, var(--line)); box-shadow: var(--ui-shadow-float); }
+.bdg { position: absolute; top: 6px; z-index: 2; padding: 4px 6px; border-radius: 3px; font-size: 10px; font-weight: 800; line-height: 1; background: rgb(4 5 10 / 88%); color: #fff; border: 1px solid rgb(255 255 255 / 12%); }
+.bdg.l { left: 6px; } .bdg.r { right: 6px; }
+.bdg.downloaded { background: var(--ok); color: #06130e; border-color: transparent; }
+.bdg.new { background: var(--orange); color: var(--on-orange); border-color: transparent; }
+.tt { font-size: 13px; font-weight: 800; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .today { display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 0; text-align: left; cursor: pointer; }
 .today:hover b { text-decoration: underline; }
 .tp { width: 34px; height: 48px; padding: 2px; flex-shrink: 0; }

@@ -30,19 +30,22 @@ const color = computed(() => {
 </script>
 
 <template>
-  <div class="poster" :style="{ background: src ? 'var(--paper-2)' : color }" role="img" :aria-label="title ? `${title} 海报` : '海报'">
+  <div class="poster" :style="{ background: src ? 'var(--paper-2)' : `linear-gradient(165deg, ${color} 0%, color-mix(in srgb, ${color} 55%, #05050a) 100%)` }" role="img" :aria-label="title ? `${title} 海报` : '海报'">
     <span v-if="src && !loaded" class="sk wash" aria-hidden="true" />
     <img v-if="src" :src="src" alt="" :loading="loading" decoding="async" :class="{ on: loaded }" @load="loaded = true" @error="failed = true" />
-    <span v-else-if="title" class="t" :style="{ fontSize: titleSize + 'px' }">{{ title }}</span>
+    <span v-else-if="title" class="t fb" :style="{ fontSize: titleSize + 'px' }">{{ title }}</span>
   </div>
 </template>
 
 <style scoped>
 .poster {
-  position: relative; overflow: hidden; border-radius: 8px; flex-shrink: 0; color: #fff;
+  position: relative; overflow: hidden; border-radius: var(--ui-radius-sm); flex-shrink: 0; color: #fff;
   display: flex; flex-direction: column; justify-content: flex-end; padding: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--line); box-shadow: var(--ui-poster-shadow);
 }
+.poster::after { content: ''; position: absolute; inset: auto 0 0; height: 50%; background: linear-gradient(to top, rgb(2 3 8 / 72%), transparent); pointer-events: none; }
+.poster:has(img.on)::after { opacity: 0; }
+.fb { position: relative; z-index: 1; }
 .poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .2s ease; }
 .poster img.on { opacity: 1; }
 .wash { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; }

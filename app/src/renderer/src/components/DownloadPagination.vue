@@ -51,6 +51,6 @@ function resize(event: Event) {
 .size select { height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer; }
 .buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .number { min-width: 36px; padding: 0 10px; }
-.number.on { background: var(--ink); color: var(--paper); border-color: var(--ink); font-weight: 700; }
+.number.on { background: var(--orange); color: var(--on-orange); border-color: var(--orange); box-shadow: var(--ui-glow); font-weight: 700; }
 .ellipsis { min-width: 20px; text-align: center; }
 </style>

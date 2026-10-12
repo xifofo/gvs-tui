@@ -85,8 +85,8 @@ function onKey(e: KeyboardEvent) {
 </template>
 
 <style scoped>
-.scrim { position: fixed; inset: 0; background: rgba(23, 24, 28, .38); z-index: 60; display: flex; justify-content: center; padding-top: 12vh; }
-.pal { width: min(640px, 92vw); max-height: 70vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0, 0, 0, .28); }
+.scrim { position: fixed; inset: 0; background: var(--ui-overlay); backdrop-filter: blur(6px); z-index: 60; display: flex; justify-content: center; padding-top: 12vh; }
+.pal { width: min(640px, 92vw); max-height: 70vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: var(--ui-shadow-float); }
 .in { height: 56px; padding: 0 18px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
 .in input { flex: 1; border: 0; outline: 0; font-size: 16px; background: transparent; }
 .kbd { font-size: 11px; color: var(--ink-3); border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; }

@@ -118,7 +118,7 @@ function submit() {
 .presets, .days { display: flex; flex-wrap: wrap; gap: 6px; }
 .tiers { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .tiers li { display: flex; gap: 6px; align-items: center; }
-.tiers .n { width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: var(--paper); font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+.tiers .n { width: 20px; height: 20px; border-radius: 50%; background: var(--orange); color: var(--on-orange); font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
 .toggle span:first-child { display: flex; flex-direction: column; gap: 2px; }
 .toggle small { font-size: 12px; }
 .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }

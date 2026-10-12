@@ -276,11 +276,11 @@ onBeforeUnmount(() => io?.disconnect())
 }
 .vip { position: absolute; top: 10px; right: 10px; padding: 2px 7px; border-radius: 5px; background: var(--orange-soft); color: var(--orange-text); font-size: 11px; font-weight: 700; }
 .veil {
-  position: absolute; inset: 0; border-radius: 8px; background: rgba(23, 24, 28, .5); opacity: 0; transition: opacity .14s;
+  position: absolute; inset: 0; border-radius: 8px; background: var(--ui-overlay); backdrop-filter: blur(6px); opacity: 0; transition: opacity .14s;
   display: flex; align-items: flex-end; padding: 12px;
 }
 .item:hover:not(:disabled) .veil, .item:focus-visible .veil { opacity: 1; }
-.tag { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 6px; background: var(--orange); color: var(--ink); font-size: 12px; font-weight: 700; }
+.tag { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 6px; background: var(--orange); color: var(--on-orange); font-size: 12px; font-weight: 700; }
 .t { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .m { font-size: 13px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: -4px; }
 .sent { display: flex; justify-content: center; padding-top: 4px; }

@@ -121,7 +121,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.scrim { position: fixed; inset: 0; background: rgba(23, 24, 28, 0.45); display: flex; align-items: center; justify-content: center; z-index: 40; }
+.scrim { position: fixed; inset: 0; background: var(--ui-overlay); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; z-index: 40; }
 .dlg {
   width: 480px; max-width: calc(100vw - 48px); background: var(--paper); border: 1.5px solid var(--ink); border-radius: 12px;
   box-shadow: 8px 8px 0 var(--ink); padding: 26px; display: flex; flex-direction: column; align-items: center; gap: 18px;

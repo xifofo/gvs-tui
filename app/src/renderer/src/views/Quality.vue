@@ -597,7 +597,7 @@ legend { padding: 0 0 10px; font-size: 16px; font-weight: 700; }
 .hit { padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: var(--card); text-align: left; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
 .hit:last-child { border-bottom: 0; }
 .hit:hover, .hit.on { background: var(--paper-2); }
-.name { padding: 10px 12px; background: var(--ink); color: var(--paper); border-radius: 8px; font-size: 12px; line-height: 1.7; word-break: break-all; }
+.name { padding: 10px 12px; background: var(--ui-input); border: 1px solid var(--line); color: var(--ink-2); border-radius: 8px; font-size: 12px; line-height: 1.7; word-break: break-all; }
 .name span { color: var(--orange); }
 .dir { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
 .dir:hover { color: var(--orange-text); }

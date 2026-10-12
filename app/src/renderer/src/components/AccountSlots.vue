@@ -100,7 +100,7 @@ const modeText = { cookie: 'Cookie · 可一键切换', qr: '扫码 · 切换需
 <style scoped>
 .slots { display: flex; flex-direction: column; gap: 8px; }
 .slot { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
-.slot.on { border-color: var(--ok); background: #f6fbf7; }
+.slot.on { border-color: var(--ok); background: var(--ok-bg); }
 .av { width: 30px; height: 30px; border-radius: 50%; background: var(--paper-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .sm { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .sm b { display: flex; gap: 6px; align-items: center; }

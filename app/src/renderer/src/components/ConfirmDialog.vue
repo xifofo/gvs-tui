@@ -41,7 +41,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.scrim { position: fixed; inset: 0; background: rgba(23, 24, 28, .45); display: flex; align-items: center; justify-content: center; z-index: 45; }
+.scrim { position: fixed; inset: 0; background: var(--ui-overlay); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; z-index: 45; }
 .dlg {
   width: 440px; max-width: calc(100vw - 48px); background: var(--paper); border: 1.5px solid var(--ink); border-radius: 12px;
   box-shadow: 8px 8px 0 var(--ink); padding: 24px; display: flex; flex-direction: column; gap: 16px;
@@ -56,5 +56,5 @@ onBeforeUnmount(() => {
 .opt input:focus-visible + .bx { outline: 2px solid var(--orange); outline-offset: 2px; }
 .foot { display: flex; justify-content: flex-end; gap: 10px; }
 .btn.danger { border: 1.5px solid var(--err); color: var(--err); font-weight: 700; }
-.btn.danger:hover { background: var(--err); color: #fff; }
+.btn.danger:hover { background: var(--err); color: var(--paper); }
 </style>

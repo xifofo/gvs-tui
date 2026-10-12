@@ -175,7 +175,7 @@ const stateText = (s: Subscription) => (failed(s) ? '检查失败' : s.newCount 
 .err { color: var(--err); }
 .c4 .progress { height: 4px; flex-grow: 0; }
 .acts { display: flex; gap: 6px; }
-.drawer-bg { position: fixed; inset: 0; background: rgba(23, 24, 28, .35); z-index: 40; display: flex; justify-content: flex-end; }
+.drawer-bg { position: fixed; inset: 0; background: var(--ui-overlay); backdrop-filter: blur(6px); z-index: 40; display: flex; justify-content: flex-end; }
 .drawer { width: min(560px, 92vw); height: 100%; border-radius: 0; padding: 20px 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .dh { display: flex; align-items: center; gap: 8px; font-size: 16px; }
 </style>

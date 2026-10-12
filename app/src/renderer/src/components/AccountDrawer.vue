@@ -64,8 +64,8 @@ function hide() {
 </template>
 
 <style scoped>
-.scrim { position: fixed; inset: 0; background: rgba(23, 24, 28, .25); z-index: 35; display: flex; justify-content: flex-end; }
-.drawer { width: min(460px, 94vw); height: 100%; background: var(--card); border-left: 1px solid var(--line); box-shadow: -12px 0 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; }
+.scrim { position: fixed; inset: 0; background: var(--ui-overlay); backdrop-filter: blur(6px); z-index: 35; display: flex; justify-content: flex-end; }
+.drawer { width: min(460px, 94vw); height: 100%; background: var(--card); border-left: 1px solid var(--line); box-shadow: var(--ui-shadow-dialog); display: flex; flex-direction: column; }
 .dh { padding: 18px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
 .dt { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .dt b { font-size: 17px; }

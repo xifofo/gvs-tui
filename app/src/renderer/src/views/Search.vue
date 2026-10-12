@@ -201,19 +201,19 @@ function metaText(row: { year: number; meta: string }): string {
 .qsel { height: 30px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 0 8px; font-size: 13px; }
 .fwrap { position: relative; align-self: center; }
 .qb { display: flex; gap: 5px; flex-wrap: wrap; }
-.qbadge { height: 20px; padding: 0 7px; border-radius: 4px; font: 700 11px var(--font-mono); display: inline-flex; align-items: center; gap: 4px; background: var(--ink); color: var(--paper); letter-spacing: .3px; }
+.qbadge { height: 20px; padding: 0 7px; border-radius: 4px; font: 700 11px var(--font-mono); display: inline-flex; align-items: center; gap: 4px; background: var(--orange); color: var(--on-orange); letter-spacing: .3px; }
 .qbadge.r1080 { background: var(--paper-2); color: var(--ink); }
 .qbadge.HDR { background: #6b4a12; color: #ffd98a; }
 .qbadge.DV { background: #1d1d3a; color: #c9c3ff; }
 .qbadge.DOLBY, .qbadge.ATMOS { background: #0f2f3a; color: #9fe3f5; }
 .qbadge.wait { background: transparent; color: var(--ink-3); border: 1px dashed var(--line); font-weight: 500; }
-.fmenu { position: absolute; right: 0; top: 42px; width: 280px; padding: 8px; z-index: 20; box-shadow: 0 14px 40px rgba(0, 0, 0, .16); display: flex; flex-direction: column; gap: 2px; }
+.fmenu { position: absolute; right: 0; top: 42px; width: 280px; padding: 8px; z-index: 20; box-shadow: var(--ui-shadow-float); display: flex; flex-direction: column; gap: 2px; }
 .fm-h { display: flex; justify-content: space-between; padding: 4px 8px 6px; font-size: 12px; color: var(--ink-3); }
 .fm-i { height: 36px; padding: 0 8px; border: 0; background: transparent; border-radius: 6px; display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; text-align: left; }
 .fm-i:hover { background: var(--paper); }
 .fm-n { flex: 1; }
-.cb { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #cfcabe; display: flex; align-items: center; justify-content: center; }
-.cb.on { background: var(--ink); border-color: var(--ink); color: var(--orange); }
+.cb { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--line-2); display: flex; align-items: center; justify-content: center; }
+.cb.on { background: var(--orange); border-color: var(--orange); color: var(--on-orange); }
 .fm-foot { padding: 8px; border-top: 1px solid var(--line); margin-top: 4px; text-align: left; }
 .status { display: flex; gap: 8px; flex-wrap: wrap; }
 .status .chip { gap: 6px; }

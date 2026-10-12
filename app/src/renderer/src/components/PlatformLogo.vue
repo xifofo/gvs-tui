@@ -27,7 +27,7 @@ const LOGOS: Record<string, string> = { youku, tencent, hongguo, douyin, iq, iqc
 
 <style scoped>
 .plogo { border-radius: 4px; flex-shrink: 0; display: block; object-fit: contain; }
-.plogo.text { background: #f2b705; color: var(--ink); font-weight: 900; display: flex; align-items: center; justify-content: center; }
+.plogo.text { background: #f2b705; color: var(--on-orange); font-weight: 900; display: flex; align-items: center; justify-content: center; }
 .plogo.bili { background:#f4b4c8; }
 .plogo.mango { background:#f2b576; }
 </style>
