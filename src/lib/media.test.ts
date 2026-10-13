@@ -147,8 +147,11 @@ test('successful exit preserves file diagnostics and redacts keys and media URLs
 
 test('native crash retains the root exception before a long stack and redacts private data', async () => {
   if (process.platform === 'win32') return
-  const script = `process.stderr.write('Fatal error.\\nSystem.AccessViolationException: invalid memory key=0123456789abcdef0123456789abcdef https://cdn.test/file?token=secret\\n' + 'stack frame\\n'.repeat(2000)); setTimeout(() => process.kill(process.pid, 'SIGABRT'), 100)`
-  const error = await runM3u8dl(process.execPath, ['-e', script], '').then(() => undefined, e => e as Error)
+  // A shell signal exercises native process failure without Bun's crash-report
+  // handler/core dump keeping the CI subprocess alive after SIGABRT.
+  const fatal = 'Fatal error.\nSystem.AccessViolationException: invalid memory key=0123456789abcdef0123456789abcdef https://cdn.test/file?token=secret'
+  const script = 'ulimit -c 0; printf "%s\\n" "$1" >&2; i=0; while [ "$i" -lt 2000 ]; do printf "stack frame\\n" >&2; i=$((i+1)); done; kill -ABRT "$$"'
+  const error = await runM3u8dl('/bin/sh', ['-c', script, 'native-crash-fixture', fatal], '').then(() => undefined, e => e as Error)
   expect(error?.message).toContain('SIGABRT')
   expect(error?.message).toContain('System.AccessViolationException')
   expect(error?.message).not.toMatch(/0123456789abcdef|token=secret|https:\/\//)
