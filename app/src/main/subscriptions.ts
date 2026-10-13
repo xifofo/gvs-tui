@@ -1,5 +1,6 @@
 import type { DetailView, EnqueueRequest, EpisodeView, ProbeResult, Provider } from '@shared/api'
 import { pickBest, shouldUpgrade, DEFAULT_RULES, type RuleCandidate } from '../shared/rule-groups'
+import { mgtvShowId } from '../shared/calendar'
 import {
   DEFAULT_INTERVAL_MIN, diffEpisodes, jitter, nextCheckAt, subKey,
   type SubCheck, type SubscribeRequest, type Subscription, type SubscriptionPatch, type SubsView,
@@ -54,6 +55,8 @@ export class SubscriptionManager {
       this.paused = !!f.paused
       this.intervalMinutes = Math.max(1, Number(f.intervalMinutes) || DEFAULT_INTERVAL_MIN)
       this.subs = Array.isArray(f.subs) ? f.subs.filter((s) => s && s.id && s.provider && s.showId) : []
+      // 旧版从追剧日历订阅的芒果节目存的是裸 clipId，网关会当成 vid 拒绝
+      for (const s of this.subs) if (s.provider === 'mgtv') s.showId = mgtvShowId(s.showId)
     } catch (e) {
       this.deps.log?.(`subs: load failed ${e instanceof Error ? e.message : e}`)
     }

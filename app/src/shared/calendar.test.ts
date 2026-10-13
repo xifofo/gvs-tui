@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { expectedTimes, parseMgtvConf, parseUpdateText } from './calendar'
+import { expectedTimes, mgtvShowId, parseMgtvConf, parseUpdateText } from './calendar'
 
 const sample = {
   code: 200, msg: 'ok', data: [
@@ -17,8 +17,8 @@ test('parseMgtvConf maps days and items, sorted by time', () => {
   const days = parseMgtvConf(sample, now)
   expect(days.map((d) => [d.date, d.weekday, d.today])).toEqual([['2026-10-12', '周一', true], ['2027-01-02', '周五', false]])
   expect(days[0]!.items.map((i) => [i.title, i.id, i.episodes, i.time, i.poster])).toEqual([
-    ['早间节目', '1', '第6期上', '08:00', 'x.jpg'],
-    ['云雀叫天录', '875804', '21,22集', '20:00', 'vv.jpg'],
+    ['早间节目', 'clip:1', '第6期上', '08:00', 'x.jpg'],
+    ['云雀叫天录', 'clip:875804', '21,22集', '20:00', 'vv.jpg'],
   ])
   expect(days[0]!.items[1]!.onlineAt).toBe(1791806400000)
   expect(days[0]!.items[1]!.url).toBe('https://www.mgtv.com/h/875804.html')
@@ -58,4 +58,10 @@ test('subscriptionItems: detected (downloaded/new), skips baseline bulk, project
     ['预计更新', 'pending', '20:00'],
   ])
   expect(subscriptionItems(subs, d(10, 0), d(11, 0), d(12, 12))).toEqual([])
+})
+
+test('mgtv calendar ids open as shows (clip:ID), never as bare vids', () => {
+  expect(mgtvShowId('912960')).toBe('clip:912960')
+  expect(mgtvShowId('clip:912960')).toBe('clip:912960')
+  expect(mgtvShowId('vid:1')).toBe('vid:1')
 })

@@ -88,3 +88,13 @@ test('pause / dedupe / failures', async () => {
   const v = m2.view().subs[0]!
   expect([v.state, v.lastCheck?.ok, v.lastCheck?.message]).toEqual(['P', false, '网关 401'])
 })
+
+test('legacy mgtv subscriptions with bare clipId are migrated to clip:ID on load', () => {
+  const h = harness()
+  h.m.subscribe({ provider: 'mgtv', showId: '912960', title: '芒果剧', poster: '', kind: 'show', rules: '1080P > any' })
+  h.m.stop()
+  const raw = h.saved()
+  const again = new SubscriptionManager({ ...h.deps, load: () => raw })
+  again.stop()
+  expect(again.view().subs[0]!.showId).toBe('clip:912960')
+})

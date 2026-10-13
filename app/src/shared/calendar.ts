@@ -33,6 +33,14 @@ export const dateKey = (ms: number) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+/**
+ * 网关的芒果 detail 约定：纯数字 id 是单集 vid，节目（合集）必须写成 clip:ID。
+ * 排播接口给的是 clipId，直接传会被当成 vid → 上游 code=10000 → 503。
+ */
+export function mgtvShowId(raw: string): string {
+  return /^\d+$/.test(raw) ? `clip:${raw}` : raw
+}
+
 const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '')
 
 /** tagName 只有「10-05」：按 onlineTime 或参考时间推年份（跨年时取离参考时间最近的那一年） */
@@ -64,10 +72,10 @@ export function parseMgtvConf(json: unknown, now = Date.now()): CalendarDay[] {
     const items: CalendarItem[] = list
       .filter((x) => str(x.title))
       .map((x) => {
-        const id = str(x.jumpId) || str(x.aid)
+        const clip = str(x.jumpId) || str(x.aid)
         return {
           provider: 'mgtv',
-          id,
+          id: clip ? mgtvShowId(clip) : '',
           title: str(x.title),
           info: str(x.info),
           episodes: str(x.series) || str(x.rightBottom),
@@ -76,7 +84,7 @@ export function parseMgtvConf(json: unknown, now = Date.now()): CalendarDay[] {
           onlineText: str(x.onlineText),
           poster: str(x.imgVer) || str(x.img),
           posterHor: str(x.imgHor),
-          url: id ? `https://www.mgtv.com/h/${id}.html` : '',
+          url: clip ? `https://www.mgtv.com/h/${clip}.html` : '',
           source: 'platform' as const,
         }
       })
