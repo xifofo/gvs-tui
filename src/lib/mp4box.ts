@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, openSync, readSync, statSync, writeFileSync } from 'node:fs'
 import { mkvLang, type MuxAudio } from './mkvmerge.ts'
 import { removeScratch, scratchDir } from './scratch.ts'
-import { resolveAudioLanguage } from './audio-language.ts'
+import { isUnknownAudioLanguage, resolveAudioLanguage } from './audio-language.ts'
 
 export function isDtsAudio(track: { id?: string; label?: string; codec?: string }): boolean {
   return /dts/i.test(`${track.id ?? ''} ${track.label ?? ''} ${track.codec ?? ''}`)
@@ -198,7 +198,7 @@ export function shiftedEdits(track: Mp4Track, deltaMs: number): string {
  * Do not set :delay=0: MP4Box would replace the source edit list (including B-frame trims).
  */
 export async function mp4boxMux(mp4box: string, video: string, audios: MuxAudio[], out: string,
-  progress?: (n: number, total: number) => void, signal?: AbortSignal, audioLanguageFallback = ''): Promise<void> {
+  progress?: (n: number, total: number) => void, signal?: AbortSignal, languageFallback = ''): Promise<void> {
   audios = orderedMuxAudios(audios)
   const tmp = scratchDir(out, 'gvs-mp4box-')
   const report: Record<string, unknown> = { version: 1, muxer: 'MP4Box', verified: false }
@@ -215,8 +215,11 @@ export async function mp4boxMux(mp4box: string, video: string, audios: MuxAudio[
       if (tracks.length !== 1) throw new Error('MP4Box 输入必须包含一条所选类型轨道')
       before.push(tracks[0]!)
       args.push('-add', `${path}#trackID=${tracks[0]!.id}:ID=${i + 1}${i ? ':group=1' : ''}`)
+      if (!i && languageFallback && isUnknownAudioLanguage(tracks[0]!.language)) {
+        args.push('-lang', `${i + 1}=${mp4Lang(languageFallback)}`)
+      }
       if (i) {
-        args.push('-lang', `${i + 1}=${mp4Lang(resolveAudioLanguage(audios[i - 1]!.lang, tracks[0]!.language, audioLanguageFallback))}`)
+        args.push('-lang', `${i + 1}=${mp4Lang(resolveAudioLanguage(audios[i - 1]!.lang, tracks[0]!.language, languageFallback))}`)
         args.push('-name', `${i + 1}=`)
         args.push(i - 1 === defaultIndex ? '-enable' : '-disable', String(i + 1))
       }

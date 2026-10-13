@@ -9,13 +9,14 @@ import { mkvmergeMux, mkvmergeRemux } from './mkvmerge'
 import { mgtvCapabilities, miguCapabilities, selectedBilibiliMedia, webTracks, audioChoice, type WebTrack } from './web-video-providers'
 import { probeFinishedMedia } from './gvs-record'
 import { verifyMiguManifest } from './migu-manifest'
+import { mgtvDurationCovers, mgtvExpectedDuration, verifyMgtvManifest } from './mgtv-manifest'
 
 type Emit = (status: string, pct: number, log: string) => void
-async function verifyCoverage(path: string, expected: number | undefined, signal?: AbortSignal) {
+async function verifyCoverage(path: string, expected: number | undefined, signal?: AbortSignal, strict = false) {
   signal?.throwIfAborted()
   const media = await probeFinishedMedia(path,signal)
   if (media.status !== 'probed' || !media.durationSeconds) throw new Error('未能验证媒体时长，已保留下载文件，请检查媒体工具')
-  if (expected && expected > 30 && media.durationSeconds < expected - Math.max(10,expected*.05)) throw new Error('实际视频明显短于分集时长，可能是试看；已停止生成成品')
+  if (expected && (strict ? !mgtvDurationCovers(media.durationSeconds, expected) : expected > 30 && media.durationSeconds < expected - Math.max(10,expected*.05))) throw new Error('实际视频明显短于分集时长，可能是试看；已停止生成成品')
 }
 export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileConfig, task: DlTask, dest: string, work: string, emit: Emit, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted()
@@ -41,11 +42,16 @@ export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileCo
     const data = await cli.invoke('mgtv','play',{vid:task.vid,quality:task.quality,...mgtvCapabilities})
     if (String(data.vid || data.id) !== task.vid) throw new Error('芒果取流返回了不同分集，已停止下载')
     if (String(data.actualQuality) !== task.quality) throw new Error('芒果返回了不同画质，已停止下载')
-    if (data.preview === true || Number(data.preview) === 1) throw new Error('芒果当前只返回试看，请检查账号授权')
     const source = webTracks(data).find(t => t.type === 'video')
     if (!source) throw new Error('芒果没有返回可用播放地址')
-    await downloadPlaylist({src:source.url,dest,ref:'https://www.mgtv.com/',headers:source.headers,threads:cfg.threads,select:'muxed',muxTracks:true,transport:'re',workDir:work,workTag:'mgtv',signal,cb:(n,total,info)=>emit(playlistStatus('下载',info?.phase || 'download'),.05+.85*(total>1?n/total:n),info?.log || '芒果 CDN → 本机')})
-    await verifyCoverage(dest,task.duration,signal)
+    emit('校验', .03, data.preview === true || Number(data.preview) === 1 ? '核对芒果播放清单是否为完整内容' : '核对芒果播放清单')
+    const expected = mgtvExpectedDuration(task.duration, data.duration, source.source.duration)
+    const headers = new Headers(source.headers)
+    if (!headers.has('Referer')) headers.set('Referer', 'https://www.mgtv.com/')
+    const checked = await verifyMgtvManifest(source.url, Object.fromEntries(headers), expected, signal)
+    await downloadPlaylist({src:checked.url,dest,ref:'https://www.mgtv.com/',headers:source.headers,threads:cfg.threads,select:'muxed',muxTracks:true,transport:'re',workDir:work,workTag:'mgtv',signal,cb:(n,total,info)=>emit(playlistStatus('下载',info?.phase || 'download'),.05+.85*(total>1?n/total:n),info?.log || '芒果 CDN → 本机')})
+    // A changed CDN playlist must not silently produce a short output after preflight.
+    await verifyCoverage(dest,Math.max(expected || 0, checked.durationSeconds),signal,true)
     return
   }
   const [qn,family] = task.quality.split('|')

@@ -22,6 +22,27 @@ test('IQ Japanese audio ID 6 is corrected in the picker and mux metadata without
   expect(normalizeIQAudioLanguage(french)).toBe(french)
 })
 
+test('IQ official Thai audio ID 157 overrides an incorrect Mandarin label in picker and resumed audio responses', () => {
+  const dolby = { id: '157:1:500', lid: 157, label: '普通话 · 杜比 5.1', lang: '普通话', language: 'zho', codec: 'eac3', default: true }
+  const aac = { id: '157:2:100', label: '普通话 · AAC', lang: '普通话', language: 'zho', codec: 'aac' }
+  const { audios } = iqOptions({ audios: [dolby, aac,
+    { id: '1:2:100', lid: 1, language: 'zho', lang: '普通话', label: '普通话 · AAC', codec: 'aac' },
+  ] })
+  expect(audios.map(a => [a.id, a.lang, a.label, a.selected])).toEqual([
+    ['157:1:500', '泰语', '泰语 · 杜比 5.1', true],
+    ['157:2:100', '泰语', '泰语 · AAC', true],
+    ['1:2:100', '普通话', '普通话 · AAC', false],
+  ])
+  expect(normalizeIQAudioLanguage(dolby)).toMatchObject({ id: dolby.id, language: 'tha', codec: 'eac3', default: true })
+  // The audio action can omit id/lid, including when resuming a pre-fix queue.
+  const response = { language: 'zho', title: '普通话', clear: true }
+  expect(normalizeIQAudioLanguage(response, aac.id)).toEqual({ language: 'tha', lang: '泰语', title: '泰语', clear: true })
+  expect(response).toEqual({ language: 'zho', title: '普通话', clear: true })
+  expect(dolby.lang).toBe('普通话')
+  expect(normalizeIQAudioLanguage(response, '1:2:100')).toBe(response)
+  expect(normalizeIQAudioLanguage({ id: aac.id, language: 'tha', title: '泰語' })).toMatchObject({ language: 'tha', title: '泰語' })
+})
+
 test('IQ overseas is a distinct provider and starts its scoped tunnel',()=>{
   expect(PROVIDER_IDS.includes('iq')).toBe(true)
   expect(PROVIDER_LABELS.iq).toBe('IQ 海外版')

@@ -7,11 +7,19 @@ import Poster from '../components/Poster.vue'
 import Skeleton from '../components/Skeleton.vue'
 import Quality from './Quality.vue'
 import { back, errText, go, gvs, openCard, openQuality, runSearch, store, subscriptionOf, toast } from '../store'
-import type { Card } from '@shared/api'
+import type { Card, HistoryEntry } from '@shared/api'
 import { BADGE_LABEL, badgesFromQualities, badgesFromText, mergeHints, type QualityHint } from '@shared/quality-badges'
-import { episodeStates, stateOf, STATE_LABEL, type EpisodeState } from '@shared/episode-status'
+import { episodeStates, stateOf, STATE_LABEL } from '@shared/episode-status'
 
 const d = computed(() => store.detail)
+const qualityPanel = ref<InstanceType<typeof Quality> | null>(null)
+const downloadDock = ref<HTMLElement | null>(null)
+const qualityLoaded = computed(() => store.qualityInline && !!store.probe && !store.probeError)
+async function downloadSelected() {
+  if (qualityLoaded.value) await qualityPanel.value?.start()
+  else await openQuality()
+}
+
 const collection = computed({ get: () => store.detailCollection, set: value => { store.detailCollection = value } })
 const collections = computed(() => {
   const names = [...new Set((d.value?.episodes ?? []).map(e => e.collection).filter((g): g is string => !!g))]
@@ -48,21 +56,17 @@ const anchor = ref(-1)
 
 /** 每集下载状态（已下载 / 排队 / 下载中…），来自下载任务列表 */
 /** 下载历史（SQLite）：本地文件删掉后也算已下载 */
-const historyLabels = ref<string[]>([])
+const historyEpisodes = ref<HistoryEntry[]>([])
 watch(() => (d.value ? `${d.value.provider}:${d.value.id}` : ''), async (k) => {
-  historyLabels.value = []
+  historyEpisodes.value = []
   if (!k || !d.value) return
   try {
     const rows = await gvs('historyForShow', d.value.provider, d.value.id)
-    if (k === (d.value ? `${d.value.provider}:${d.value.id}` : '')) historyLabels.value = rows.map((r) => r.label)
+    if (k === (d.value ? `${d.value.provider}:${d.value.id}` : '')) historyEpisodes.value = rows
   } catch { /* 历史库不可用时只看任务列表 */ }
 }, { immediate: true })
-const epStates = computed(() => {
-  const m = d.value ? episodeStates(store.jobs, d.value.provider, d.value.id) : new Map<string, EpisodeState>()
-  for (const l of historyLabels.value) if (!m.has(l)) m.set(l, 'done')
-  return m
-})
-const epState = (e: { number: number; season?: number; title: string }) => stateOf(epStates.value, e, isMovie.value)
+const epStates = computed(() => episodeStates(store.jobs, d.value?.provider ?? '', d.value?.id ?? '', historyEpisodes.value))
+const epState = (e: { vid: string; number: number; season?: number; title: string }) => stateOf(epStates.value, e, isMovie.value)
 const doneCount = computed(() => eps.value.filter(e => epState(e) === 'done').length)
 
 /** 长剧先显示前 FOLD 集，其余平滑展开 */
@@ -206,7 +210,8 @@ watch(d, () => {
 
 
 <template>
-  <div class="page detail-page">
+  <div class="detail-layout">
+    <div class="page detail-page">
     <div class="backdrop-clip" aria-hidden="true"><div class="backdrop" :style="{ backgroundImage: backdrop }" /></div>
     <button type="button" class="back back-chip" @click="back(store.search ? 'search' : 'home')"><Icon name="back" :size="16" />返回</button>
 
@@ -272,8 +277,8 @@ watch(d, () => {
           <p v-if="d.desc" class="desc" :class="{ open: descOpen }">{{ d.desc }}</p>
           <button v-if="descLong" type="button" class="linkish more" :aria-expanded="descOpen" @click="descOpen = !descOpen">{{ descOpen ? '收起' : '展开' }}</button>
           <div class="actions">
-            <button type="button" class="btn primary big" :disabled="!store.picked.length || store.probing" @click="openQuality">
-              <Icon name="download" />{{ store.picked.length ? `下载所选 ${store.picked.length} ${collection ? '条' : d.pickNoun}` : `先选${isMovie ? '版本' : '集数'}` }}
+            <button type="button" class="btn primary big" :disabled="!store.picked.length || store.probing || (qualityLoaded && !qualityPanel?.canStart)" @click="downloadSelected">
+              <span v-if="qualityPanel?.starting" class="spin" /><Icon v-else :name="qualityLoaded ? 'download' : 'down'" />{{ store.picked.length ? qualityLoaded ? `下载所选 ${store.picked.length} ${collection ? '条' : d.pickNoun}` : '选画质' : `先选${isMovie ? '版本' : '集数'}` }}
             </button>
             <button v-if="!isMovie && !sub" type="button" class="btn big subscribe" :disabled="subBusy" @click="subscribe"><Icon name="star" :size="16" />订阅追更</button>
             <button v-else-if="sub" type="button" class="btn big outline subscribe" title="打开订阅" @click="store.subFocus = sub.id; go('subscriptions')"><Icon name="check" :size="16" />已订阅 · {{ sub.autoDownload ? '自动下载' : '仅通知' }}</button>
@@ -357,14 +362,20 @@ watch(d, () => {
         </div>
       </section>
       <Transition name="rise">
-        <Quality v-if="store.qualityInline" embedded />
+        <Quality v-if="store.qualityInline" ref="qualityPanel" :footer-target="downloadDock" embedded />
       </Transition>
     </template>
+    </div>
+    <div ref="downloadDock" class="download-dock" />
   </div>
 </template>
 
 <style scoped>
-.detail-page { position: relative; isolation: isolate; }
+/* 下载栏占据独立空间，滚动内容在它上方结束，不会从卡片上浮过。 */
+.detail-layout { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.detail-page { flex: 1; height: auto; min-height: 0; overflow-x: hidden; position: relative; isolation: isolate; }
+.download-dock { flex-shrink: 0; padding: 12px 28px 16px; border-top: 1px solid var(--line); background: var(--paper); }
+.download-dock:empty { display: none; }
 .detail-page > :not(.backdrop-clip) { position: relative; z-index: 1; }
 /* 模糊海报做背景：外层裁切 + contain，避免 filter 图层溢出到整个窗口 */
 .backdrop-clip { position: absolute; inset: -22px -28px auto; height: 500px; z-index: 0; overflow: hidden; contain: paint; pointer-events: none;

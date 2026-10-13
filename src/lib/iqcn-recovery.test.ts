@@ -45,6 +45,25 @@ test('real job flow re-probes before streams and never submits the old episode h
   expect(calls).toEqual(['probe', 'streams'])
 })
 
+test('domestic unknown-range batch requests the current episode video after verifying its source', async () => {
+  const calls: string[] = []
+  const cli = { invoke: async (_p: string, action: string, input: Record<string, unknown>) => {
+    calls.push(`${action}:${input.tvid}`)
+    if (action === 'probe') return { tvid: input.tvid, formats: [{
+      id: `800|100|25|${input.tvid}Video`, codec_code: 1, dynamic_range_code: -1,
+    }] }
+    expect(action).toBe('streams')
+    expect(input).toEqual({ tvid: 'current', bid: '800', br: '100', fr: '25', vid: 'currentVideo', transport: 'local-v1' })
+    // End the fixture at the plan boundary; no media or output files are needed.
+    throw new Error('fixture plan boundary reached')
+  } } as unknown as GwClient
+  const task = { provider: 'iqcn', vid: 'current', quality: '800|100|25|sourceVideo',
+    iqcnQuality: { sourceTvid: 'source', codecCode: 1 } } as DlTask
+  await expect(downloadIQCN(cli, task, 'unused.mkv', 'unused', () => {}))
+    .rejects.toThrow('fixture plan boundary reached')
+  expect(calls).toEqual(['probe:current', 'probe:source', 'streams:current'])
+})
+
 test('restore diagnostics only accept fixed helper messages and never leak material', async () => {
   expect(iqcnRestoreReason('local segment restoration incomplete\n')).toBe('restore_incomplete')
   expect(iqcnRestoreReason('invalid local processing material')).toBe('material_invalid')

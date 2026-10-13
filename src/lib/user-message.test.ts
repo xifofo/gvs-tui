@@ -2,6 +2,30 @@ import { expect, test } from 'bun:test'
 import { userMessage, userFacing } from './user-message'
 import { errorCatalog } from './user-message-catalog'
 import { IQAudioValidationError } from './iq-mux'
+import { IQAudioTransferError } from './iq-transfer'
+
+test('native downloader crashes have a local component explanation in restored jobs too', () => {
+  const raw = 'N_m3u8DL-RE 下载失败 (SIGABRT): Fatal error. System.AccessViolationException private-secret'
+  const message = userMessage(new Error(raw))
+  expect(message).toContain('本机下载组件异常退出')
+  expect(message).toContain('更新客户端')
+  expect(message).not.toMatch(/SIGABRT|AccessViolation|private|联系客服/)
+  expect(userMessage(raw)).toBe(message)
+  expect(userMessage(message)).toBe(message)
+  expect(userMessage('N_m3u8DL-RE 下载失败 (1): ordinary failure')).not.toBe(message)
+})
+
+test('IQ exhausted audio retries explain what can be resumed without exposing the network error',()=>{
+  const error=new IQAudioTransferError(2,5,new Error('net::ERR_CONNECTION_CLOSED https://private.invalid?token=PRIVATE'))
+  const message=userMessage(error)
+  expect(message).toContain('音轨分段下载失败')
+  expect(message).toContain('视频和音轨分段会保留')
+  expect(message).not.toMatch(/PRIVATE|token|https|CONNECTION/)
+  expect(userMessage(error.message)).toBe(message)
+  expect(userMessage(message)).toBe(message)
+  expect(error.message).toContain('第 3/5 段')
+  expect(error.cause).toBeInstanceOf(Error)
+})
 
 test('IQ audio validation has an actionable display message while retaining diagnostic details',()=>{
   const error=new IQAudioValidationError('ffmpeg: Invalid data /private/path token=PRIVATE')

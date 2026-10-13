@@ -10,6 +10,11 @@ export function fetchMediaProbe(url: string, init: RequestInit): Promise<Respons
   return fetch(url, init)
 }
 
+/** Binary parts need a streaming response rather than a bounded manifest read. */
+export function fetchMediaSegment(url: string, init: RequestInit): Promise<Response> {
+  return fetch(url, init)
+}
+
 const PROXY_KEYS: Record<string, true> = {
   http_proxy: true,
   https_proxy: true,

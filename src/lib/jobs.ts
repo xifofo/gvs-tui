@@ -348,12 +348,12 @@ export async function runTask(
       if (t.tmdbId && (t.provider === 'youku' || t.provider === 'tencent')) {
         emit('元数据', 0, '读取 TMDB 制作地区与原始语言')
         audioLanguageFallback = await prepareAudioLanguage(cfg, t, signal)
-        log(`audio language fallback=${audioLanguageFallback || 'none'} tmdb=${t.tmdbId} countries=${t.tmdbMetadata?.countries.join(',') || 'unknown'}`)
+        log(`audio/video language fallback=${audioLanguageFallback || 'none'} tmdb=${t.tmdbId} countries=${t.tmdbMetadata?.countries.join(',') || 'unknown'}`)
       }
     } catch (e) {
       signal?.throwIfAborted()
       // Metadata failure must not fail a paid download or guess its language.
-      log(`TMDB 音轨语言查询失败，保留原标签：${e instanceof Error ? e.message : '查询失败'}`)
+      log(`TMDB 音视频语言查询失败，保留原标签：${e instanceof Error ? e.message : '查询失败'}`)
     }
     const n = jobNaming(t, cfg)
     dir = t.provider === 'douyin' ? cfg.outDir : folder(n, cfg.outDir)

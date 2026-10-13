@@ -208,6 +208,8 @@ export type JobView = {
   groupId: string
   groupTitle: string
   provider: Provider
+  /** 平台视频 ID：下载状态匹配用；旧任务从持久化的 task.vid 补回。 */
+  vid?: string
   poster: string
   label: string
   quality: string

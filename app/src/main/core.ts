@@ -1587,7 +1587,8 @@ export class Core {
   }
 
   jobList(): JobView[] {
-    return [...this.jobs.values()].map((r) => ({ ...r.view }))
+    // 旧 jobs.json 已保存 task.vid；直接补到 IPC 视图，不改写历史任务文件。
+    return [...this.jobs.values()].map((r) => ({ ...r.view, vid: r.task.vid }))
   }
 
   /** 排队中的任务没有进程，直接挂起；在跑的让 hub 停进程（保留已下载的分片）。 */

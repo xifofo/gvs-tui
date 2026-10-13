@@ -7,7 +7,10 @@ import type { DlTask } from './jobs.ts'
 const format = (vid: string, range = 1, codec = 1, br = 300, fr = 25) => ({
   id: `800|${br}|${fr}|${vid}`, bid: 800, br, fr, codec_code: codec, dynamic_range_code: range,
 })
-function fixture(catalogs: Record<string, ReturnType<typeof format>[]>) {
+type CatalogFormat = Omit<ReturnType<typeof format>, 'codec_code' | 'dynamic_range_code'> & {
+  codec_code?: number; dynamic_range_code?: number
+}
+function fixture(catalogs: Record<string, CatalogFormat[]>) {
   const calls: string[] = []
   const cli = { invoke: async (provider: string, action: string, input: Record<string, unknown>) => {
     expect([provider, action]).toEqual(['iqcn', 'probe'])
@@ -24,6 +27,8 @@ test('domestic selectors persist codec, explicit SDR zero and probe origin witho
   expect(iqcnRendition({ codec_code: '', dynamic_range_code: null }, 'source'))
     .toEqual({ sourceTvid: 'source', codecCode: undefined, dynamicRangeCode: undefined })
   expect(iqcnRendition({ codec_code: false, dynamic_range_code: false }, 'source').dynamicRangeCode).toBeUndefined()
+  for (const range of [-1, '-1', '', ' ', undefined])
+    expect(iqcnRendition({ codec_code: 1, dynamic_range_code: range }, 'source').dynamicRangeCode).toBeUndefined()
 })
 
 test('each episode matches its own DV rendition rather than the copied VID or same-tier HDR10', async () => {
@@ -66,15 +71,72 @@ test('legacy source hints ignore incomplete records and do not replace persisted
   expect(valid.iqcnQuality).toEqual({ sourceTvid: 'ep2', codecCode: 1, dynamicRangeCode: 1 })
 })
 
-test('unverified legacy origins and incomplete variant data fail before requesting streams', async () => {
+test('unverified legacy origins and an unknown source range cannot imply a known target range', async () => {
   const { cli } = fixture({ wrong: [format('wrongDV')], ep3: [format('ep3DV')] })
   await expect(resolveIQCNSelection(cli, { vid: 'ep3', quality: format('ep2DV').id })).rejects.toThrow('重新选择画质')
   await expect(resolveIQCNSelection(cli, { vid: 'ep3', quality: format('ep2DV').id,
     iqcnQuality: { sourceTvid: 'wrong' } })).rejects.toThrow('无法确认原始视频版本')
   const missing = { ...format('ep2DV'), dynamic_range_code: undefined }
-  const incomplete = fixture({ ep2: [missing as unknown as ReturnType<typeof format>], ep3: [format('ep3DV')] })
+  const incomplete = fixture({ ep2: [missing], ep3: [format('ep3DV')] })
   await expect(resolveIQCNSelection(incomplete.cli, { vid: 'ep3', quality: missing.id,
     iqcnQuality: { sourceTvid: 'ep2' } })).rejects.toThrow('缺少编码或动态范围依据')
+})
+
+test('catalogs with unknown range rebind only a unique matching tier and codec in both episodes', async () => {
+  for (const range of [-1, undefined]) {
+    const original = { ...format('sourceVideo', -1, 1, 100), dynamic_range_code: range }
+    const current = { ...original, id: original.id.replace('sourceVideo', 'currentVideo') }
+    const otherCodec = { ...current, id: current.id.replace('currentVideo', 'currentAVC'), codec_code: 2 }
+    const { cli, calls } = fixture({ source: [original], current: [current, otherCodec] })
+    const task = JSON.parse(JSON.stringify({ vid: 'current', quality: original.id,
+      iqcnQuality: iqcnRendition(original, 'source') }))
+    expect(await resolveIQCNSelection(cli, task)).toEqual({ bid: '800', br: '100', fr: '25', vid: 'currentVideo' })
+    expect(calls).toEqual(['current', 'source'])
+    expect(task.iqcnQuality).toEqual({ sourceTvid: 'source', codecCode: 1 })
+  }
+})
+
+test('unknown-range legacy batches retain a verified source when retrying another episode', async () => {
+  const original = format('sourceVideo', -1, 1, 100)
+  const tasks = ['source', 'current'].map(vid => ({ provider: 'iqcn', series: '节目', vid, quality: original.id }) as DlTask)
+  restoreIQCNSourceHints(tasks)
+  const restored = JSON.parse(JSON.stringify(tasks[1]!)) as DlTask
+  const { cli } = fixture({ source: [original], current: [format('currentVideo', -1, 1, 100)] })
+  expect((await resolveIQCNSelection(cli, restored)).vid).toBe('currentVideo')
+})
+
+test('unknown range still rejects ambiguous source or target versions', async () => {
+  const original = format('sourceVideo', -1), current = format('currentVideo', -1)
+  const task = { vid: 'current', quality: original.id, iqcnQuality: { sourceTvid: 'source', codecCode: 1 } }
+  for (const source of [[original, format('sourceOther', -1)], [original, format('sourceHDR', 2)]]) {
+    await expect(resolveIQCNSelection(fixture({ source, current: [current] }).cli, task))
+      .rejects.toThrow('原始集有多个同档视频版本')
+  }
+  for (const formats of [[current, format('currentOther', -1)], [current, format('currentHDR', 2)]]) {
+    await expect(resolveIQCNSelection(fixture({ source: [original], current: formats }).cli, task))
+      .rejects.toThrow('多个相同规格')
+  }
+  // Repeated catalog rows for the same unknown-range video are unambiguous.
+  expect((await resolveIQCNSelection(fixture({ source: [original, original], current: [current, current] }).cli, task)).vid)
+    .toBe('currentVideo')
+})
+
+test('unknown-range compatibility never relaxes codec, bitrate, frame rate or known range constraints', async () => {
+  const original = format('sourceVideo', -1)
+  const task = { vid: 'current', quality: original.id, iqcnQuality: { sourceTvid: 'source', codecCode: 1 } }
+  for (const current of [format('avc', -1, 2), format('low', -1, 1, 100), format('fps', -1, 1, 300, 60)])
+    await expect(resolveIQCNSelection(fixture({ source: [original], current: [current] }).cli, task))
+      .rejects.toThrow('缺少所选')
+  for (const range of [0, 1, 2])
+    await expect(resolveIQCNSelection(fixture({ source: [original], current: [format('known', range)] }).cli, task))
+      .rejects.toThrow('缺少编码或动态范围依据')
+  await expect(resolveIQCNSelection(fixture({ current: [format('unknown', -1)] }).cli,
+    { ...task, iqcnQuality: { sourceTvid: 'source', codecCode: 1, dynamicRangeCode: 1 } }))
+    .rejects.toThrow('缺少所选')
+  const noCodec = { ...original, codec_code: undefined }
+  await expect(resolveIQCNSelection(fixture({ source: [noCodec], current: [format('unknown', -1)] }).cli,
+    { ...task, iqcnQuality: { sourceTvid: 'source' } }))
+    .rejects.toThrow('缺少编码或动态范围依据')
 })
 
 test('missing or ambiguous per-episode versions stop rather than switch codec/range/bitrate/fps', async () => {

@@ -60,6 +60,7 @@ test('catalog adjustment leaves playback, login, other providers and signed requ
     ['https://pcw-api.iq.com/api/search2?modeCode=ntw', {}],
     [search, { method: 'POST', body: 'PRIVATE_BODY' }],
     [search + '&vf=PRIVATE_SIGN', {}],
+    [search + '&authKey=PRIVATE_AUTH', {}],
     ['https://pcw-api.iq.com.example.test/api/search2?modeCode=intl', {}],
     ['https://pcw-api.iq.com/api/v2/episodeListSource/not-a-number?modeCode=intl', {}],
     ['https://intl-passport.iqiyi.com/login?modeCode=intl', {}],
@@ -96,9 +97,10 @@ test('desktop route forwards the corrected catalog with the original request hea
   })
   const fetcher = await route(new URL(search))
   await fetcher!(search, { headers: { cookie: 'PRIVATE_COOKIE' }, redirect: 'manual' })
-  expect(requests).toHaveLength(2)
+  expect(requests).toHaveLength(3)
   expect(new URL(requests[1]!.url).searchParams.get('modeCode')).toBe('ntw')
   expect(new Headers(requests[1]!.init.headers).get('cookie')).toBe('PRIVATE_COOKIE')
   expect(requests[1]!.init.redirect).toBe('manual')
   expect(requests[1]!.proxy).toBe('http://127.0.0.1:7897')
+  expect(new URL(requests[2]!.url).searchParams.get('modeCode')).toBe('intl')
 })

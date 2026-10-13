@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { AudioView, EnqueueRequest, NamingPreview, TmdbHit, TmdbSeason } from '@shared/api'
 import { supportsTmdb } from '@shared/api'
 import { resolveDefaultAudioId } from '@shared/audio-selection'
@@ -12,10 +12,17 @@ import IQCNAudioPicker from '../components/IQCNAudioPicker.vue'
 import { preferredQualityIndex } from '@shared/ui-prefs'
 import { accountsOf, back, errText, go, gvs, human, openQuality, openSettings, prefs, store, subscriptionOf, toast } from '../store'
 import AccountPicker from '../components/AccountPicker.vue'
+import { reducedMotion } from '../motion'
 
 defineOptions({ name: 'QualityView' })
 /** embedded：嵌在剧集页里（不显示返回与标题，默认收起手动选择） */
-const props = defineProps<{ embedded?: boolean }>()
+const props = defineProps<{ embedded?: boolean; footerTarget?: HTMLElement | null }>()
+const panel = ref<HTMLElement | null>(null)
+function revealPanel() {
+  if (props.embedded) panel.value?.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'instant' : 'smooth' })
+}
+onMounted(revealPanel)
+watch(() => store.probing, revealPanel, { flush: 'post' })
 /** 嵌入模式下是否展开「手动选择画质/音轨」 */
 const manual = ref(!props.embedded)
 
@@ -268,10 +275,11 @@ const totalSize = computed(() => (quality.value?.size ?? 0) * store.probeEpisode
 const hasDts = computed(() => audios.value.some((a) => audioIds.value.includes(a.id) && /dts/i.test(a.codec + a.label + a.id)))
 const count = computed(() => store.probeEpisodes.length)
 const noun = computed(() => isMovie.value ? '个版本' : '集')
+const canStart = computed(() => !starting.value && !store.probing && !store.probeError && !!request.value?.episodes.length && !!quality.value && !tmdbLoading.value)
 
 async function start() {
   const r = request.value
-  if (starting.value || !r || !quality.value || tmdbLoading.value) return
+  if (!canStart.value || !r) return
   starting.value = true
   try {
     const n = await gvs('enqueue', r)
@@ -283,6 +291,8 @@ async function start() {
     starting.value = false
   }
 }
+
+defineExpose({ start, canStart, starting })
 
 const spec = (q: { width: number; height: number; size: number; fps: number }) =>
   [q.width && q.height ? `${q.width}×${q.height}` : '', q.fps ? `${q.fps}帧` : '', q.size ? `${isMovie.value ? '' : '每集'}约 ${human(q.size)}` : '']
@@ -358,7 +368,7 @@ async function applyRule() {
 
 
 <template>
-  <div class="page qpage" :class="{ 'quality-page': !embedded && (store.probing || (probe && !store.probeError)), embedded }">
+  <div ref="panel" class="page qpage" :class="{ 'quality-page': !embedded && (store.probing || (probe && !store.probeError)), embedded }">
     <button v-if="!embedded" type="button" class="back" @click="back('detail')"><Icon name="back" :size="16" />{{ d?.title ?? '返回' }}</button>
     <div class="h1-row">
       <h1 v-if="!embedded" class="h1">选择画质</h1>
@@ -442,7 +452,7 @@ async function applyRule() {
                     <span v-if="vHdr(q)" class="hdr" :class="{ dv: vHdr(q) === '杜比视界' }">{{ vHdr(q) }}</span>
                     <span class="radio"><span v-if="q.index === qIndex" /></span>
                   </span>
-                  <span class="on-t">{{ qname(q) }}</span>
+                  <span class="on-t" :title="qname(q)">{{ qname(q) }}</span>
                   <span v-if="miguApp" class="vspec">
                     <span class="mono" title="视频编码">{{ CODEC_NAME[q.codec.toLowerCase()] || q.codec || '未知' }}</span>
                     <span class="mono" title="分辨率">{{ q.width && q.height ? `${q.width}×${q.height}` : '未知' }}</span>
@@ -583,16 +593,18 @@ async function applyRule() {
         </aside>
       </div>
 
-      <div class="actionbar">
-        <div class="selection-summary">
-          <strong>{{ quality ? qname(quality) : '请选择画质' }}</strong>
-          <span class="muted small">{{ audioSummary || embeddedNote || '随视频音轨' }} · {{ count }} {{ noun }} · 整批沿用当前选择</span>
+      <Teleport :to="footerTarget || 'body'" :disabled="!footerTarget">
+        <div class="actionbar" :class="{ docked: footerTarget }">
+          <div class="selection-summary">
+            <strong>{{ quality ? qname(quality) : '请选择画质' }}</strong>
+            <span class="muted small">{{ audioSummary || embeddedNote || '随视频音轨' }} · {{ count }} {{ noun }} · 整批沿用当前选择</span>
+          </div>
+          <div v-if="totalSize" class="sum"><span class="dim">预计占用</span><span class="mono">约 {{ human(totalSize) }}</span></div>
+          <button type="button" class="btn primary big" :disabled="!canStart" @click="start">
+            <span v-if="starting" class="spin" /><Icon v-else name="download" />开始下载 {{ count }} {{ noun }}
+          </button>
         </div>
-        <div v-if="totalSize" class="sum"><span class="dim">预计占用</span><span class="mono">约 {{ human(totalSize) }}</span></div>
-        <button type="button" class="btn primary big" :disabled="starting || !quality || tmdbLoading" @click="start">
-          <span v-if="starting" class="spin" /><Icon v-else name="download" />开始下载 {{ count }} {{ noun }}
-        </button>
-      </div>
+      </Teleport>
     </template>
   </div>
 </template>
@@ -600,7 +612,7 @@ async function applyRule() {
 <style scoped>
 .qpage { position: relative; }
 .quality-page { overflow: visible; }
-.page.embedded { height: auto; padding: 20px 22px 0; border: 1px solid var(--line); border-radius: var(--ui-radius-lg, 16px); background: var(--card); }
+.page.embedded { height: auto; flex-shrink: 0; overflow: visible; scroll-margin-top: 16px; padding: 20px 22px; border: 1px solid var(--line); border-radius: var(--ui-radius-lg, 16px); background: var(--card); }
 .page.embedded .h1-row { gap: 12px; }
 .h2s { font-size: 18px; font-weight: 900; }
 .back { margin-bottom: -8px; }
@@ -644,14 +656,14 @@ async function applyRule() {
 .vcard.sk { cursor: default; }
 .vtop { display: flex; align-items: center; gap: 8px; }
 .idx { font-size: 12px; font-weight: 700; }
-.res { font-family: var(--font-display); font-size: 24px; font-weight: 900; letter-spacing: -.5px; line-height: 1; }
+.res { font-family: var(--font-display); font-size: 18px; font-weight: 800; letter-spacing: -.2px; line-height: 1.2; }
 .vcard.on .res { color: var(--orange-text); }
 .hdr { height: 20px; padding: 0 7px; border-radius: 6px; font-size: 11px; font-weight: 850; display: inline-flex; align-items: center; color: var(--orange-text); border: 1px solid color-mix(in srgb, var(--orange) 40%, var(--line)); }
 .hdr.dv { color: #fff; border: 0; background: linear-gradient(135deg, #7c3aed, #a78bfa); }
 .radio { margin-left: auto; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .vcard.on .radio { border-color: var(--orange); }
 .radio span { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); }
-.on-t { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.on-t { font-size: 13.5px; font-weight: 700; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 .vspec, .aspec { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
 .vspec > span, .aspec > span { padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .vfoot { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
@@ -698,13 +710,14 @@ async function applyRule() {
 .dir { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
 .dir:hover { color: var(--orange-text); }
 .tmp { color: var(--ink-3); font-size: 12px; }
-/* 底部常驻操作条：跟随页面滚动吸底 */
+/* 详情页使用独立底栏；独立画质页沿用吸底操作条。 */
 .actionbar {
-  position: sticky; bottom: -32px; z-index: 5; margin: 18px -22px 0; padding: 14px 22px 18px; display: flex; align-items: center; gap: 18px;
+  position: sticky; bottom: 0; z-index: 5; margin: 18px -22px 0; padding: 14px 22px 18px; display: flex; align-items: center; gap: 18px;
   background: color-mix(in srgb, var(--card) 90%, transparent); backdrop-filter: blur(14px); border-top: 1px solid var(--line);
   border-radius: 0 0 var(--ui-radius-lg, 16px) var(--ui-radius-lg, 16px);
 }
 .page:not(.embedded) .actionbar { margin: 18px 0 0; border: 1px solid var(--line); border-radius: var(--ui-radius-lg, 16px); bottom: 0; box-shadow: var(--ui-shadow-surface); }
+.actionbar.docked { position: static; margin: 0; padding: 12px 20px; background: var(--card); backdrop-filter: none; border: 1px solid var(--line); border-radius: var(--ui-radius-lg, 16px); }
 .selection-summary { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .selection-summary strong { font-size: 15px; font-weight: 850; }
 .selection-summary .small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
