@@ -6,7 +6,7 @@ import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
 import Skeleton from '../components/Skeleton.vue'
 import Quality from './Quality.vue'
-import { back, errText, go, gvs, openCard, openQuality, store, subscriptionOf, toast } from '../store'
+import { back, errText, go, gvs, openCard, openQuality, runSearch, store, subscriptionOf, toast } from '../store'
 import type { Card } from '@shared/api'
 import { BADGE_LABEL, badgesFromQualities, badgesFromText, mergeHints, type QualityHint } from '@shared/quality-badges'
 import { episodeStates, stateOf, STATE_LABEL, type EpisodeState } from '@shared/episode-status'
@@ -194,7 +194,7 @@ watch(d, () => {
 <template>
   <div class="page detail-page">
     <div class="backdrop-clip" aria-hidden="true"><div class="backdrop" :style="{ backgroundImage: backdrop }" /></div>
-    <button type="button" class="back" @click="back(store.search ? 'search' : 'home')"><Icon name="back" :size="16" />返回</button>
+    <button type="button" class="back back-chip" @click="back(store.search ? 'search' : 'home')"><Icon name="back" :size="16" />返回</button>
 
     <template v-if="store.detailLoading">
       <div class="hero">
@@ -221,7 +221,16 @@ watch(d, () => {
         </div>
       </section>
     </template>
-    <div v-else-if="store.detailError" class="error-box">{{ store.detailError }}</div>
+    <div v-else-if="store.detailError" class="error-box derr" role="alert">
+      <span>{{ store.detailCard ? `${cardSourceName(store.detailCard)}：` : '' }}{{ store.detailError }}</span>
+      <span class="derr-a">
+        <button v-if="store.detailCard" type="button" class="btn sm" @click="openCard(store.detailCard, store.detailAlternates)"><Icon name="retry" :size="14" />重试</button>
+        <button v-for="a in store.detailAlternates" :key="a.provider + a.id" type="button" class="btn sm" @click="openCard(a, [store.detailCard!, ...store.detailAlternates.filter((x) => x !== a)].filter(Boolean))">
+          <PlatformLogo :provider="a.provider" :size="14" />改用{{ cardSourceName(a) }}
+        </button>
+        <button v-if="store.detailCard?.title" type="button" class="btn sm" @click="runSearch(store.detailCard.title)"><Icon name="search" :size="14" />在各平台搜索</button>
+      </span>
+    </div>
     <template v-else-if="d">
       <div class="hero">
         <div class="wrap"><Poster class="poster hero-target" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" /></div>
@@ -349,7 +358,12 @@ watch(d, () => {
 .backdrop { position: absolute; inset: -60px; background-size: cover; background-position: center 30%; filter: blur(42px) saturate(1.3); opacity: var(--detail-backdrop-opacity, .5); }
 /* 注意：scoped 里写 :global(html.light) .x 会编译成 html.light{…}，只能用变量 */
 :global(html.light) { --detail-backdrop-opacity: .32; }
-.back { margin-bottom: -8px; align-self: flex-start; background: color-mix(in srgb, var(--card) 70%, transparent); backdrop-filter: blur(8px); }
+.back-chip { margin-bottom: -8px; height: 30px; padding: 0 12px 0 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink); background: color-mix(in srgb, var(--card) 72%, transparent); backdrop-filter: blur(8px); transition: border-color var(--ui-duration-fast, .12s), color var(--ui-duration-fast, .12s); }
+.back-chip:hover { border-color: var(--orange); color: var(--orange-text); }
+.back-chip:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.derr { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.derr > span:first-child { flex: 1; min-width: 220px; }
+.derr-a { display: flex; gap: 8px; flex-wrap: wrap; }
 .hero { display: flex; gap: 32px; position: relative; padding: 8px 0 4px; }
 .wrap { flex-shrink: 0; }
 .poster { width: 190px; height: 270px; border-radius: var(--ui-radius-lg, 16px); box-shadow: 0 24px 48px -18px rgb(0 0 0 / 60%), 0 0 0 1px rgb(255 255 255 / 6%); }

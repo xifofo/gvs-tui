@@ -19,7 +19,7 @@ onMounted(() => void nextTick(() => input.value?.focus()))
 
 const NAV: Array<[View, string, string]> = [
   ['home', '首页', 'home'], ['downloads', '打开下载', 'download'], ['calendar', '追剧日历', 'calendar'],
-  ['subscriptions', '订阅', 'star'], ['accounts', '账号', 'user'], ['settings', '设置', 'gear'], ['discover', '按平台浏览', 'compass'],
+  ['subscriptions', '订阅', 'star'], ['accounts', '账号', 'user'], ['settings', '设置', 'gear'], ['discover', '发现 · 榜单', 'compass'],
 ]
 
 const items = computed<Item[]>(() => {

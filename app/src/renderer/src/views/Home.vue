@@ -65,7 +65,7 @@ function openSub(provider: string, id: string) {
         </form>
         <div class="tips">
           <button type="button" class="card tip" @click="store.paletteOpen = true"><Icon name="link" :size="20" /><b>粘贴链接直接下载</b><span class="muted">支持各平台播放页链接</span></button>
-          <button type="button" class="card tip" @click="go('discover')"><Icon name="compass" :size="20" /><b>按平台浏览</b><span class="muted">看看各平台正在热播什么</span></button>
+          <button type="button" class="card tip" @click="go('discover')"><Icon name="compass" :size="20" /><b>发现 · 榜单</b><span class="muted">各平台热播、排行榜与片库</span></button>
           <button type="button" class="card tip" @click="go('accounts')"><Icon name="user" :size="20" /><b>{{ attention.length ? `${attention.length} 个平台需要登录` : '管理平台账号' }}</b><span class="muted">登录后可下载会员画质</span></button>
         </div>
       </div>
@@ -75,7 +75,7 @@ function openSub(provider: string, id: string) {
       <div class="h1-row">
         <h1 class="h1">{{ hello }}</h1>
         <span class="muted">{{ jobs.filter((j) => j.state === 'running').length }} 个下载进行中 · 今天完成 {{ doneToday }} 个</span>
-        <button type="button" class="btn sm browse" @click="go('discover')"><Icon name="compass" :size="15" />按平台浏览</button>
+        <button type="button" class="btn sm browse" @click="go('discover')"><Icon name="compass" :size="15" />发现 · 榜单</button>
       </div>
 
       <section v-if="hero" class="hero card" data-card>

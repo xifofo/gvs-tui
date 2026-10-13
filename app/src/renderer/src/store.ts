@@ -178,14 +178,14 @@ export function shownProviders(): Provider[] {
   return visibleProviders(store.state?.providers ?? [], prefs())
 }
 
-/** 侧栏高亮：详情/画质页归到进来的那一栏；发现页归在首页下 */
+/** 侧栏高亮：详情/画质页归到进来的那一栏 */
 export function section(): View {
-  if (store.view === 'discover') return 'home'
   if (store.view !== 'detail' && store.view !== 'quality') return store.view
   for (let i = store.history.length - 1; i >= 0; i--) {
     const v = store.history[i]
     if (v === 'search') return 'search'
-    if (v === 'discover' || v === 'home') return 'home'
+    if (v === 'discover') return 'discover'
+    if (v === 'home') return 'home'
   }
   return 'search'
 }
