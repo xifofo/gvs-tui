@@ -16,7 +16,7 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  icon: build/icon.png
+  icon: build/icon.ico
   # Windows 包自带媒体工具（与 TUI 仓库 bin/ 同一套）
   extraResources:
     - from: ../bin

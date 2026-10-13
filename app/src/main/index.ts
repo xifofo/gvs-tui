@@ -1,7 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, Tray } from 'electron'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import trayIconPath from '../../build/icon.png?asset'
+import appIconPng from '../../build/icon.png?asset'
+import appIconIco from '../../build/icon.ico?asset'
+import trayPng16 from '../../build/tray-16.png?asset'
+import trayPng32 from '../../build/tray-32.png?asset'
+import { trayKey, trayModel } from './tray-model'
 import { SubscriptionManager } from './subscriptions'
 import { fetchCalendar } from './calendar-source'
 import { AccountStore } from './account-store'
@@ -130,7 +134,7 @@ const subs = new SubscriptionManager({
 
 function notify(title: string, body: string, sub?: Subscription): void {
   if (!Notification.isSupported()) return
-  const n = new Notification({ title, body, silent: false, icon: trayIconPath })
+  const n = new Notification({ title, body, silent: false, icon: appIconPng })
   n.on('click', () => {
     showMainWindow()
     send('gvs:navigate', { view: 'subscriptions', subId: sub?.id })
@@ -139,30 +143,43 @@ function notify(title: string, body: string, sub?: Subscription): void {
 }
 
 // ---------------------------------------------------------------- 托盘
+// 模块级引用：托盘对象和当前菜单都不能被 GC
 let tray: Tray | null = null
+let trayMenu: Menu | null = null
+let trayMenuKey = ''
 function refreshTray(): void {
   if (!tray) return
-  const paused = subs.isPaused()
-  const v = subs.view()
-  const fresh = v.subs.reduce((n, s) => n + s.newCount, 0)
-  tray.setToolTip(`GVS · ${v.subs.length} 个订阅${fresh ? ` · ${fresh} 集新更新` : ''}${paused ? ' · 已暂停检查' : ''}`)
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: '打开 GVS', click: showMainWindow },
-      { label: '订阅', click: () => { showMainWindow(); send('gvs:navigate', { view: 'subscriptions' }) } },
-      { type: 'separator' },
-      { label: paused ? '恢复订阅检查' : '暂停订阅检查', click: () => subs.setPaused(!paused) },
-      { label: v.running ? '正在检查…' : '立即检查全部订阅', enabled: !v.running, click: () => void subs.checkNow() },
-      { type: 'separator' },
-      { label: '退出 GVS', click: () => app.quit() },
-    ]),
-  )
+  const m = trayModel(subs.isPaused(), subs.view())
+  tray.setToolTip(m.tooltip)
+  const key = trayKey(m)
+  if (key === trayMenuKey && trayMenu) return
+  trayMenuKey = key
+  const act: Record<string, () => void> = {
+    open: showMainWindow,
+    subs: () => { showMainWindow(); send('gvs:navigate', { view: 'subscriptions' }) },
+    pause: () => subs.setPaused(!subs.isPaused()),
+    check: () => void subs.checkNow(),
+    quit: () => app.quit(),
+  }
+  trayMenu = Menu.buildFromTemplate(m.items.map((i) => (i.id === 'sep' ? { type: 'separator' as const } : { label: i.label, enabled: i.enabled, click: () => act[i.id]?.() })))
+  // Windows：不用 setContextMenu（菜单开着时被替换会吞掉点击），右键时手动弹出当前菜单
+  if (process.platform !== 'win32') tray.setContextMenu(trayMenu)
+}
+function trayImage(): Electron.NativeImage {
+  if (process.platform === 'win32') {
+    const ico = nativeImage.createFromPath(appIconIco)
+    if (!ico.isEmpty()) return ico
+  }
+  const img = nativeImage.createEmpty()
+  img.addRepresentation({ scaleFactor: 1, buffer: nativeImage.createFromPath(trayPng16).toPNG() })
+  img.addRepresentation({ scaleFactor: 2, buffer: nativeImage.createFromPath(trayPng32).toPNG() })
+  return img
 }
 function createTray(): void {
-  const img = nativeImage.createFromPath(trayIconPath).resize({ width: 16, height: 16 })
-  tray = new Tray(img)
+  tray = new Tray(trayImage())
   tray.on('click', showMainWindow)
   tray.on('double-click', showMainWindow)
+  tray.on('right-click', () => { refreshTray(); if (trayMenu) tray?.popUpContextMenu(trayMenu) })
   refreshTray()
 }
 
@@ -269,6 +286,7 @@ function createWindow(): void {
     minHeight: 700,
     show: false,
     title: 'GVS',
+    icon: process.platform === 'win32' ? appIconIco : appIconPng,
     backgroundColor: '#f4f2ec',
     autoHideMenuBar: true,
     webPreferences: {

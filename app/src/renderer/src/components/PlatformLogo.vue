@@ -1,33 +1,35 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { PLATFORM_ICONS } from '../assets/platforms/platform-icons'
 import youku from '../assets/platforms/youku.svg'
 import tencent from '../assets/platforms/tencent.svg'
-import hongguo from '../assets/platforms/hongguo.svg'
 import douyin from '../assets/platforms/douyin.svg'
 import iq from '../assets/platforms/iq.svg'
 import mewatch from '../assets/platforms/mewatch.png'
 import hamivideo from '../assets/platforms/hamivideo.png'
 
-withDefaults(defineProps<{ provider: string; size?: number }>(), { size: 18 })
-const LOGOS: Record<string, string> = { youku, tencent, hongguo, douyin, iq, iqcn: iq, mewatch, hamivideo }
+const props = withDefaults(defineProps<{ provider: string; size?: number }>(), { size: 18 })
+/** 官方素材只取轮廓（CSS 蒙版），统一染成白色 */
+const MASKS: Record<string, string> = { youku, tencent, douyin, iq, mewatch, hamivideo }
+const icon = computed(() => PLATFORM_ICONS[props.provider])
+const fallbackText = computed(() => (props.provider.slice(0, 1) || '?').toUpperCase())
+const text = computed(() => (icon.value?.glyph.kind === 'text' ? icon.value.glyph.text : fallbackText.value))
+const fontSize = computed(() => Math.max(7, Math.round(props.size * (text.value.length >= 4 ? 0.3 : text.value.length === 3 ? 0.36 : text.value.length === 2 ? 0.42 : 0.58))))
+const tile = computed(() => ({ width: props.size + 'px', height: props.size + 'px', background: icon.value?.color ?? '#5b5b66', borderRadius: Math.max(3, Math.round(props.size * 0.24)) + 'px' }))
+const maskUrl = computed(() => (icon.value?.glyph.kind === 'mask' && MASKS[icon.value.glyph.asset] ? `url("${MASKS[icon.value.glyph.asset]}")` : ''))
 </script>
 
 <template>
-  <img
-    v-if="LOGOS[provider]"
-    :src="LOGOS[provider]"
-    alt=""
-    :width="size"
-    :height="size"
-    class="plogo"
-    :style="{ width: size + 'px', height: size + 'px' }"
-  />
-  <!-- 黄果没有官方图标，用字标 -->
-  <span v-else class="plogo text" :class="{ bili:provider === 'bilibili', mango:provider === 'mgtv' }" aria-hidden="true" :style="{ width: size + 'px', height: size + 'px', fontSize: Math.round(size * 0.6) + 'px' }">{{ provider === 'huangguo' ? '黄' : provider === 'mgtv' ? '芒' : provider === 'bilibili' ? '哔' : provider.slice(0,1) }}</span>
+  <span class="plogo" :style="tile" :title="icon?.name" :data-provider="provider" aria-hidden="true">
+    <svg v-if="icon?.glyph.kind === 'path'" class="g" viewBox="0 0 24 24" fill="#fff"><path :d="icon.glyph.d" /></svg>
+    <span v-else-if="maskUrl" class="g m" :style="{ maskImage: maskUrl, WebkitMaskImage: maskUrl }" />
+    <span v-else class="t" :style="{ fontSize: fontSize + 'px' }">{{ text }}</span>
+  </span>
 </template>
 
 <style scoped>
-.plogo { border-radius: 4px; flex-shrink: 0; display: block; object-fit: contain; }
-.plogo.text { background: #f2b705; color: var(--on-orange); font-weight: 900; display: flex; align-items: center; justify-content: center; }
-.plogo.bili { background:#f4b4c8; }
-.plogo.mango { background:#f2b576; }
+.plogo { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 14%); vertical-align: middle; }
+.g { width: 64%; height: 64%; display: block; }
+.m { background: #fff; mask-size: contain; mask-repeat: no-repeat; mask-position: center; -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; width: 74%; height: 74%; }
+.t { color: #fff; font-weight: 900; line-height: 1; letter-spacing: -0.02em; white-space: nowrap; font-family: var(--font-display, inherit); }
 </style>
