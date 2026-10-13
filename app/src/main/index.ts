@@ -8,7 +8,10 @@ import trayPng32 from '../../build/tray-32.png?asset'
 import { trayKey, trayModel } from './tray-model'
 
 // 与 electron-builder.yml 的 appId 保持一致：Windows 按它分组任务栏按钮、找快捷方式图标
-const APP_ID = 'shop.videohack.gvs'
+const PACKAGED_APP_ID = 'shop.videohack.gvs'
+// dev/preview 用独立 AUMID：开始菜单里任何带 shop.videohack.gvs 且指向 electron.exe 的快捷方式（如 Electron.lnk）
+// 都会让任务栏按 AUMID 匹配到它并显示 Electron 原子图标，窗口图标/RelaunchIcon 全被忽略。
+const APP_ID = app.isPackaged ? PACKAGED_APP_ID : `${PACKAGED_APP_ID}.dev`
 // 任务栏按钮图标必须是磁盘上的真实文件（asar 里的路径 shell 读不到）：打包后用 exe 自带图标，dev/preview 用 build/icon.ico
 function taskbarIconPath(): string {
   return app.isPackaged ? process.execPath : appIconIco
@@ -337,7 +340,9 @@ function createWindow(): void {
   if (process.platform === 'win32') {
     // dev/preview 下进程是 electron.exe，只设 window icon 不够：任务栏会按 AUMID 回退到 exe 图标。
     // setAppDetails 写入窗口级 AppUserModel 属性（含 RelaunchIconResource），任务栏就显示 GVS 图标。
-    win.setAppDetails({ appId: APP_ID, appIconPath: taskbarIconPath(), appIconIndex: 0, relaunchDisplayName: 'GVS' })
+    // RelaunchIconResource/DisplayName 只有在同时设置 RelaunchCommand 时才会被 shell 采用
+    const relaunchCommand = [process.execPath, ...process.argv.slice(1)].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')
+    win.setAppDetails({ appId: APP_ID, appIconPath: taskbarIconPath(), appIconIndex: 0, relaunchCommand, relaunchDisplayName: 'GVS' })
     win.setIcon(nativeImage.createFromPath(appIconIco))
   }
   win.once('ready-to-show', () => {
