@@ -26,8 +26,9 @@ export function webVideoLink(input: string): { provider: WebVideoProvider; url: 
 
 export async function webVideoDetail(invoke: Invoke, provider: WebVideoProvider, id: string): Promise<Obj> {
   const input = id.startsWith('http') ? {url:id} : {id}
-  const data = await invoke(provider,'detail',{...input,pageSize:100,...(provider === 'migu' ? miguCapabilities(id) : {})})
-  if (provider === 'migu' && !id.startsWith('tv:') && data.episodesComplete !== true) throw new Error('咪咕分集列表不完整，请稍后重试')
+  const miguSource = provider === 'migu' ? miguCapabilities(id) : undefined
+  const data = await invoke(provider,'detail',{...input,pageSize:100,...miguSource})
+  if (miguSource?.terminal === 'mobile' && data.episodesComplete !== true) throw new Error('咪咕分集列表不完整，请稍后重试')
   if (provider === 'mgtv') {
     let all = rows(data.episodes), next = str(data.nextCursor), more = data.hasMore === true
     const visited = new Set<string>()
@@ -60,7 +61,11 @@ export async function webVideoDetail(invoke: Invoke, provider: WebVideoProvider,
     data.episodes = eps.map(ep=>({...ep,group}))
     data.episode_groups = [group]
   } else {
-    data.desc=data.description
+    const partialTV = miguSource?.terminal === 'tv' && data.episodesComplete !== true
+    const notice = partialTV ? data.episodesScope === 'requested-episode'
+      ? '源站仅返回当前单集目录，尚未获得完整剧集。'
+      : 'TV 目录未完整，仅显示已取得分集。' : ''
+    data.desc=notice + str(data.description)
     data.episodes=rows(data.episodes).map(ep=>({...ep,group:'正片'}))
     data.episode_groups=['正片']
   }

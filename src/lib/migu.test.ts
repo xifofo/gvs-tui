@@ -99,7 +99,10 @@ test('Migu TV series keeps TV episode identity through detail and probe',async()
   const choices=await probeWebVideo(invoke,'migu',first.vid)
   expect(sent).toEqual([{id:'tv-series:968082109',pageSize:100,terminal:'tv',devicePreset:'max'},{id:'tv:968181178',terminal:'tv',devicePreset:'max'}])
   expect(choices.qualities.map(q=>q.id)).toEqual(['8'])
-  await expect(webVideoDetail(async()=>({...detail,episodesComplete:false}),'migu','tv-series:968082109')).rejects.toThrow('不完整')
+  const partial=await webVideoDetail(async()=>({...detail,episodesComplete:false}),'migu','tv-series:968082109')
+  expect(partial.episodesComplete).toBe(false)
+  expect(partial.desc).toContain('TV 目录未完整')
+  expect((partial.episodes as Array<{vid:string}>)[0]!.vid).toBe('tv:968181178')
 })
 
 test('Migu QR flows and logout remain scoped to their own terminal',async()=>{

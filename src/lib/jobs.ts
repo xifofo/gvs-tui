@@ -1,4 +1,4 @@
-import { resolveManifest, requireClearDownload } from './manifest-provider.ts'
+import { resolveManifestDownload } from './manifest-provider.ts'
 import { downloadWebVideo } from './web-video-download'
 import { userMessage } from './user-message.ts'
 import { youkuMediaError } from './media-output.ts'
@@ -44,6 +44,7 @@ import { finishedMediaRecord, finishedVersionRecord, saveVersionRecord } from '.
 import { finalizeCompletedName, reserveOutputPath, tencentNamingEvidence, usesMeasuredNaming, youkuNamingEvidence, type NamingEvidence } from './completed-naming.ts'
 import { defaultAudioIndex, orderedMuxAudios } from './audio-selection.ts'
 import type { CompletedMedia, MediaSpecs } from './actual-version.ts'
+import { probeFinishedMedia } from './gvs-record.ts'
 
 export type DlTask = {
   tencentPlayParams?: import('../types.ts').TencentPlayParams
@@ -1322,14 +1323,28 @@ export function youkuAudioFetchPlan(
 
 /** Media is fetched on this client; gateway traffic is limited to resolve calls. */
 async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, work: string, signal?: AbortSignal): Promise<void> {
-  const sources = await resolveManifest(cli, cfg, t.provider, t.vid, t.quality || 'auto')
+  const sources = await resolveManifestDownload(cli, cfg, t.provider, t.vid, t.quality || 'auto')
   signal?.throwIfAborted()
   const source = sources[0]!
-  requireClearDownload(source)
   const ref = source.headers.Referer || source.headers.referer || ''
   if (!['dash','hls'].includes(source.format.toLowerCase()) && !new URL(source.url).pathname.match(/[.](mpd|m3u8)$/i)) {
     throw new Error('该源不是已接入的 DASH/HLS 清单；拒绝伪装封装格式')
   }
   emit('下载', 0.05, '源站 CDN → 本机；网关不转发视频')
-  await writeFinal(out, dest => downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, threads: cfg.threads, select: 'muxed', muxTracks: true, transport: 're', workDir: work, workTag: 'manifest', signal, cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.9 * p, info?.log || '本机直连 CDN') } }))
+  await writeFinal(out, async dest => {
+    await downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, contentKeys: source.contentKeys,
+      manifestText: source.manifest, videoHeight: source.height || undefined, threads: cfg.threads,
+      select: 'muxed', muxTracks: true, transport: 're', workDir: work, workTag: 'manifest', signal,
+      cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
+    })
+    if (source.contentKeys.length) {
+      emit('校验', 0.97, '检查解密后的完整音视频')
+      const ffmpeg = await ensureFFmpeg()
+      await validateAudio(ffmpeg, dest, signal)
+      const errors = await validateVideoDecode(ffmpeg, dest, signal)
+      if (errors.length) throw new Error(`解密后音视频校验失败：${errors.join('；')}`)
+      const specs = await probeFinishedMedia(dest, signal)
+      if (specs.status !== 'probed' || (source.height && specs.height !== source.height)) throw new Error(`成品分辨率校验失败（预期 ${source.height || '所选'}p，实际 ${specs.height ?? specs.status}），未发布下载文件`)
+    }
+  })
 }

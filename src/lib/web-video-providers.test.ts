@@ -11,6 +11,35 @@ const media = [
   {type:'audio',quality:'30280',codecFamily:'aac',codec:'mp4a.40.2',qualityLabel:'高品质音质',group:'dash',url:'https://cdn.invalid/a'},
   {type:'audio',quality:'30251',codecFamily:'flac',codec:'fLaC',qualityLabel:'Hi-Res 无损',group:'flac',url:'https://cdn.invalid/f'},
 ]
+
+test('Migu TV series with a partial catalog is not rejected by the mobile completeness rule', async () => {
+  const d = await webVideoDetail(async (provider, action, input) => {
+    expect([provider, action]).toEqual(['migu', 'detail'])
+    expect(input).toEqual({ id: 'tv-series:968082109', pageSize: 100, terminal: 'tv', devicePreset: 'max' })
+    return { id: input.id, sourceTerminal: 'tv', episodesComplete: false,
+      episodes: [{ id: 'tv:968181178', vid: 'tv:968181178', title: '第1集' }] }
+  }, 'migu', 'tv-series:968082109')
+  expect(d.episodesComplete).toBe(false)
+  expect(d.desc).toContain('TV 目录未完整')
+  expect(parseEpisodes(d)[0]!.vid).toBe('tv:968181178')
+})
+
+test('Migu TV episode can retain its explicitly partial single-episode catalog', async () => {
+  const d = await webVideoDetail(async (_provider, _action, input) => {
+    expect(input.terminal).toBe('tv')
+    return { id: input.id, episodesComplete: false, episodesScope: 'requested-episode', episodes: [{ id: input.id, vid: input.id }] }
+  }, 'migu', 'tv:968181178')
+  expect(d.episodesScope).toBe('requested-episode')
+  expect(d.episodesComplete).toBe(false)
+  expect(d.desc).toContain('仅返回当前单集目录')
+})
+
+test('Migu App still rejects incomplete catalogs and sends mobile terminal', async () => {
+  await expect(webVideoDetail(async (_provider, _action, input) => {
+    expect(input.terminal).toBe('mobile')
+    return { id: input.id, episodesComplete: false, episodes: [{ vid: '968181177' }] }
+  }, 'migu', '968082110')).rejects.toThrow('咪咕分集列表不完整')
+})
 test('platform scope includes both providers and keys restricted to either still start a tunnel',()=>{
   for(const provider of ['mgtv','bilibili']) {expect(PROVIDER_IDS as readonly string[]).toContain(provider);expect(needsTunnel(p=>p===provider)).toBe(true)}
 })

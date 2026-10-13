@@ -999,6 +999,14 @@ export async function downloadPlaylist(opts: {
   ref: string
   headers?: Record<string, string>
   key?: string
+  /** Explicit Widevine download: per-content KID:KEY pairs, never CDM credentials. */
+  contentKeys?: string[]
+  /** Already fetched by the gateway before a short-lived MPD signature expires. */
+  manifestText?: string
+  /** Select an exact pixel height while keeping the best audio. */
+  videoHeight?: number
+  /** Explicit bounded validation/download range, in segment indices. */
+  segmentRange?: string
   /** HLS 密钥算法。默认 CENC（优酷）；黄果是 AES_128。 */
   keyMethod?: HlsKeyMethod
   /** Provider-specific legacy TS handling. Must return an MP4; never guesses a cipher. */
@@ -1045,6 +1053,7 @@ export async function downloadPlaylist(opts: {
     : scratchDir(opts.dest, 'gvs-re-')
   const logFile = join(workDir, 're.log')
   const iqKeyFile = join(workDir, 'iq-key.bin')
+  const contentKeyFile = join(workDir, 'content-keys.txt')
   const errorLog = `${opts.dest}.download-error.log`
   let diagnostics = ''
   const relayEvents: RelayEvent[] = []
@@ -1059,7 +1068,11 @@ export async function downloadPlaylist(opts: {
       keyArgs[keyArgs.indexOf('--custom-hls-key') + 1] = iqKeyFile
     }
     let source = opts.src
-    if (opts.transport === 'node') {
+    if (opts.manifestText) {
+      if (!opts.manifestText.trimStart().startsWith('<') || !/<(?:\w+:)?MPD\b/.test(opts.manifestText) || Buffer.byteLength(opts.manifestText) > 8 << 20) throw new Error('网关返回的 DASH 清单无效')
+      source = join(workDir, 'source.mpd')
+      writeFileSync(source, opts.manifestText, { mode: 0o600 })
+    } else if (opts.transport === 'node') {
       // The supplied CENC key replaces remote/skd key discovery entirely.
       relay = await createHlsRelay(opts.src, headersFor(opts.ref, 0, opts.headers), opts.clear || !!opts.key, {
         // 403/410 refreshes the authenticated source in-place, not the old URL.
@@ -1096,7 +1109,7 @@ export async function downloadPlaylist(opts: {
       // video: drop embedded audio (帧享 HQ separate-audio path).
       // muxed: keep A/V from one playlist (酷喵 TV / App).
       // audio: auto-select; RE may label standalone audio as Vid.
-      opts.select === 'video' ? '--select-video' : '--auto-select',
+      ...(opts.select === 'video' ? ['--select-video'] : opts.contentKeys?.length && opts.select === 'muxed' ? [] : ['--auto-select']),
       ...(opts.select === 'video' ? ['best'] : []),
       ...(opts.select === 'video' ? ['--drop-audio', 'all', '--drop-subtitle', 'all'] : []),
       ...(opts.select === 'muxed' ? ['--drop-subtitle', 'all'] : []),
@@ -1110,6 +1123,17 @@ export async function downloadPlaylist(opts: {
       '--download-retry-count', String(opts.refreshSource ? 0 : MAX_ATTEMPTS - 1),
       ...(opts.refreshSource ? ['--http-request-timeout', '360'] : []),
     ]
+    if (opts.manifestText) args.push('--base-url', opts.src)
+    if (opts.segmentRange) {
+      if (!/^\d+-\d+$/.test(opts.segmentRange)) throw new Error('分片范围格式无效')
+      const [start, end] = opts.segmentRange.split('-').map(Number)
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start) throw new Error('分片范围无效')
+      args.push('--custom-range', opts.segmentRange)
+    }
+    if ((opts.videoHeight || opts.contentKeys?.length) && opts.select === 'muxed') {
+      if (opts.videoHeight && (!Number.isInteger(opts.videoHeight) || opts.videoHeight < 1 || opts.videoHeight > 8640)) throw new Error('视频分辨率选择无效')
+      args.push('--select-video', opts.videoHeight ? `res=^[0-9]+x${opts.videoHeight}$:for=best` : 'best', '--select-audio', 'best')
+    }
     if (opts.muxTracks) {
       const mkvmerge = await ensureMkvmerge()
       args.push('--mux-after-done', `format=mkv:muxer=mkvmerge:bin_path="${mkvmerge.replaceAll(':', '\\:')}"`)
@@ -1133,10 +1157,17 @@ export async function downloadPlaylist(opts: {
         args.push(...keyArgs)
       }
     }
+    if (opts.contentKeys?.length) {
+      if (opts.key || opts.cipher || opts.contentKeys.length > 128 || opts.contentKeys.some(key => !/^[a-f\d]{32}:[a-f\d]{32}$/i.test(key))) throw new Error('内容密钥集合无效')
+      writeFileSync(contentKeyFile, opts.contentKeys.join('\n'), { mode: 0o600 })
+      const packager = await ensurePackager()
+      args.push('--no-config', '--no-log', '--write-meta-json', 'false', '--key-text-file', contentKeyFile,
+        '--decryption-engine', 'SHAKA_PACKAGER', '--decryption-binary-path', packager)
+    }
     opts.cb?.(0, 1, { phase: 'download' })
     let progress = 0
     let phase: PlaylistPhase = 'download'
-    const decrypts = !!opts.key
+    const decrypts = !!opts.key || !!opts.contentKeys?.length
     const report: ProgressCB = (n, total, info) => {
       const frac = total > 1 ? n / total : n
       if (info?.phase) {
@@ -1167,7 +1198,7 @@ export async function downloadPlaylist(opts: {
       if (status) throw new CdnDenied(status, '')
       throw new Error(`N_m3u8DL-RE 未生成文件：${diagnostics.slice(-3000) || '下载器未返回诊断信息'}`)
     }
-    const expectsCenc = !!opts.key && (opts.keyMethod ?? 'CENC') === 'CENC'
+    const expectsCenc = (!!opts.key && (opts.keyMethod ?? 'CENC') === 'CENC') || !!opts.contentKeys?.length
     if (expectsCenc && opts.prepareCencTs && isMpegTsFile(found)) {
       opts.cb?.(playlistOverall('decrypt', 0, true), 1, { phase: 'decrypt', log: '处理优酷 TS 音视频包' })
       found = await opts.prepareCencTs(found, (n, total) => {
@@ -1191,6 +1222,7 @@ export async function downloadPlaylist(opts: {
     throw e
   } finally {
     try { unlinkSync(iqKeyFile) } catch { /* no IQ key or downloader already removed it */ }
+    try { unlinkSync(contentKeyFile) } catch { /* no content keys or downloader already removed it */ }
     await relay?.close()
     try {
       if (succeeded || !readdirSync(workDir).length) removeScratch(workDir)
