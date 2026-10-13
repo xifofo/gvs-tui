@@ -1090,11 +1090,13 @@ export class Core {
     return view
   }
 
-  async catalog(provider: Provider): Promise<Section[]> {
+  async catalog(provider: Provider, country = ''): Promise<Section[]> {
     if (!supportsBrowse(provider)) return [{ id: 'hami-link', title: '粘贴 Hami 产品链接', mode: 'link', available: false, reason: '当前网关仅支持产品链接/ID，尚无搜索或榜单接口' }]
     let sections: Array<Record<string, unknown>>
+    let catalogCountry = ''
     try {
-      const data = await this.invoke(provider, 'browse_catalog', {})
+      const data = await this.invoke(provider, 'browse_catalog', provider === 'appletvplus' && country ? {country} : {})
+      catalogCountry = str(data.country)
       if (!Array.isArray(data.sections)) throw new Error('INVALID_CATALOG')
       sections = data.sections.filter(isObj)
     } catch (e) {
@@ -1107,6 +1109,7 @@ export class Core {
       mode: str(s.mode),
       available: s.available !== false,
       reason: str(s.reason) || undefined,
+      ...(provider === 'appletvplus' && catalogCountry ? {country:catalogCountry} : {}),
       ...(provider === 'migu' && (s.sourceTerminal === 'tv' || s.sourceTerminal === 'mobile') ? {sourceTerminal:s.sourceTerminal} : {}),
     }))
   }
@@ -1114,6 +1117,7 @@ export class Core {
   async browse(provider: Provider, section: Section, cursor = ''): Promise<BrowseResult> {
     if (!section.available) return { cards: [], channels: [], more: false, next: '', notice: section.reason || '此栏目暂不可用' }
     const input: Record<string, unknown> = { mode: section.mode }
+    if (provider === 'appletvplus' && section.country) input.country = section.country
     if (provider === 'migu' && section.sourceTerminal) input.terminal = section.sourceTerminal
     if (section.id.startsWith('legacy-')) {
       if (provider === 'hongguo') input.sub = section.id.replace('legacy-', '')

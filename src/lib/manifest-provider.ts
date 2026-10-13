@@ -34,7 +34,7 @@ export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: st
   if (provider === 'appletvplus') {
     const data = await cli.invoke(provider, 'probe', manifestInput(provider, cfg, id))
     const rows = Array.isArray(data.qualities) ? data.qualities.filter(isObj) : []
-    const qualities: Quality[] = rows.filter(q => str(q.id) && Number(q.height) > 0).map(q => ({ id: str(q.id), label: str(q.label), title: '按网页账号权益授权 · PlayReady · 本机 HLS 下载解密', size: 0, width: Number(q.width) || 0, height: Number(q.height), codec: str(q.codec), drm: 'playready', stream: str(q.id), hdr: str(q.hdr), fps: Number(q.fps) || undefined, tier: tierHeight(Number(q.width) || 0, Number(q.height)) }))
+    const qualities: Quality[] = rows.filter(q => str(q.id) && Number(q.height) > 0).map(q => ({ id: str(q.id), label: str(q.label), title: str(q.label), size: 0, width: Number(q.width) || 0, height: Number(q.height), codec: str(q.codec), drm: 'playready', stream: str(q.id), hdr: str(q.hdr), fps: Number(q.fps) || undefined, tier: tierHeight(Number(q.width) || 0, Number(q.height)) }))
     if (!qualities.length) throw new Error('Apple TV 没有返回可用画质')
     return { qualities, audios: [] }
   }

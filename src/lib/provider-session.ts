@@ -1,5 +1,6 @@
+import { appleTVImportCookie } from './appletvplus-auth'
 export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus'
-export type SessionCommand = { provider: SessionProvider; op: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string }
+export type SessionCommand = { provider: SessionProvider; op: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string; country?: string }
 export type ProviderSessionView = { provider: SessionProvider; terminal?: 'mobile' | 'tv' | 'unified'; state: string; authenticated: boolean; summary: string; qrDataUrl?: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
@@ -94,7 +95,7 @@ export class ProviderSessions {
     }
     if (c.op === 'import' || (c.provider === 'iq' && c.op === 'web_import')) {
       if (!c.cookie?.trim() || c.cookie.length > 65536) throw new Error('请输入有效的本人 Cookie 文本')
-      input.cookie = c.cookie
+      input.cookie = c.provider === 'appletvplus' ? appleTVImportCookie(c.cookie, c.country) : c.cookie
     }
     if (c.provider === 'iq' && c.op === 'password') {
       if (!c.username?.trim() || !c.password || c.username.length > 256 || c.password.length > 256) throw new Error('请输入本人账号和密码（最多256字符）')

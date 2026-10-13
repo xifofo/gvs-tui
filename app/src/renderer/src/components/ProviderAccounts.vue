@@ -10,6 +10,7 @@ const cookie = ref(''), phone = ref(''), code = ref(''), profile = ref(''), pin 
 const iqUsername = ref(''), iqPassword = ref(''), iqAreaCode = ref('')
 const iqStatusError = ref('')
 const appleVerifyID = ref('')
+const appleCountry = ref('hk')
 const accountScope = computed(() => store.state?.accountScope || ((store.state?.settings.host || '') + ':' + (store.state?.settings.keyMasked || '')))
 const iqSummary = computed(() => iqStatusError.value || views.iq?.summary || store.state?.accounts.find(a => a.provider === 'iq')?.summary)
 let revision = 0
@@ -65,11 +66,12 @@ onBeforeUnmount(() => { revision++ })
 
 <template>
   <div v-if="allowed('appletvplus')" class="provider-account">
-    <h3>Apple TV · 官网 Cookie</h3>
-    <p>在 Apple TV 官网完成本人登录后导入 Cookie。目录和详情免登录，下载以账号权益和服务端 PlayReady 配置为准。</p>
-    <a class="btn sm" href="https://tv.apple.com/jp" target="_blank" rel="noopener noreferrer">打开 Apple TV 官网</a>
-    <textarea v-model="cookie" autocomplete="off" spellcheck="false" placeholder="本人官网 Cookie：需包含 itua 和 media-user-token" />
-    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'appletvplus',op:'import',cookie})">导入官网 CK</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'logout'})">退出</button></div>
+    <h3>Apple TV · 账号登录</h3>
+    <p>粘贴官网的媒体令牌或完整 Cookie，选择你的 Apple 账号地区。</p>
+    <label><span>账号地区</span><select v-model="appleCountry" class="input"><option value="hk">香港</option><option value="tw">台湾</option><option value="jp">日本</option><option value="us">美国</option><option value="gb">英国</option><option value="au">澳大利亚</option><option value="ca">加拿大</option></select></label>
+    <a class="btn sm" :href="`https://tv.apple.com/${appleCountry}`" target="_blank" rel="noopener noreferrer">打开 Apple TV 官网</a>
+    <textarea v-model="cookie" autocomplete="off" spellcheck="false" placeholder="媒体令牌（0. 开头）或完整 Cookie" />
+    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'appletvplus',op:'import',cookie,country:appleCountry})">导入登录态</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'logout'})">退出</button></div>
     <input v-model="appleVerifyID" autocomplete="off" placeholder="单集或电影 ID：umc.cmc.…" />
     <button class="btn sm" :disabled="busy || !appleVerifyID.trim()" @click="command({provider:'appletvplus',op:'verify',id:appleVerifyID.trim()})">验证播放权益</button>
     <p v-if="views.appletvplus" aria-live="polite">{{ views.appletvplus.summary }}</p>

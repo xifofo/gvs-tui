@@ -12,6 +12,7 @@ defineOptions({ name: 'DiscoverView' })
 
 const browsable = computed<SearchSource[]>(() => shownProviders().filter((p) => p !== 'douyin').flatMap(providerSearchSources))
 const provider = ref<SearchSource | null>(null)
+const appleRegion = ref('')
 const sections = ref<Section[]>([])
 const section = ref<Section | null>(null)
 const cards = ref<Card[]>([])
@@ -51,7 +52,7 @@ async function pick(p: SearchSource | null) {
   if (!p || !connectionReady.value) { loading.value = false; return }
   loading.value = true
   try {
-    const list = await gvs('catalog', p.provider)
+    const list = await gvs('catalog', p.provider, p.provider === 'appletvplus' ? appleRegion.value : '')
     if (g !== gen) return
     const scoped = p.provider === 'migu' ? list.filter(s => s.sourceTerminal === (p.key === 'migu-tv' ? 'tv' : 'mobile')) : list
     sections.value = scoped
@@ -171,6 +172,12 @@ onBeforeUnmount(() => io?.disconnect())
       <span class="la">去下载<Icon name="arrow" :size="15" /></span>
     </button>
 
+    <label v-if="provider?.provider === 'appletvplus'" class="sections">
+      <span>榜单地区</span>
+      <select v-model="appleRegion" class="input" :disabled="loading" @change="pick(provider)">
+        <option value="">跟随账号（未登录为美国）</option><option value="us">美国</option><option value="hk">香港</option><option value="tw">台湾</option><option value="jp">日本</option><option value="gb">英国</option><option value="au">澳大利亚</option><option value="ca">加拿大</option>
+      </select>
+    </label>
     <div v-if="visibleSections.length > 1" class="sections">
       <button
         v-for="group in groups"

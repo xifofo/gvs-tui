@@ -78,7 +78,7 @@ export type AppState = {
   platform: string
 }
 
-export type Section = { id: string; title: string; mode: string; available: boolean; reason?: string; sourceTerminal?: 'mobile' | 'tv' }
+export type Section = { id: string; title: string; mode: string; available: boolean; reason?: string; sourceTerminal?: 'mobile' | 'tv'; country?: string }
 
 export type Card = {
   provider: Provider
@@ -296,7 +296,7 @@ export interface GvsApi {
   state(): Promise<AppState>
   setup(host: string, key: string, desktopProxy?: string): Promise<AppState>
   saveSettings(patch: SettingsPatch): Promise<AppState>
-  catalog(provider: Provider): Promise<Section[]>
+  catalog(provider: Provider, country?: string): Promise<Section[]>
   browse(provider: Provider, section: Section, cursor?: string): Promise<BrowseResult>
   parseLink(text: string): Promise<LinkTarget>
   searchTargets(): Promise<Provider[]>
