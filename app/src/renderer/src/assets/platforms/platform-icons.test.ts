@@ -17,3 +17,7 @@ test('icon entries are well-formed', () => {
     if (i.glyph.kind === 'text') expect(i.glyph.text.length).toBeLessThanOrEqual(5)
   }
 })
+
+test('glyph stays visible: tile color is never white (glyph is always white)', () => {
+  for (const [id, i] of Object.entries(PLATFORM_ICONS)) expect(i.color.toUpperCase(), id).not.toBe('#FFFFFF')
+})

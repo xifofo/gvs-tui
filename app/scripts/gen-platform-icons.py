@@ -45,6 +45,7 @@ E=[
  ('linetv','LINE TV','#06C755',('si','line')),
  ('kktv','KKTV','#1A1A1A',('text','KK')),
  ('friday','friDay影音','#FF3C78',('text','fri')),
+ ('appletvplus','Apple TV+','#000000',('si','appletv')),
  ('catchplay','CATCHPLAY+','#111111',('text','C+')),
  ('myvideo','myVideo','#E9002B',('text','my')),
  ('unext','U-NEXT','#000000',('text','U')),
