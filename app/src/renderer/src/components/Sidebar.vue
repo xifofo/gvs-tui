@@ -10,7 +10,7 @@ import PlatformLogo from './PlatformLogo.vue'
 type NavItem = { view: View; label: string; icon: string }
 const groups: NavItem[][] = [
   [{ view: 'home', label: '首页', icon: 'home' }, { view: 'discover', label: '发现 · 榜单', icon: 'compass' }, { view: 'search', label: '搜索', icon: 'search' }],
-  [{ view: 'calendar', label: '追剧日历', icon: 'calendar' }, { view: 'subscriptions', label: '订阅', icon: 'star' }, { view: 'downloads', label: '下载', icon: 'download' }],
+  [{ view: 'calendar', label: '追剧日历', icon: 'calendar' }, { view: 'subscriptions', label: '订阅', icon: 'star' }, { view: 'downloads', label: '下载', icon: 'download' }, { view: 'history', label: '历史', icon: 'history' }],
   [{ view: 'accounts', label: '账号', icon: 'user' }, { view: 'settings', label: '设置', icon: 'gear' }],
 ]
 

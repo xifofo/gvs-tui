@@ -1499,6 +1499,7 @@ export class Core {
     const rec = this.jobs.get(e.id)
     if (!rec) return
     const v = rec.view
+    const before = v.state
     // 暂停/取消的收尾事件只带状态，不要把进度和日志清掉。
     if (!e.done) {
       v.actualVersion = undefined
@@ -1532,9 +1533,32 @@ export class Core {
       }
       if (!e.err) this.emit.toast(`${v.groupTitle} ${v.label} 下载完成${v.note ? `：${v.note}` : ''}`, v.note ? 'warn' : 'ok')
     }
+    try {
+      if (!e.done && before === 'queued' && !v.hooks?.some((h) => h.event === 'start')) this.lifecycle?.('start', v, rec.task)
+      if (e.done && !e.stopped && !e.err && before !== 'done') this.lifecycle?.('complete', v, rec.task)
+    } catch (err) {
+      runLog(`lifecycle hook failed: ${err instanceof Error ? err.message : err}`)
+    }
     this.pushJobs()
     // 进度可以合并，状态变化要立刻落盘。
     this.persist(e.done === true)
+  }
+
+  /** 下载开始 / 完成回调（历史库、钩子、ed2k） */
+  lifecycle?: (event: 'start' | 'complete', view: JobView, task: DlTask) => void
+
+  /** 修改任务视图上的附加信息（钩子记录、ed2k 进度），推送并落盘 */
+  patchJob(id: number, fn: (v: JobView) => void): void {
+    const rec = this.jobs.get(id)
+    if (!rec) return
+    fn(rec.view)
+    this.pushJobs()
+    this.persist(false)
+  }
+
+  /** 全部任务（历史迁移用） */
+  jobRecords(): Array<{ view: JobView; task: DlTask }> {
+    return [...this.jobs.values()].map((r) => ({ view: r.view, task: r.task }))
   }
 
   /** 任务自己的配置 = 当前设置 + 入队时钉住的那些，保证续传路径/分片布局不变。 */

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HookSettingsCard from '../components/HookSettingsCard.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { PROVIDER_NAME, type Provider, type SettingsPatch } from '@shared/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -245,9 +246,10 @@ const plat = (p: Provider) => hasProvider(p)
             </div>
           </div>
         </section>
+        <HookSettingsCard v-if="store.settingsTab === 'download'" />
 
         <!-- 网关 -->
-        <section v-else-if="store.settingsTab === 'gateway'" class="card">
+        <section v-if="store.settingsTab === 'gateway'" class="card">
           <h2 class="h2s">网关</h2>
           <div class="srow wrap">
             <div class="sl"><span class="st">网关地址</span><span class="sd">地址和 Key 找网关管理员要，只保存在这台电脑上。</span></div>
@@ -355,7 +357,7 @@ const plat = (p: Provider) => hasProvider(p)
         </section>
 
         <!-- 关于 -->
-        <section v-else class="card">
+        <section v-else-if="store.settingsTab !== 'download'" class="card">
           <h2 class="h2s">关于</h2>
           <div class="srow">
             <div class="sl"><span class="st">版本</span><span class="sd mono">GVS {{ store.state!.version }} · {{ store.state!.platform }}</span></div>

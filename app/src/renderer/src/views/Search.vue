@@ -21,6 +21,10 @@ const orderedGroups = computed(() => {
 /** 咪咕 App / 咪咕 TV 是两个来源：同名作品各自保留一个入口 */
 const rows = computed(() => mergeSearch<Card>(orderedGroups.value, cardSourceKey))
 const sourceGroups = computed(() => splitSearchSources(orderedGroups.value))
+/** 下载历史：provider:showId → 已下载集数（搜索行徽标） */
+const histCounts = ref<Record<string, number>>({})
+watch(() => store.search?.query, () => { void gvs('historyShowCounts').then((r) => { histCounts.value = r }).catch(() => {}) }, { immediate: true })
+const histOf = (row: { sources: Card[] }) => Math.max(0, ...row.sources.map((c) => histCounts.value[`${c.provider}:${c.id}`] ?? 0))
 const filterSet = computed(() => new Set<string>(store.searchFilter))
 // ---- 画质徽标：先用搜索结果自带的文字，没有再懒加载探测（主进程限流 2 并发、12 秒超时、缓存 6 小时）
 const probed = reactive<Record<string, QualityHint | null>>({})
@@ -159,6 +163,7 @@ function metaText(row: { year: number; meta: string }): string {
         <div class="info">
           <button type="button" class="t clamp2" :disabled="!row.sources.some(playable)" @click="open(row)">{{ row.title }}</button>
           <span class="dim small">{{ [row.year || '', kindText(row.mediaKind), metaText(row)].filter(Boolean).join(' · ') }}</span>
+          <span v-if="histOf(row)" class="chip ok tiny hist" title="来自下载历史（含已删除的本地文件）"><Icon name="history" :size="12" />已下载 {{ histOf(row) }} 集</span>
           <span v-if="hintOf(row).badges.length || hintPending(row)" class="qb" :title="hintOf(row).source === 'probe' ? '已探测第一集的最高画质' : '来自平台搜索信息'">
             <span v-for="b in hintOf(row).badges" :key="b" class="qbadge" :class="b === '1080P' ? 'r1080' : b">{{ BADGE_LABEL[b] }}</span>
             <span v-if="hintPending(row)" class="qbadge wait"><span class="spin" style="width: 9px; height: 9px" />探测画质</span>
@@ -241,5 +246,6 @@ function metaText(row: { year: number; meta: string }): string {
 .src:disabled { cursor: not-allowed; opacity: .6; }
 .tiny { height: 18px; padding: 0 6px; font-size: 11px; }
 .go { flex-shrink: 0; }
+.hist { gap: 4px; }
 .ex { margin-left: auto; font-size: 12px; }
 </style>

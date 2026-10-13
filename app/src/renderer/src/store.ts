@@ -23,7 +23,7 @@ import { viewTransition } from './motion'
 import { DEFAULT_UI_PREFS, pushRecent, type UiPrefs } from '@shared/ui-prefs'
 import { visibleProviders } from '@shared/provider-registry'
 
-export type View = 'home' | 'discover' | 'search' | 'detail' | 'quality' | 'downloads' | 'settings' | 'accounts' | 'calendar' | 'subscriptions'
+export type View = 'home' | 'discover' | 'search' | 'detail' | 'quality' | 'downloads' | 'settings' | 'accounts' | 'calendar' | 'subscriptions' | 'history'
 /** 'account' 保留为兼容别名：账号已移到独立的「账号」页。 */
 export type SettingsTab = 'download' | 'appearance' | 'account' | 'gateway' | 'naming' | 'about'
 
@@ -357,4 +357,14 @@ export function human(bytes: number): string {
     i++
   }
   return `${n.toFixed(n >= 100 || i === 0 ? 0 : 1)} ${u[i]}`
+}
+
+/** 复制到剪贴板并提示 */
+export async function copyText(text: string, what = '已复制'): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast(what, 'ok')
+  } catch (e) {
+    toast(errText(e), 'err')
+  }
 }

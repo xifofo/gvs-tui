@@ -98,3 +98,16 @@ test('legacy mgtv subscriptions with bare clipId are migrated to clip:ID on load
   again.stop()
   expect(again.view().subs[0]!.showId).toBe('clip:912960')
 })
+
+test('auto-download skips episodes already in download history', async () => {
+  const h = harness()
+  const done = new Set(['v3'])
+  const m = new SubscriptionManager({ ...h.deps, isDownloaded: (_p: string, vid: string) => done.has(vid) })
+  const s = m.subscribe({ provider: 'tencent', showId: 's1', title: '剧', poster: '', kind: 'show', rules: '1080P > any' })
+  m.stop()
+  await m.checkNow(s.id)
+  h.setEps(4)
+  await m.checkNow(s.id)
+  expect(h.enq.length).toBe(1)
+  expect(h.enq[0]!.episodes.map((e) => e.vid)).toEqual(['v4'])
+})

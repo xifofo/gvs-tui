@@ -9,7 +9,17 @@ declare module 'bun:test' {
     toBeUndefined(): void
     toBeTruthy(): void
     toBeFalsy(): void
+    toContain(v: unknown): void
+    toMatch(v: RegExp | string): void
+    toBeGreaterThan(n: number): void
+    toBeDefined(): void
   }
   export function expect(v: unknown): Matchers
-  export function test(name: string, fn: () => void | Promise<void>): void
+  export function test(name: string, fn: () => void | Promise<void>, timeoutMs?: number): void
+}
+
+declare module 'bun:sqlite' {
+  export class Database {
+    constructor(path: string)
+  }
 }

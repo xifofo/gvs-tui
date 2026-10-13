@@ -6,6 +6,10 @@ import appIconIco from '../../build/icon.ico?asset'
 import trayPng16 from '../../build/tray-16.png?asset'
 import trayPng32 from '../../build/tray-32.png?asset'
 import { trayKey, trayModel } from './tray-model'
+import { DatabaseSync } from 'node:sqlite'
+import createEd2kWorker from './ed2k-worker?nodeWorker'
+import { HistoryService } from './history-service'
+import type { SqlDb } from './history-db'
 import { SubscriptionManager } from './subscriptions'
 import { fetchCalendar } from './calendar-source'
 import { AccountStore } from './account-store'
@@ -67,6 +71,24 @@ const core = new Core({
   toast: (message: string, tone: Tone) => send('gvs:toast', { message, tone }),
 })
 
+// ---------------------------------------------------------------- 下载历史 / 钩子 / ed2k
+let historyRef: HistoryService | null = null
+function history(): HistoryService {
+  historyRef ??= new HistoryService({
+    dir: join(app.getPath('userData'), 'history'),
+    openDb: (p) => new DatabaseSync(p) as unknown as SqlDb,
+    notify: (t, b) => notify(t, b),
+    patchJob: (id, fn) => core.patchJob(id, fn),
+    createWorker: (path) => createEd2kWorker({ workerData: { path } }),
+    log: runLog,
+  })
+  return historyRef
+}
+core.lifecycle = (event, view, task) => {
+  if (event === 'start') history().onStart(view, task)
+  else history().onComplete(view, task)
+}
+
 // ---------------------------------------------------------------- 多账号
 const accountsPath = () => join(app.getPath('userData'), 'accounts.json')
 const accounts = new AccountStore({
@@ -118,6 +140,7 @@ const subs = new SubscriptionManager({
   detail: (p, id) => core.detail(p, id),
   probe: (p, eps, accountId) => probeWithAccounts(p, eps, accountId),
   enqueue: (req) => core.enqueue(req),
+  isDownloaded: (p, vid) => { try { return history().db.hasVid(p, vid) } catch { return false } },
   notify: (title, body, sub) => notify(title, body, sub),
   changed: (view) => {
     send('gvs:subs', view)
@@ -265,6 +288,13 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   activateAccount: async (id) => ({ needsLogin: (await accounts.activate(id)).needsLogin }),
   updateAccountCookie: async (id, cookie) => { await accounts.updateCookie(id, cookie) },
   qualityHint: (p, id) => hints.get(`${p}:${id}`),
+  history: (q) => history().db.list(q),
+  historyForShow: (p, id) => history().db.forShow(p, id),
+  historyShowCounts: () => history().db.showCounts(),
+  removeHistory: (id) => history().db.remove(id),
+  computeEd2k: (id, jobId) => history().computeEd2k(id, jobId),
+  hookSettings: () => history().hookSettings(),
+  saveHookSettings: (s) => history().saveHookSettings(s),
 }
 
 ipcMain.handle('gvs:call', async (_e, method: string, args: unknown[]) => {
@@ -349,6 +379,7 @@ app.whenReady().then(() => {
   } catch (e) {
     runLog(`tray: create failed ${e instanceof Error ? e.message : e}`)
   }
+  try { history().migrate(core.jobRecords()) } catch (e) { runLog(`history: open failed ${e instanceof Error ? e.message : e}`) }
   void core.boot().catch(() => {})
   subs.start()
   updater.start()

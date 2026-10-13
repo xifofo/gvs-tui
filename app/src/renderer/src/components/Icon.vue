@@ -9,7 +9,7 @@ import {
   IconFolderOpen, IconHome, IconInfoCircle, IconLayoutGrid, IconLayoutSidebar, IconLink, IconMoon, IconPlayerPauseFilled,
   IconPlayerPlayFilled, IconPoint, IconQrcode, IconRefresh, IconRotateClockwise, IconSearch, IconSettings, IconSparkles,
   IconStar, IconSun, IconDeviceDesktop, IconTrash, IconDeviceTv, IconUser, IconWaveSine, IconWorld, IconX, IconPlus,
-  IconMovie, IconVolume, IconBadgeCc, IconListCheck,
+  IconMovie, IconVolume, IconBadgeCc, IconListCheck, IconHistory, IconCopy, IconHash, IconTerminal2,
 } from '@tabler/icons-vue'
 
 const props = withDefaults(defineProps<{ name: string; size?: number; stroke?: number }>(), { size: 18, stroke: 2 })
@@ -23,6 +23,7 @@ const MAP: Record<string, Component> = {
   up: IconChevronUp, down: IconChevronDown, eye: IconEye, eyeoff: IconEyeOff, globe: IconWorld, left: IconChevronLeft,
   right: IconChevronRight, filter: IconFilter, tv: IconDeviceTv, sparkles: IconSparkles, wave: IconWaveSine, sun: IconSun,
   moon: IconMoon, system: IconDeviceDesktop, plus: IconPlus, movie: IconMovie, volume: IconVolume, cc: IconBadgeCc, rules: IconListCheck,
+  history: IconHistory, copy: IconCopy, hash: IconHash, terminal: IconTerminal2,
 }
 
 const comp = computed(() => MAP[props.name] ?? IconPoint)

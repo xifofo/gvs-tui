@@ -225,7 +225,46 @@ export type JobView = {
   finishedAt: number
   /** 正在切换暂停/继续，按钮先禁用 */
   busy?: boolean
+  /** 开始 / 完成钩子的运行记录 */
+  hooks?: HookRun[]
+  /** 完成后计算的 ed2k 链接 */
+  ed2k?: { state: 'running' | 'done' | 'failed'; pct: number; link: string; message?: string }
+  /** 对应的下载历史记录 id */
+  historyId?: number
 }
+
+export type HookEvent = 'start' | 'complete'
+export type HookRun = { event: HookEvent; command: string; startedAt: number; finishedAt: number; exitCode: number | null; state: 'running' | 'ok' | 'failed' | 'timeout'; log: string; message: string }
+export type HookSettings = {
+  start: { notify: boolean; command: string }
+  complete: { notify: boolean; command: string }
+  /** 命令超时（秒） */
+  timeoutSec: number
+  /** 完成后自动计算 ed2k */
+  ed2k: boolean
+}
+
+/** 下载历史（SQLite）：本地文件删掉后仍算已下载 */
+export type HistoryEntry = {
+  id: number
+  jobKey: string
+  provider: Provider
+  showId: string
+  showTitle: string
+  vid: string
+  season: number
+  episode: number
+  label: string
+  title: string
+  quality: string
+  audio: string
+  size: number
+  filePath: string
+  ed2k: string
+  ed2kLink: string
+  completedAt: number
+}
+export type HistoryQuery = { text?: string; provider?: string; showId?: string; limit?: number; offset?: number }
 
 export type NamingPreview = { folder: string; file: string; note?: string }
 
@@ -325,6 +364,17 @@ export interface GvsApi {
   setDefaultAccount(id: string): Promise<void>
   activateAccount(id: string): Promise<{ needsLogin: boolean }>
   updateAccountCookie(id: string, cookie: string): Promise<void>
+
+  // ---- 下载历史 / 钩子 / ed2k
+  history(q?: HistoryQuery): Promise<{ items: HistoryEntry[]; total: number }>
+  historyForShow(provider: Provider, showId: string): Promise<HistoryEntry[]>
+  /** provider:showId → 已下载集数 */
+  historyShowCounts(): Promise<Record<string, number>>
+  removeHistory(id: number): Promise<void>
+  /** 计算 ed2k（后台线程）；jobId 有值时进度显示在任务上 */
+  computeEd2k(historyId: number, jobId?: number): Promise<string>
+  hookSettings(): Promise<HookSettings>
+  saveHookSettings(s: HookSettings): Promise<HookSettings>
 
   // ---- 搜索结果画质（懒加载探测，限流 + 缓存）
   qualityHint(provider: Provider, id: string): Promise<QualityHint | null>

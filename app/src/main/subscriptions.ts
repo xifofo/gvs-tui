@@ -11,6 +11,8 @@ import {
  * 每 TICK_MS 看一眼哪些订阅到点了，串行检查（不并发打网关）。
  */
 export type SubDeps = {
+  /** 下载历史里已有这一集（文件删了也算），订阅不再重复下载 */
+  isDownloaded?: (provider: Provider, vid: string) => boolean
   detail(provider: Provider, id: string): Promise<DetailView>
   probe(provider: Provider, episodes: EpisodeView[], accountId?: string): Promise<ProbeResult>
   enqueue(req: EnqueueRequest): number
@@ -213,6 +215,9 @@ export class SubscriptionManager {
 
   /** 新集按规则组挑最好的版本下载；返回一句状态 */
   private async download(sub: Subscription, d: DetailView, eps: EpisodeView[]): Promise<string> {
+    const had = eps.length
+    eps = eps.filter((e) => !this.deps.isDownloaded?.(d.provider, e.vid))
+    if (had && !eps.length) return '历史里已下载过，跳过'
     if (!eps.length) return '无可下载视频'
     const probe = await this.deps.probe(d.provider, eps, sub.accountId)
     const m = pickBest(sub.rules, candidatesOf(probe))

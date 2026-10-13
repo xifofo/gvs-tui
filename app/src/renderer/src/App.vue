@@ -18,6 +18,7 @@ import Search from './views/Search.vue'
 import Detail from './views/Detail.vue'
 import Quality from './views/Quality.vue'
 import Downloads from './views/Downloads.vue'
+import History from './views/History.vue'
 import Settings from './views/Settings.vue'
 
 function onKey(e: KeyboardEvent) {
@@ -51,6 +52,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             <Detail v-else-if="store.view === 'detail'" key="detail" />
             <Quality v-else-if="store.view === 'quality'" key="quality" />
             <Downloads v-else-if="store.view === 'downloads'" key="downloads" />
+            <History v-else-if="store.view === 'history'" key="history" />
             <Accounts v-else-if="store.view === 'accounts'" key="accounts" />
             <Calendar v-else-if="store.view === 'calendar'" key="calendar" />
             <Subscriptions v-else-if="store.view === 'subscriptions'" key="subscriptions" />

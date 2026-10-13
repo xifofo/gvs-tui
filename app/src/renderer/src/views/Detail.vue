@@ -47,7 +47,21 @@ const rangeError = ref('')
 const anchor = ref(-1)
 
 /** 每集下载状态（已下载 / 排队 / 下载中…），来自下载任务列表 */
-const epStates = computed(() => (d.value ? episodeStates(store.jobs, d.value.provider, d.value.id) : new Map<string, EpisodeState>()))
+/** 下载历史（SQLite）：本地文件删掉后也算已下载 */
+const historyLabels = ref<string[]>([])
+watch(() => (d.value ? `${d.value.provider}:${d.value.id}` : ''), async (k) => {
+  historyLabels.value = []
+  if (!k || !d.value) return
+  try {
+    const rows = await gvs('historyForShow', d.value.provider, d.value.id)
+    if (k === (d.value ? `${d.value.provider}:${d.value.id}` : '')) historyLabels.value = rows.map((r) => r.label)
+  } catch { /* 历史库不可用时只看任务列表 */ }
+}, { immediate: true })
+const epStates = computed(() => {
+  const m = d.value ? episodeStates(store.jobs, d.value.provider, d.value.id) : new Map<string, EpisodeState>()
+  for (const l of historyLabels.value) if (!m.has(l)) m.set(l, 'done')
+  return m
+})
 const epState = (e: { number: number; season?: number; title: string }) => stateOf(epStates.value, e, isMovie.value)
 const doneCount = computed(() => eps.value.filter(e => epState(e) === 'done').length)
 

@@ -8,7 +8,7 @@ import DownloadPagination from '../components/DownloadPagination.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
-import { ago, errText, gvs, store, toast } from '../store'
+import { ago, errText, gvs, store, toast, copyText } from '../store'
 
 const diagnosticsJob = ref<number | undefined>()
 const showDiagnostics = ref(false)
@@ -143,6 +143,7 @@ function removeJob(j: JobView, deleteFiles: boolean) {
 function removeGroup(ids: number[], deleteFiles: boolean) {
   void call(() => runEach((id) => gvs('removeJob', id, deleteFiles), ids), ids)
 }
+const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功', failed: '失败', timeout: '超时' }
 </script>
 
 <template>
@@ -213,6 +214,13 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
               <span v-if="sub(j)" class="muted sub" :title="subTitle(j)">{{ sub(j) }}</span>
               <span v-if="mediaSummary(j)" class="muted sub" :title="mediaDetail(j)">{{ mediaSummary(j) }}</span>
               <span v-if="j.state === 'done' && j.note" class="sub job-note" :title="j.note">{{ j.note }}</span>
+              <span v-if="j.hooks?.length || j.ed2k" class="hooks">
+                <span v-for="h in j.hooks" :key="h.event + h.startedAt" class="chip tiny" :class="{ ok: h.state === 'ok', warn: h.state === 'failed' || h.state === 'timeout' }" :title="`${h.command}\n${h.message || ''}\n日志：${h.log}`">
+                  <Icon name="terminal" :size="12" />{{ h.event === 'start' ? '开始命令' : '完成命令' }} · {{ HOOK_STATE[h.state] }}
+                </span>
+                <span v-if="j.ed2k?.state === 'running'" class="chip tiny"><span class="spin" style="width: 9px; height: 9px" />ed2k {{ Math.round(j.ed2k.pct * 100) }}%</span>
+                <span v-else-if="j.ed2k?.state === 'failed'" class="chip tiny warn" :title="j.ed2k.message">ed2k 失败</span>
+              </span>
             </div>
             <div class="bar">
               <div class="progress" :class="barClass(j)"><div :style="{ width: pct(j) + '%' }" /></div>
@@ -232,6 +240,8 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
               </template>
               <template v-else-if="j.state === 'done'">
                 <button v-if="j.output" type="button" class="btn sm icon" aria-label="打开所在文件夹" title="打开所在文件夹" @click="call(() => gvs('showItem', j.output))"><Icon name="folder" :size="16" /></button>
+                <button v-if="j.ed2k?.link" type="button" class="btn sm icon" aria-label="复制 ed2k 链接" title="复制 ed2k 链接" @click="copyText(j.ed2k.link, '已复制 ed2k 链接')"><Icon name="copy" :size="15" /></button>
+                <button v-else-if="j.historyId && j.ed2k?.state !== 'running'" type="button" class="btn sm icon" aria-label="计算 ed2k" title="计算 ed2k 链接" @click="call(() => gvs('computeEd2k', j.historyId!, j.id).then(() => {}))"><Icon name="hash" :size="15" /></button>
               </template>
               <template v-else>
                 <button type="button" class="btn sm icon" aria-label="暂停" title="暂停" :disabled="busy.has(j.id)" @click="call(() => gvs('pauseJob', j.id), [j.id])">
@@ -346,4 +356,7 @@ function removeGroup(ids: number[], deleteFiles: boolean) {
 .drawer-enter-active .diag-drawer, .drawer-leave-active .diag-drawer { transition: transform var(--ui-duration-base, .2s) var(--ui-ease-out, ease); }
 .drawer-enter-from, .drawer-leave-to { opacity: 0; }
 .drawer-enter-from .diag-drawer, .drawer-leave-to .diag-drawer { transform: translateX(32px); }
+.hooks { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.hooks .chip { gap: 4px; }
+.hooks .tiny { height: 20px; padding: 0 7px; font-size: 11px; }
 </style>
