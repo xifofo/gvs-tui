@@ -17,7 +17,7 @@ const EVENTS = [{ key: 'start', label: '开始下载时' }, { key: 'complete', l
 <template>
   <section v-if="s" class="card hooks-card">
     <h2 class="h2s">下载钩子</h2>
-    <p class="sd">每集开始 / 完成时可以弹系统通知，或在后台运行一条命令（不阻塞下载）。可用占位符：
+    <p class="intro">每集开始 / 完成时可以弹系统通知，或在后台运行一条命令（不阻塞下载）。可用占位符：
       <code>{file}</code> <code>{dir}</code> <code>{title}</code> <code>{episode}</code> <code>{ed2k}</code>，例如 <code>rclone copy "{file}" remote:</code>。值里的引号和 &amp; | ; 等符号会被替换，模板里请自己给路径加引号。</p>
     <div v-for="e in EVENTS" :key="e.key" class="srow col">
       <div class="sl"><span class="st">{{ e.label }}</span></div>
@@ -38,6 +38,8 @@ const EVENTS = [{ key: 'start', label: '开始下载时' }, { key: 'complete', l
 
 <style scoped>
 .hooks-card { margin-top: 14px; }
+.hooks-card > h2 { margin: 0; padding: 18px 20px 4px; font-size: 16px; font-weight: 800; }
+.intro { margin: 0; padding: 0 20px 12px; font-size: 12.5px; line-height: 1.7; color: var(--ink-3); }
 .col { flex-direction: column; align-items: stretch; gap: 8px; }
 .tg { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .cmd { width: 100%; height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: inherit; padding: 0 10px; font-size: 12.5px; }
