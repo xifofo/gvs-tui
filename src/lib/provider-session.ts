@@ -1,10 +1,10 @@
-export type SessionProvider = 'mewatch' | 'hamivideo' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu'
+export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu'
 export type SessionCommand = { provider: SessionProvider; op: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string }
 export type ProviderSessionView = { provider: SessionProvider; terminal?: 'mobile' | 'tv' | 'unified'; state: string; authenticated: boolean; summary: string; qrDataUrl?: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
 const positive = (v: unknown, fallback: number) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback
-const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']) }
+const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']), friday: new Set(['import', 'status', 'refresh', 'qr', 'web', 'poll', 'logout']), linetv: new Set(['import', 'status', 'refresh', 'logout']) }
 
 /** Source credentials are transient: never persist or log command inputs. */
 export class ProviderSessions {
@@ -199,6 +199,20 @@ export class ProviderSessions {
       view.userCode = text(data.userCode) || undefined
       if (data.interval) view.interval = positive(data.interval, 2)
       if (data.expiresAt) view.expiresAt = positive(data.expiresAt, 0) * 1000
+    }
+    if (c.provider === 'friday') {
+      if (state === 'pending_or_expired') view.state = 'pending'
+      if (c.op === 'qr' || c.op === 'web') {
+        const u = new URL(text(data.url) || text(data.loginUrl))
+        if (u.protocol !== 'https:' || u.hostname !== 'video.friday.tw' || u.username || u.password || u.port) throw new Error('网关返回的 Friday 绑定地址无效')
+        view.url = u.href; view.userCode = text(data.code) || undefined; view.interval = positive(data.interval, 5); view.expiresAt = this.now() + 600000
+      } else if (view.state === 'pending') {
+        const prev = this.views.get(key); view.url = prev?.url; view.userCode = prev?.userCode; view.interval = positive(data.interval, 5); view.expiresAt = prev?.expiresAt
+      }
+      view.summary = authenticated ? 'Friday TV 已登录；4K 以会员权益为准' : view.state === 'pending' ? '在台湾出口的浏览器打开官方绑定页（可选旧版入口用 Facebook），完成后点「检查绑定」' : state === 'imported' ? '已导入 TV CK；尚未验证会员' : 'Friday 尚未登录；榜单无需登录，播放需 TV 会话'
+    }
+    if (c.provider === 'linetv') {
+      view.summary = authenticated ? 'LINE TV 已登录；会员 / FHD 以账号权益为准' : '匿名可看 SD；导入本人 Cookie 解锁会员内容'
     }
     if (c.provider === 'mewatch' && state === 'pending') {
       view.userCode = text(data.userCode) || previous?.userCode

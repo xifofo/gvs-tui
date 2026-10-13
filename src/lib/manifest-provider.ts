@@ -36,8 +36,8 @@ export function requireClearDownload(source: ManifestSource): void {
   if (source.live) throw new Error('直播录制尚未接入；不会启动无限下载')
   if (!source.clear) throw new Error('DRM_CLIENT_UNAVAILABLE：网关当前返回许可证而非可直接使用的内容密钥；尚未接入此授权媒体处理，不会按明文下载，也不会请求设备私钥')
 }
-export function providerLink(text: string): { provider: 'mewatch' | 'hamivideo'; url: string } | undefined {
+export function providerLink(text: string): { provider: 'mewatch' | 'hamivideo' | 'friday' | 'linetv'; url: string } | undefined {
   const found = text.match(new RegExp('https://[^ <>]+', 'g')) || []
-  for (const value of found) { try { const u = new URL(value.trim()); if (u.username || u.password) continue; if (u.hostname === 'hamivideo.hinet.net') return { provider: 'hamivideo', url: u.href }; if (u.hostname === 'mewatch.sg' || u.hostname === 'www.mewatch.sg') return { provider: 'mewatch', url: u.href } } catch {} }
+  for (const value of found) { try { const u = new URL(value.trim()); if (u.username || u.password) continue; if (u.hostname === 'hamivideo.hinet.net') return { provider: 'hamivideo', url: u.href }; if (u.hostname === 'mewatch.sg' || u.hostname === 'www.mewatch.sg') return { provider: 'mewatch', url: u.href }; if (u.hostname === 'video.friday.tw') return { provider: 'friday', url: u.href }; if (u.hostname === 'linetv.tw' || u.hostname === 'www.linetv.tw') return { provider: 'linetv', url: u.href } } catch {} }
   return undefined
 }

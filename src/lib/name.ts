@@ -39,6 +39,8 @@ export function sourceTag(provider: string): string {
     case 'iqcn': return 'IQIYI'
     case 'mewatch': return 'MEWATCH'
     case 'hamivideo': return 'HAMI'
+    case 'friday': return 'FRIDAY'
+    case 'linetv': return 'LINETV'
     default: return provider ? provider.slice(0, 3).toUpperCase() : 'WEB'
   }
 }

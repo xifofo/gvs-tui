@@ -28,6 +28,8 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
   migu: { id: 'migu', methods: ['qr'], loginOptional: false, benefit: '合并 TV 4K 与 App HDR Vivid 画质', multiAccount: false },
   mewatch: { id: 'mewatch', methods: ['tv-code'], loginOptional: false, region: '新加坡区域内容', benefit: '官方设备激活', multiAccount: false },
   hamivideo: { id: 'hamivideo', methods: ['cookie', 'sms'], loginOptional: false, region: '台湾区域内容', benefit: 'Web / TV 会话独立', multiAccount: false },
+  friday: { id: 'friday', methods: ['qr', 'cookie'], loginOptional: false, region: '台湾区域内容（需台湾出口）', benefit: '榜单免登录；TV 会话解锁 4K', multiAccount: false },
+  linetv: { id: 'linetv', methods: ['cookie'], loginOptional: true, region: '台湾区域内容（需台湾出口）', benefit: '匿名可看 SD；导入 Cookie 解锁会员 / FHD', multiAccount: false },
   douyin: { id: 'douyin', methods: ['cookie'], loginOptional: true, benefit: '网页 Cookie（需含 sessionid）', multiAccount: false },
   hongguo: { id: 'hongguo', methods: ['none'], loginOptional: true, benefit: '公开接口，无需账号', multiAccount: false },
   huangguo: { id: 'huangguo', methods: ['none'], loginOptional: true, benefit: '公开接口，无需账号', multiAccount: false },

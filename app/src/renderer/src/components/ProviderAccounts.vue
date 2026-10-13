@@ -158,6 +158,25 @@ onBeforeUnmount(() => { revision++ })
     <p v-if="hami" aria-live="polite">{{ hami.summary }} <span v-if="hami.resendAfterSeconds">· 发码冷却 {{ hami.resendAfterSeconds }} 秒</span></p>
     <p>媒体由本机直连 CDN。受保护媒体需要相应授权处理能力；不会把设备认证文件下载到本机。</p>
   </div>
+  <div v-if="allowed('friday')" class="provider-account">
+    <h3>Friday影音 · TV 会话</h3>
+    <p>需台湾出口并保持隧道在线。榜单免登录；播放需本人 TV 会话（官方绑定页 / 扫码，或导入 TV CK）。</p>
+    <div class="controls"><button class="btn sm" :disabled="busy" @click="command({provider:'friday',op:'web'})">打开官方绑定页</button><button class="btn sm" :disabled="busy || !views.friday?.url" @click="command({provider:'friday',op:'poll'})">检查绑定</button></div>
+    <div v-if="views.friday?.url" aria-live="polite">
+      <strong v-if="views.friday.userCode">绑定码：{{ views.friday.userCode }}</strong>
+      <input class="input" :value="views.friday.url" readonly aria-label="复制到台湾出口浏览器打开的官方绑定地址" />
+    </div>
+    <textarea v-model="cookie" class="input" spellcheck="false" autocomplete="off" aria-label="本人 Friday TV CK，仅本次提交" placeholder="本人 TV CK（friday_tv_* Cookie Header 或 Netscape 文本）；普通网页 CK 不能代替" />
+    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'friday',op:'import',cookie})">导入 TV CK</button><button class="btn sm" :disabled="busy" @click="command({provider:'friday',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'friday',op:'refresh'})">续期</button><button class="btn sm" :disabled="busy" @click="command({provider:'friday',op:'logout'})">退出</button></div>
+    <p v-if="views.friday" aria-live="polite">{{ views.friday.summary }}</p>
+  </div>
+  <div v-if="allowed('linetv')" class="provider-account">
+    <h3>LINE TV · 可选登录</h3>
+    <p>需台湾出口。匿名可看 SD；导入本人浏览器 Cookie（含 accessToken）解锁会员 / FHD。</p>
+    <textarea v-model="cookie" class="input" spellcheck="false" autocomplete="off" aria-label="本人 LINE TV Cookie，仅本次提交" placeholder="Cookie Header、Netscape cookies.txt 或 JSON；不会保存到客户端配置" />
+    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'linetv',op:'import',cookie})">导入 Cookie</button><button class="btn sm" :disabled="busy" @click="command({provider:'linetv',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'linetv',op:'logout'})">退出</button></div>
+    <p v-if="views.linetv" aria-live="polite">{{ views.linetv.summary }}</p>
+  </div>
 </template>
 
 <style scoped>
