@@ -19,6 +19,8 @@ public partial class DefaultHLSContentProcessor : ContentProcessor
     private static partial Regex ATVRegex();
     [GeneratedRegex(@"(#EXT-X-KEY:[\s\S]*?)(#EXT-X-DISCONTINUITY|#EXT-X-ENDLIST)")]
     private static partial Regex ATVRegex2();
+    [GeneratedRegex(@"^https?://[^\s?#]*\.apple\.com/[^\s?#]*\.webvtt", RegexOptions.Multiline)]
+    private static partial Regex ATVSubRegex();
 
     public override bool CanProcess(ExtractorType extractorType, string rawText, ParserConfig parserConfig) => extractorType == ExtractorType.HLS;
 
@@ -84,6 +86,14 @@ public partial class DefaultHLSContentProcessor : ContentProcessor
             }
         }
 
+        // 针对AppleTv字幕修正：上面只对带 MAP 的音视频保留加密正片段。WebVTT 字幕没有 MAP 也不加密，
+        // 若保留片头/前情/片尾各段，按不连续序号对齐后字幕只剩片头的空白段，正片对白全部丢失。
+        // 正片是时长最长的一段，字幕取同一段，使其与音视频位于同一时间轴。
+        if (m3u8Content.Contains("#EXT-X-DISCONTINUITY") && !m3u8Content.Contains("#EXT-X-MAP") && ATVSubRegex().IsMatch(m3u8Content))
+        {
+            m3u8Content = KeepLongestDiscontinuity(m3u8Content);
+        }
+
         // 修复#EXT-X-KEY与#EXTINF出现次序异常问题
         var regex = OrderFixRegex();
         if (regex.IsMatch(m3u8Content))
@@ -92,5 +102,44 @@ public partial class DefaultHLSContentProcessor : ContentProcessor
         }
 
         return m3u8Content;
+    }
+
+    private static string KeepLongestDiscontinuity(string m3u8Content)
+    {
+        var header = new List<string>();
+        var sections = new List<(List<string> Lines, double Duration)>();
+        List<string>? current = null;
+        double duration = 0;
+        foreach (var raw in m3u8Content.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.StartsWith(HLSTags.ext_x_endlist) || line.StartsWith("#EXTM3U"))
+                continue;
+            if (line.StartsWith(HLSTags.ext_x_discontinuity) && !line.StartsWith(HLSTags.ext_x_discontinuity_sequence))
+            {
+                if (current != null)
+                    sections.Add((current, duration));
+                current = [];
+                duration = 0;
+                continue;
+            }
+            if (current == null && !line.StartsWith(HLSTags.extinf))
+            {
+                header.Add(line);
+                continue;
+            }
+            current ??= [];
+            if (line.StartsWith(HLSTags.extinf) && double.TryParse(line[HLSTags.extinf.Length..].TrimStart(':').Split(',')[0],
+                    System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+                duration += seconds;
+            current.Add(line);
+        }
+        if (current != null)
+            sections.Add((current, duration));
+        if (sections.Count < 2)
+            return m3u8Content;
+        var main = sections.MaxBy(section => section.Duration).Lines;
+        return string.Join("\r\n", header.Where(line => line.Length > 0).Prepend("#EXTM3U").Concat(main.Where(line => line.Length > 0))
+            .Append(HLSTags.ext_x_endlist));
     }
 }

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { cleanRELog, formatSpeed, hlsExtinfSeconds, hlsKeyArgs, playlistOverall, playlistStatus, reProgress, reHttpFailureMonitor, reSidecarProgress, reWorkPhase, runM3u8dl, CdnDenied, reDownloadedSegments, transferSpeed } from './media.ts'
+import { cleanRELog, formatSpeed, hlsExtinfSeconds, hlsKeyArgs, playlistOverall, playlistStatus, reProgress, reHttpFailureMonitor, reSidecarProgress, reWorkPhase, runM3u8dl, CdnDenied, reDownloadedSegments, reListedSegments, transferSpeed } from './media.ts'
 
 test('CENC key is also supplied to the HLS parser, skipping the key URI fetch', () => {
   const key = '0123456789abcdef0123456789abcdef'
@@ -203,6 +203,24 @@ test('a completed HLS part does not hide the remaining parts download speed', ()
     const merge = reSidecarProgress(dir, 'merge')
     expect(merge.ratio).toBeCloseTo(0.25)
     expect(merge.log).toBe('合并 150 B/600 B')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('content-key runs without meta_selected.json use the listed segment total before merge', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-re-nometa-'))
+  try {
+    const part = join(dir, 'download', 'parts', '0000')
+    mkdirSync(part, { recursive: true })
+    writeFileSync(join(part, '0.m4s'), Buffer.alloc(100)); writeFileSync(join(part, '1.m4s'), Buffer.alloc(100))
+    const listing = '00:27:50.1 INFO : 已选择的流:\n00:27:50.1 INFO : Vid *UNKNOWN 3840x1606 | dvh1 | 3 Segments | ~01h00m19s\n' +
+      '00:27:50.1 INFO : Sub subtitles | yue-Hant | 廣東話 | 1 Segment | ~01h00m19s\n'
+    expect(reListedSegments(listing)).toBeUndefined()
+    const total = reListedSegments(listing + '00:27:50.2 INFO : 保存文件名: download\n')
+    expect(total).toBe(4)
+    expect(reWorkPhase('二进制合并中...', dir, total)).toBe('download')
+    writeFileSync(join(part, '2.m4s'), Buffer.alloc(100)); writeFileSync(join(part, '3.vtt'), Buffer.alloc(10))
+    writeFileSync(join(part, '3.m4s'), Buffer.alloc(100))
+    expect(reWorkPhase('二进制合并中...', dir, total)).toBe('merge')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 

@@ -674,19 +674,23 @@ export type ProgressCB = (n: number, total: number, info?: PlaylistProgress) => 
 /** RE's noninteractive console emits no intermediate progress. Count finished
  * fragment files against its selected-stream metadata; in-flight .tmp files
  * never count, and merge/decrypt phases continue using their byte monitors. */
-export function reDownloadedSegments(dir: string): { done: number; total: number; bytes: number } | undefined {
+export function reDownloadedSegments(dir: string, listedTotal?: number): { done: number; total: number; bytes: number } | undefined {
+  const root = join(dir, 'download')
+  let total = 0
   try {
-    const root = join(dir, 'download')
     const streams: unknown = JSON.parse(readFileSync(join(root, 'meta_selected.json'), 'utf8').replace(/^\uFEFF/, ''))
-    if (!Array.isArray(streams)) return
-    let total = 0
-    for (const stream of streams.filter(isObj)) {
+    for (const stream of Array.isArray(streams) ? streams.filter(isObj) : []) {
       const playlist = isObj(stream.Playlist) ? stream.Playlist : {}
       for (const part of Array.isArray(playlist.MediaParts) ? playlist.MediaParts.filter(isObj) : [])
         total += Array.isArray(part.MediaSegments) ? part.MediaSegments.length : 0
       if (isObj(playlist.MediaInit)) total++
     }
-    if (!total) return
+  } catch { /* metadata appears only after parsing; content-key runs disable it */ }
+  // --write-meta-json false (content keys must not be written to disk) leaves
+  // only RE's console listing of the selected streams as the segment total.
+  if (!total) total = listedTotal ?? 0
+  if (!total) return
+  try {
     let done = 0, bytes = 0
     for (const name of readdirSync(root, { recursive: true }) as string[]) {
       const leaf = basename(name)
@@ -696,7 +700,21 @@ export function reDownloadedSegments(dir: string): { done: number; total: number
       if (size > 0 && !leaf.endsWith('.tmp')) done++
     }
     return { done: Math.min(done, total), total, bytes }
-  } catch { /* metadata appears only after parsing; a retry can replace it */ }
+  } catch { /* RE has not created its fragment folder yet */ }
+}
+
+/** Segment total from RE's "Selected streams" listing, once the listing is complete. */
+export function reListedSegments(text: string): number | undefined {
+  const s = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+  const start = s.search(/已选择的流:|已選擇的流:|Selected streams:/)
+  if (start < 0) return
+  let total = 0
+  for (const line of s.slice(start).split(/\r?\n/).slice(1)) {
+    if (/保存文件名:|保存檔案名:|Save Name:/.test(line)) return total || undefined
+    const count = /\|\s*(\d+) Segments?\b/.exec(line)
+    if (count) total += Number(count[1])
+  }
+  // The listing is still arriving; a partial sum would end the download phase early.
 }
 
 function fileSize(path: string): number {
@@ -719,11 +737,11 @@ function dirFileSizes(dir: string, pred?: (name: string) => boolean): number {
   return n
 }
 
-export function reWorkPhase(text: string, workDir?: string): PlaylistPhase {
+export function reWorkPhase(text: string, workDir?: string, listedTotal?: number): PlaylistPhase {
   const s = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
   const phase = /Decrypting using/i.test(s) ? 'decrypt' : /二进制合并|Binary merging/i.test(s) ? 'merge' : 'download'
   if (phase !== 'download' && workDir) {
-    const segments = reDownloadedSegments(workDir)
+    const segments = reDownloadedSegments(workDir, listedTotal)
     // RE merges each HLS part before it downloads the next part. A part's
     // merge message must not permanently hide the remaining download speed.
     if (segments && segments.done < segments.total) return 'download'
@@ -865,6 +883,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   let stopping: Promise<void> | undefined
   let phase: PlaylistPhase = 'download'
   let decryptAt = 0
+  let listedTotal: number | undefined
   const measureTransfer = transferSpeed()
   const failures = reHttpFailureMonitor()
   const stop = () => {
@@ -885,7 +904,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   const emitSidecar = () => {
     if (!cb || !cwd) return
     if (phase === 'download') {
-      const segments = reDownloadedSegments(cwd)
+      const segments = reDownloadedSegments(cwd, listedTotal)
       if (segments) cb(Math.min(0.99, segments.done / segments.total), 1, {
         phase, segments: { done: segments.done, total: segments.total }, transfer: measureTransfer(segments.bytes),
       })
@@ -903,7 +922,8 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   emitSidecar()
   const collect = (chunk: string) => {
     output = (output + chunk).slice(-16384)
-    bumpPhase(reWorkPhase(chunk, cwd))
+    listedTotal ??= reListedSegments(output)
+    bumpPhase(reWorkPhase(chunk, cwd, listedTotal))
     progress(chunk)
     emitSidecar()
     const status = failures.feed(chunk)
@@ -938,7 +958,7 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
         }
       } catch { /* log is not created yet */ }
     }
-    bumpPhase(reWorkPhase(log + '\n' + output, cwd))
+    bumpPhase(reWorkPhase(log + '\n' + output, cwd, listedTotal))
     emitSidecar()
   }, 250) : undefined
   const stopLogWatch = () => { clearInterval(logWatch) }
