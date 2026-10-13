@@ -6,6 +6,13 @@ import appIconIco from '../../build/icon.ico?asset'
 import trayPng16 from '../../build/tray-16.png?asset'
 import trayPng32 from '../../build/tray-32.png?asset'
 import { trayKey, trayModel } from './tray-model'
+
+// 与 electron-builder.yml 的 appId 保持一致：Windows 按它分组任务栏按钮、找快捷方式图标
+const APP_ID = 'shop.videohack.gvs'
+// 任务栏按钮图标必须是磁盘上的真实文件（asar 里的路径 shell 读不到）：打包后用 exe 自带图标，dev/preview 用 build/icon.ico
+function taskbarIconPath(): string {
+  return app.isPackaged ? process.execPath : appIconIco
+}
 import { DatabaseSync } from 'node:sqlite'
 import createEd2kWorker from './ed2k-worker?nodeWorker'
 import { HistoryService } from './history-service'
@@ -327,6 +334,12 @@ function createWindow(): void {
       spellcheck: false,
     },
   })
+  if (process.platform === 'win32') {
+    // dev/preview 下进程是 electron.exe，只设 window icon 不够：任务栏会按 AUMID 回退到 exe 图标。
+    // setAppDetails 写入窗口级 AppUserModel 属性（含 RelaunchIconResource），任务栏就显示 GVS 图标。
+    win.setAppDetails({ appId: APP_ID, appIconPath: taskbarIconPath(), appIconIndex: 0, relaunchDisplayName: 'GVS' })
+    win.setIcon(nativeImage.createFromPath(appIconIco))
+  }
   win.once('ready-to-show', () => {
     if (!process.argv.includes('--hidden')) win?.show()
   })
@@ -372,7 +385,7 @@ app.whenReady().then(() => {
       : null,
   )
   handlePosterProtocol()
-  if (process.platform === 'win32') app.setAppUserModelId('shop.videohack.gvs')
+  if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
   createWindow()
   try {
     createTray()
