@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { dirname, extname, join } from 'node:path'
 import type { ActualVersion, CompletedMedia, GVSActualRecord, MediaSpecs } from './actual-version.ts'
 import { readMp4Tracks } from './mp4box.ts'
-import { lookMP4Box, tuiBinDir } from './tools.ts'
+import { lookHostFFmpeg, lookMP4Box, tuiBinDir } from './tools.ts'
 
 /** Bounded content sampling survives rename/move and detects many accidental record/file mismatches. */
 export function fileFingerprint(path: string): GVSActualRecord['file'] {
@@ -102,24 +102,112 @@ export function hostFFprobe(): string | undefined {
     .map(dir => join(dir, executable)).find(p => { try { return statSync(p).isFile() } catch { return false } })
 }
 
-/** Optional host ffprobe; no tool download and no decoding of the full video. */
+const channelLayouts: Record<string, number> = { mono: 1, stereo: 2, '2.1': 3, '3.0': 3, quad: 4, '4.0': 4, '4.1': 5, '5.0': 5, '5.1': 6, '6.1': 7, '7.1': 8 }
+
+/**
+ * Stream header that FFmpeg prints for `ffmpeg -i` (stderr), as ffprobe-shaped
+ * streams. Windows installs ship ffmpeg but no ffprobe; this reads the same
+ * container/codec headers without decoding. Unrecognized lines are ignored, so
+ * missing fields stay missing instead of being guessed.
+ */
+export function ffprobeStreamsFromFFmpegInfo(text: string): Array<Record<string, any>> {
+  const streams: Array<Record<string, any>> = []
+  let current: Record<string, any> | undefined
+  let section: 'metadata' | 'side' | '' = ''
+  for (const line of text.split(/\r?\n/)) {
+    const head = /^\s*Stream #\d+:(\d+)(?:\[(0x[0-9a-f]+)\])?(?:\(([^)]*)\))?: (Video|Audio|Subtitle|Data|Attachment): (.*)$/i.exec(line)
+    if (head) {
+      const [, index, id, language, kind, rest] = head
+      const codecType = kind!.toLowerCase()
+      const codec = /^([\w-]+)(?: \(([^)]*)\))?/.exec(rest!)
+      current = { index: Number(index), codec_type: codecType, codec_name: codec?.[1] || 'unknown',
+        ...(codec?.[2] && !/ \/ 0x/.test(codec[2]) ? { profile: codec[2] } : {}),
+        ...(id ? { id } : {}), tags: language && language !== 'und' ? { language } : {},
+        disposition: { default: / \(default\)/.test(rest!) ? 1 : 0, attached_pic: / \(attached pic\)/.test(rest!) ? 1 : 0 } }
+      const bitrate = /(?:^|, )(\d+) kb\/s/.exec(rest!)
+      if (bitrate) current.bit_rate = String(Number(bitrate[1]) * 1000)
+      if (codecType === 'video') {
+        const size = /(?:^|[ ,])(\d{2,5})x(\d{2,5})(?=[ ,\[]|$)/.exec(rest!)
+        if (size) { current.width = Number(size[1]); current.height = Number(size[2]) }
+        const fps = /, ([\d.]+) fps/.exec(rest!)
+        if (fps) {
+          // FFmpeg rounds NTSC rates to two decimals (23.98); restore the exact x/1001 rate.
+          const value = Number(fps[1]), ntsc = Math.round(value * 1.001)
+          current.avg_frame_rate = value % 1 && Math.abs(ntsc * 1000 / 1001 - value) < 0.006 ? `${ntsc * 1000}/1001` : `${Math.round(value * 1000)}/1000`
+        }
+        // Pixel format details: "(tv, bt2020nc/bt2020/smpte2084)" or "(tv, bt709, progressive)".
+        const color = /^[\w-]+(?: \([^)]*\))*(?: \([^)]*\))?, \w+\(([^)]*)\)/.exec(rest!)
+        for (const part of color?.[1]?.split(',').map(s => s.trim()) ?? []) {
+          const triple = part.split('/')
+          if (triple.length === 3) current.color_transfer = triple[2]
+          else if (/^(bt709|bt470bg|smpte170m|smpte240m|bt2020nc|bt2020c)$/.test(part) && !current.color_transfer) current.color_transfer = part === 'bt2020nc' || part === 'bt2020c' ? '' : part
+        }
+        if (!current.color_transfer) delete current.color_transfer
+      } else if (codecType === 'audio') {
+        const parts = rest!.split(', ').map(s => s.trim())
+        for (const part of parts) {
+          const layout = /^([\w.]+)(?:\([^)]*\))?$/.exec(part)?.[1]
+          if (layout && channelLayouts[layout]) { current.channels = channelLayouts[layout]; break }
+          const count = /^(\d+) channels$/.exec(part)
+          if (count) { current.channels = Number(count[1]); break }
+        }
+      }
+      streams.push(current)
+      section = ''
+      continue
+    }
+    if (/^\S/.test(line) || /^\s{0,2}\S/.test(line)) { current = undefined; section = ''; continue }
+    if (!current) continue
+    if (/^\s+Metadata:\s*$/.test(line)) { section = 'metadata'; continue }
+    if (/^\s+Side data:\s*$/.test(line)) { section = 'side'; continue }
+    if (section === 'metadata') {
+      const tag = /^\s+([^:]+?)\s*:\s(.*)$/.exec(line)
+      if (tag) current.tags[tag[1]!] = tag[2]
+    } else if (section === 'side') {
+      const side = /^\s+([^:]+?):/.exec(line)?.[1]
+      if (side) (current.side_data_list ||= []).push({ side_data_type: side })
+    }
+  }
+  return streams
+}
+
+function captureTool(command: string, args: string[], stream: 'stdout' | 'stderr', signal?: AbortSignal): Promise<{ output: string; code: number | null }> {
+  return new Promise(resolve => {
+    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', stream === 'stdout' ? 'pipe' : 'ignore', stream === 'stderr' ? 'pipe' : 'ignore'], signal })
+    let output = '', settled = false
+    const finish = (code: number | null) => { if (!settled) { settled = true; clearTimeout(timer); resolve({ output: code === null ? '' : output, code }) } }
+    const timer = setTimeout(() => { child.kill(); finish(null) }, 15000)
+    const pipe = child[stream]!
+    pipe.setEncoding('utf8')
+    pipe.on('data', (chunk: string) => {
+      output += chunk
+      if (output.length > 524288) { child.kill(); finish(null) }
+    })
+    child.once('error', () => finish(null))
+    child.once('close', code => finish(code))
+  })
+}
+
+/**
+ * Host ffprobe when present; otherwise the ffmpeg the app already uses for
+ * muxing (Windows installs bundle ffmpeg only). No tool download and no
+ * decoding of the full video.
+ */
 export async function probeFinishedMedia(path: string, signal?: AbortSignal, options: ProbeAudioOptions = {}): Promise<MediaSpecs> {
   const candidate = hostFFprobe()
-  if (!candidate) return Promise.resolve({ status: 'unavailable' })
-  const payload = await new Promise<string>(resolve => {
-    const child = spawn(candidate, ['-v', 'error', '-probesize', '8M', '-analyzeduration', '8000000',
-      '-show_streams', '-show_format', '-of', 'json', path], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], signal })
-    let output = '', settled = false
-    const finish = (payload: string) => { if (!settled) { settled = true; clearTimeout(timer); resolve(payload) } }
-    const timer = setTimeout(() => { child.kill(); finish('') }, 15000)
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => {
-      output += chunk
-      if (output.length > 524288) { child.kill(); finish('') }
-    })
-    child.once('error', () => finish(''))
-    child.once('close', code => finish(code === 0 ? output : ''))
-  })
+  let payload = ''
+  if (candidate) {
+    const run = await captureTool(candidate, ['-v', 'error', '-probesize', '8M', '-analyzeduration', '8000000',
+      '-show_streams', '-show_format', '-of', 'json', path], 'stdout', signal)
+    payload = run.code === 0 ? run.output : ''
+  } else {
+    const ffmpeg = lookHostFFmpeg()
+    if (!ffmpeg) return { status: 'unavailable' }
+    // Without an output file ffmpeg exits non-zero after printing the input header.
+    const run = await captureTool(ffmpeg, ['-hide_banner', '-nostdin', '-probesize', '8M', '-analyzeduration', '8000000', '-i', path], 'stderr', signal)
+    const streams = run.code === null ? [] : ffprobeStreamsFromFFmpegInfo(run.output)
+    payload = streams.length ? JSON.stringify({ streams }) : ''
+  }
   signal?.throwIfAborted()
   const mp4box = payload && extname(path).toLowerCase() === '.mp4' ? lookMP4Box() : ''
   if (mp4box) {

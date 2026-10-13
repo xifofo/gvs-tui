@@ -51,6 +51,10 @@ export function youkuAudiosFromPlay(data: Record<string, unknown>, sourceVid = '
   const catalog = Array.isArray(data.audios) ? data.audios : []
   for (const a of catalog) {
     if (!isObj(a)) continue
+    // Catalog rows the gateway marks has_m3u8=false have no playlist for this
+    // vid (e.g. a dub edition listing the original-language Dolby/DTS under
+    // its own language). Offering them only produces a silently skipped track.
+    if (a.has_m3u8 === false && !asString(a.playlist_url)) continue
     const st = asString(a.stream_type)
     addAudio(
       st,

@@ -314,3 +314,14 @@ test('batch audio rebinding preserves the chosen default and codec', () => {
   expect(bound.map(a => a.codec)).toEqual(['AAC', 'AAC'])
   expect(selected[1]!.vid).toBe('EP1MIN')
 })
+
+test('bindYoukuAudioTracksToTask collapses edition copies of one track and keeps the chosen default', () => {
+  const task = { vid: 'XEN', languages: [{ vid: 'XEN', lang: '英语' }, { vid: 'XCN', lang: '普通话' }] }
+  const bound = bindYoukuAudioTracksToTask([
+    { id: 'XEN|cmfa1hd3|en', label: 'AAC', lang: '英语', vid: 'XEN' },
+    { id: 'XCN|cmfa1hd3|en', label: 'AAC', lang: '英语', vid: 'XCN', isDefault: true },
+    { id: 'XEN|cmfa1hd3|zh', label: 'AAC', lang: '普通话', vid: 'XEN' },
+    { id: 'XCN|cmfa1hd3|zh', label: 'AAC', lang: '普通话', vid: 'XCN' },
+  ], task)
+  expect(bound.map((t) => [t.id, !!t.isDefault])).toEqual([['XEN|cmfa1hd3|en', true], ['XCN|cmfa1hd3|zh', false]])
+})

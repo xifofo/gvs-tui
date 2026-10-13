@@ -66,6 +66,11 @@ export function lookBundledFFmpeg(): string {
   return process.platform === 'win32' ? existsFile(bundled) : workingFile(bundled)
 }
 
+/** Bundled or PATH ffmpeg that is already on this host; never downloads. */
+export function lookHostFFmpeg(): string {
+  return lookBundledFFmpeg() || workingFile(which('ffmpeg'))
+}
+
 let ffmpegInflight: Promise<string> | null = null
 export function ensureFFmpeg(note?: (s: string) => void, signal?: AbortSignal): Promise<string> {
   const bundled = lookBundledFFmpeg()

@@ -1017,6 +1017,7 @@ async function dlYouku(
       if (!audioPl) {
         // HQ 约定有独立音轨；缺 URL 时 soft-skip 该条，保留已下视频。
         emit('音轨', 0.67 + 0.18 * i / tracks.length, `跳过无播放列表音轨：${track.label}`)
+        runLog(`youku 跳过无播放列表音轨 ${[track.lang, track.label].filter(Boolean).join(' ')} vid=${audioVid}`)
         continue
       }
       const audioPath = join(work, `.${t.vid}.audio${i}.mp4`)
@@ -1255,7 +1256,7 @@ export function bindYoukuAudioTracksToTask(
   tracks: NonNullable<DlTask['audioTracks']>,
   task: Pick<DlTask, 'vid' | 'languages'>,
 ): NonNullable<DlTask['audioTracks']> {
-  return tracks.map((track) => {
+  const bound = tracks.map((track) => {
     const streamType = youkuAudioStreamType(track.id)
     const byLang = (task.languages ?? []).find((l) => {
       if (!l.vid || !l.lang || !track.lang) return false
@@ -1272,6 +1273,15 @@ export function bindYoukuAudioTracksToTask(
       vid: targetVid,
     }
   })
+  // Edition siblings list each other's tracks; after rebinding they collapse
+  // to one id. Keep one copy (and its default flag) so a track is not muxed twice.
+  const out: typeof bound = []
+  for (const track of bound) {
+    const prev = out.find((t) => t.id === track.id)
+    if (!prev) out.push(track)
+    else if (track.isDefault) prev.isDefault = true
+  }
+  return out
 }
 
 /** Vids that belong to this download task (primary + language editions). */

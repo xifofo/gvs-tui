@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { tencentActualVersion } from './actual-version.ts'
-import { fileFingerprint, finishedMediaRecord, finishedVersionRecord, mediaSpecsFromProbe, probeFinishedMedia, saveVersionRecord } from './gvs-record.ts'
+import { ffprobeStreamsFromFFmpegInfo, fileFingerprint, finishedMediaRecord, finishedVersionRecord, mediaSpecsFromProbe, probeFinishedMedia, saveVersionRecord } from './gvs-record.ts'
 import { readMp4Tracks } from './mp4box.ts'
 
 test('fingerprint survives rename, detects content changes and agrees with the Python reader', () => {
@@ -163,3 +163,39 @@ realMediaTest('real DTS 5.1 default is read instead of the retained AAC track', 
     expect((await probeFinishedMedia(file)).audio).toMatchObject({ codec: 'dts', channels: 6, index: 1, evidence: 'container' })
   } finally { rmSync(root, { recursive: true, force: true }) }
 }, 60000)
+
+test('ffmpeg input header gives the same specs as ffprobe when ffprobe is not installed', () => {
+  const mkv = [
+    "Input #0, matroska,webm, from 'movie.mkv':",
+    '  Metadata:',
+    '    ENCODER         : libebml v1.4.3 + libmatroska v1.6.3',
+    '  Duration: 00:06:10.83, start: 0.000000, bitrate: 19607 kb/s',
+    '  Stream #0:0: Video: hevc (Main 10), yuv420p10le(tv, bt709), 3840x1616, SAR 1:1 DAR 240:101, 23.98 fps, 23.98 tbr, 1k tbn (default)',
+    '    Metadata:',
+    '      BPS             : 19307417',
+    '      DURATION        : 00:06:10.787000000',
+    '  Stream #0:1(eng): Audio: aac (LC), 48000 Hz, stereo, fltp (default)',
+    '    Metadata:',
+    '      title           : 英语 AAC',
+    '  Stream #0:2(chi): Audio: eac3 (Dolby Digital Plus + Dolby Atmos), 48000 Hz, 5.1(side), fltp, 768 kb/s',
+    'At least one output file must be specified',
+  ].join('\r\n')
+  const streams = ffprobeStreamsFromFFmpegInfo(mkv)
+  expect(streams.map(s => [s.codec_type, s.codec_name, s.tags.language, s.disposition.default])).toEqual([
+    ['video', 'hevc', undefined, 1], ['audio', 'aac', 'eng', 1], ['audio', 'eac3', 'chi', 0]])
+  expect(mediaSpecsFromProbe(JSON.stringify({ streams }))).toEqual({ status: 'probed', codec: 'hevc', width: 3840, height: 1616,
+    fps: 24000 / 1001, durationSeconds: 370.787, videoBitrate: 19307417, dynamicRange: 'SDR',
+    audio: { status: 'confirmed', index: 0, evidence: 'container', codec: 'aac', channels: 2 } })
+  expect(streams[2]).toMatchObject({ channels: 6, profile: 'Dolby Digital Plus + Dolby Atmos', bit_rate: '768000' })
+
+  const dv = [
+    '  Stream #0:0[0x1](und): Video: hevc (Main 10) (dvh1 / 0x31687664), yuv420p10le(tv, bt2020nc/bt2020/smpte2084), 3840x1920, 15643 kb/s, 60 fps, 60 tbr, 15360 tbn (default)',
+    '    Side data:',
+    '      DOVI configuration record: version: 1.0, profile: 5, level: 9, rpu flag: 1, el flag: 0, bl flag: 1, compatibility id: 0',
+    '  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, stereo, fltp, 256 kb/s (default)',
+  ].join('\n')
+  expect(mediaSpecsFromProbe(JSON.stringify({ streams: ffprobeStreamsFromFFmpegInfo(dv) }))).toMatchObject({
+    status: 'probed', codec: 'hevc', width: 3840, height: 1920, fps: 60, videoBitrate: 15643000, dynamicRange: 'DV',
+    audio: { status: 'confirmed', index: 0, codec: 'aac', channels: 2, trackId: 2 } })
+  expect(ffprobeStreamsFromFFmpegInfo("/missing.mkv: No such file or directory")).toEqual([])
+})

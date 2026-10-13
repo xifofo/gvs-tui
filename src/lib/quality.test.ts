@@ -117,6 +117,18 @@ test('youkuEditionLabel', () => {
   expect(youkuEditionLabel('英语', 'en')).toBe('英语版')
 })
 
+test('youkuAudiosFromPlay skips catalog audio the gateway lists without a playlist', () => {
+  const rows = youkuAudiosFromPlay({
+    audio_tracks: [{ stream_type: 'cmfa1hd3', lang: '普通话', langcode: 'guoyu', default: true, playlist_url: 'https://cdn/zh-aac' }],
+    audios: [
+      { stream_type: 'cmfa4hd4_51', lang: '普通话', name: 'DOLBY', has_m3u8: false, media_type: 'audio' },
+      { stream_type: 'cmfa3hd5_dtsc51', lang: '普通话', name: 'DTS', has_m3u8: false, media_type: 'audio' },
+      { stream_type: 'cmfa4hd4_51', lang: 'en', name: 'DOLBY', has_m3u8: true, playlist_url: 'https://cdn/en-dolby', media_type: 'audio' },
+    ],
+  }, 'XCN', '普通话')
+  expect(rows.map((a) => `${a.lang} ${a.label}`).sort()).toEqual(['普通话 AAC', '英语 杜比 5.1'])
+})
+
 test('youkuMergeEditionAudios keeps each vid stream language on the same codec', () => {
   const rows = youkuMergeEditionAudios(
     'XEN',
