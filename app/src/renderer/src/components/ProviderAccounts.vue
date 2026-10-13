@@ -20,7 +20,7 @@ async function command(c: SessionCommand) {
   try {
     const v = await gvs('providerSession', c)
     if (current !== revision) return
-    views[c.provider + (c.provider === 'hamivideo' ? ':' + (c.op.startsWith('web_') ? 'web' : 'tv') : '')] = v
+    views[c.provider + (c.provider === 'migu' ? ':' + v.terminal : c.provider === 'hamivideo' ? ':' + (c.op.startsWith('web_') ? 'web' : 'tv') : '')] = v
     if (c.provider === 'iq') iqStatusError.value = ''
     toast(v.summary, v.authenticated ? 'ok' : 'muted')
   } catch (e) { if (current === revision) toast(errText(e), 'err') }
@@ -63,15 +63,15 @@ onBeforeUnmount(() => { revision++ })
 </script>
 
 <template>
-  <div v-if="allowed('migu')" class="provider-account">
-    <h3>咪咕视频</h3>
-    <p>使用咪咕视频 App 扫码一次，自动检查 TV 权益，合并显示 TV 4K 和 App HDR Vivid 画质。</p>
+  <div v-for="terminal in allowed('migu') ? (['mobile','tv'] as const) : []" :key="terminal" class="provider-account">
+    <h3>{{ terminal === 'mobile' ? '咪咕 App' : '咪咕 TV（咪视界）' }}</h3>
+    <p>{{ terminal === 'mobile' ? '使用咪咕视频 App 扫码，读取 App 目录与画质，支持源站可用的 HDR Vivid。' : '使用咪咕视频 App 扫码授权咪视界，读取 TV 目录与画质，支持源站可用的 4K。' }}</p>
     <div class="controls">
-      <button class="btn sm" :disabled="busy" @click="store.qr='migu'">咪咕扫码登录</button>
-      <button class="btn sm" :disabled="busy" @click="command({provider:'migu',op:'status'})">咪咕账号状态</button>
-      <button class="btn sm" :disabled="busy" @click="command({provider:'migu',op:'logout'})">咪咕退出登录</button>
+      <button class="btn sm" :disabled="busy" @click="store.miguQrTerminal=terminal;store.qr='migu'">扫码登录</button>
+      <button class="btn sm" :disabled="busy" @click="command({provider:'migu',op:'status',terminal})">账号状态</button>
+      <button class="btn sm" :disabled="busy" @click="command({provider:'migu',op:'logout',terminal})">退出此端</button>
     </div>
-    <p v-if="views.migu" aria-live="polite">{{ views.migu.summary }}</p>
+    <p v-if="views['migu:' + terminal]" aria-live="polite">{{ views['migu:' + terminal].summary }}</p>
   </div>
   <div v-if="allowed('mgtv')" class="provider-account">
     <h3>芒果 TV · App 扫码登录</h3>

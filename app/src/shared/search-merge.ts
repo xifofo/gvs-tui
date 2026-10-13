@@ -49,7 +49,8 @@ export function extractYear(...texts: Array<string | undefined>): number {
 
 const yearsCompatible = (a: number, b: number) => !a || !b || a === b
 
-export function mergeSearch<C extends MergeCard>(groups: ReadonlyArray<{ provider: string; cards: readonly C[] }>): ShowRow<C>[] {
+/** `sourceKey` decides which cards count as the same source (default: provider); e.g. Migu App vs Migu TV stay separate. */
+export function mergeSearch<C extends MergeCard>(groups: ReadonlyArray<{ provider: string; cards: readonly C[] }>, sourceKey: (c: C) => string = (c) => c.provider): ShowRow<C>[] {
   const rows: ShowRow<C>[] = []
   const byTitle = new Map<string, ShowRow<C>[]>()
   groups.forEach((g) => {
@@ -59,7 +60,7 @@ export function mergeSearch<C extends MergeCard>(groups: ReadonlyArray<{ provide
       const candidates = norm ? byTitle.get(norm) ?? [] : []
       const row = candidates.find((r) => yearsCompatible(r.year, year) && (!r.mediaKind || !c.mediaKind || r.mediaKind === c.mediaKind))
       if (row) {
-        if (!row.sources.some((s) => s.provider === c.provider)) row.sources.push(c)
+        if (!row.sources.some((s) => sourceKey(s) === sourceKey(c))) row.sources.push(c)
         if (!row.year && year) row.year = year
         if (!row.poster && c.poster) row.poster = c.poster
         if (!row.desc && c.desc) row.desc = c.desc
@@ -85,10 +86,10 @@ export function mergeSearch<C extends MergeCard>(groups: ReadonlyArray<{ provide
 }
 
 /** Keep only rows having at least one source in `providers` (empty set = no filter), trimming other sources. */
-export function filterRows<C extends MergeCard>(rows: ShowRow<C>[], providers: ReadonlySet<string>): ShowRow<C>[] {
+export function filterRows<C extends MergeCard>(rows: ShowRow<C>[], providers: ReadonlySet<string>, sourceKey: (c: C) => string = (c) => c.provider): ShowRow<C>[] {
   if (!providers.size) return rows
   return rows.flatMap((r) => {
-    const sources = r.sources.filter((s) => providers.has(s.provider))
+    const sources = r.sources.filter((s) => providers.has(sourceKey(s)))
     return sources.length ? [{ ...r, sources }] : []
   })
 }

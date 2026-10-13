@@ -40,6 +40,7 @@ const starting = ref(false)
 const manualKind = ref(false)
 let tmdbSeq = 0
 const isMovie = computed(() => d.value?.kind === 'movie')
+const miguApp = computed(() => d.value?.provider === 'migu' && !d.value.id.startsWith('tv:') && !d.value.id.startsWith('tv-series:'))
 const canMatchTmdb = computed(() => supportsTmdb(d.value?.provider))
 
 const quality = computed(() => probe.value?.qualities[qIndex.value] ?? null)
@@ -288,6 +289,9 @@ const spec = (q: { width: number; height: number; size: number; fps: number }) =
     .filter(Boolean)
     .join(' · ')
 const CODEC_NAME: Record<string, string> = { bytevc1: 'H.265', bytevc2: 'H.266', h264: 'H.264', avc: 'H.264', h265: 'H.265', hevc: 'H.265', av1: 'AV1' }
+const renditionSize = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : bytes > 0 ? `${(bytes / 1024 ** 2).toFixed(2)} MB` : '源站未提供'
+/** 咪咕 App 每档是独立文件：显示源站给的时长 hh:mm:ss */
+const renditionDuration = (sec?: number) => sec ? [Math.floor(sec / 3600), Math.floor((sec % 3600) / 60), Math.floor(sec % 60)].map((n) => String(n).padStart(2, '0')).join(':') : '源站未提供'
 /** 码流名给人看：红果的 id 是「1080p|bytevc1|」这种拼接串，去掉空段和标题里已有的部分，编码换成通用名 */
 function streamCode(q: { stream: string; label: string }): string {
   if (d.value?.provider === 'iqcn') return ''
@@ -425,21 +429,31 @@ async function applyRule() {
             <fieldset class="qsec fs video-options">
               <legend class="qsec-h"><Icon name="movie" :size="16" /><span>视频画质</span><span class="muted small">{{ probe.qualities.length }} 档</span></legend>
               <div class="vgrid stagger">
-                <label v-for="q in probe.qualities" :key="q.index" class="vcard opt" :class="{ on: q.index === qIndex, rule: ruleMatch?.index === q.index }">
+                <label
+                  v-for="q in probe.qualities" :key="q.index" class="vcard opt" :class="{ on: q.index === qIndex, rule: ruleMatch?.index === q.index, migu: miguApp }"
+                  :aria-label="miguApp ? `${q.label} · ${CODEC_NAME[q.codec.toLowerCase()] || q.codec} · ${q.width}×${q.height} · ${human(q.size)}` : undefined"
+                >
                   <input v-model="qIndex" type="radio" name="quality" :value="q.index" class="sr-only" />
                   <span class="vtop">
+                    <span v-if="miguApp" class="mono muted idx" title="序号">#{{ q.index + 1 }}</span>
                     <span class="res">{{ vRes(q) }}</span>
                     <span v-if="vHdr(q)" class="hdr" :class="{ dv: vHdr(q) === '杜比视界' }">{{ vHdr(q) }}</span>
                     <span class="radio"><span v-if="q.index === qIndex" /></span>
                   </span>
                   <span class="on-t">{{ qname(q) }}</span>
-                  <span class="vspec">
+                  <span v-if="miguApp" class="vspec">
+                    <span class="mono" title="视频编码">{{ CODEC_NAME[q.codec.toLowerCase()] || q.codec || '未知' }}</span>
+                    <span class="mono" title="分辨率">{{ q.width && q.height ? `${q.width}×${q.height}` : '未知' }}</span>
+                    <span class="mono" title="影片时长">{{ renditionDuration(q.duration) }}</span>
+                  </span>
+                  <span v-else class="vspec">
                     <span v-if="vCodec(q)" class="mono">{{ vCodec(q) }}</span>
                     <span v-if="q.width && q.height" class="mono">{{ q.width }}×{{ q.height }}</span>
                     <span v-if="q.fps" class="mono">{{ q.fps }}帧</span>
                   </span>
                   <span class="vfoot">
-                    <span class="size mono">{{ q.size ? `${isMovie ? '' : '每集 '}≈ ${human(q.size)}` : '大小未知' }}</span>
+                    <span v-if="miguApp" class="size mono" title="文件体积">{{ renditionSize(q.size) }}</span>
+                    <span v-else class="size mono">{{ q.size ? `${isMovie ? '' : '每集 '}≈ ${human(q.size)}` : '大小未知' }}</span>
                     <span v-if="streamCode(q)" class="mono muted code">{{ streamCode(q) }}</span>
                     <span v-if="ruleMatch?.index === q.index" class="rtag">规则推荐</span>
                   </span>
@@ -627,6 +641,7 @@ async function applyRule() {
 .vcard:focus-within { outline: 2px solid var(--orange); outline-offset: 2px; }
 .vcard.sk { cursor: default; }
 .vtop { display: flex; align-items: center; gap: 8px; }
+.idx { font-size: 12px; font-weight: 700; }
 .res { font-family: var(--font-display); font-size: 24px; font-weight: 900; letter-spacing: -.5px; line-height: 1; }
 .vcard.on .res { color: var(--orange-text); }
 .hdr { height: 20px; padding: 0 7px; border-radius: 6px; font-size: 11px; font-weight: 850; display: inline-flex; align-items: center; color: var(--orange-text); border: 1px solid color-mix(in srgb, var(--orange) 40%, var(--line)); }

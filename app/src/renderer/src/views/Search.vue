@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { PROVIDER_NAME, type Card, type Provider } from '@shared/api'
+import { type Card } from '@shared/api'
+import { cardSourceKey, cardSourceName, providerSearchSources, splitSearchSources, type SearchSource, type SearchSourceKey } from '@shared/search-sources'
 import { filterRows, mergeSearch } from '@shared/search-merge'
 import { orderProviders } from '@shared/provider-registry'
 import Icon from '../components/Icon.vue'
@@ -17,7 +18,9 @@ const orderedGroups = computed(() => {
   const order = orderProviders(groups.value.map((g) => g.provider), prefs().providerOrder)
   return order.map((p) => groups.value.find((g) => g.provider === p)!).filter(Boolean)
 })
-const rows = computed(() => mergeSearch<Card>(orderedGroups.value))
+/** 咪咕 App / 咪咕 TV 是两个来源：同名作品各自保留一个入口 */
+const rows = computed(() => mergeSearch<Card>(orderedGroups.value, cardSourceKey))
+const sourceGroups = computed(() => splitSearchSources(orderedGroups.value))
 const filterSet = computed(() => new Set<string>(store.searchFilter))
 // ---- 画质徽标：先用搜索结果自带的文字，没有再懒加载探测（主进程限流 2 并发、12 秒超时、缓存 6 小时）
 const probed = reactive<Record<string, QualityHint | null>>({})
@@ -62,19 +65,22 @@ const sortBy = ref<'relevance' | 'quality'>('relevance')
 const qFilter = ref<'' | '4k' | 'hdr' | 'dolby'>('')
 const passQ = (h: QualityHint) => !qFilter.value || (qFilter.value === '4k' ? h.badges.includes('4K') : qFilter.value === 'hdr' ? h.badges.includes('HDR') || h.badges.includes('DV') : h.badges.includes('DOLBY') || h.badges.includes('ATMOS'))
 const shown = computed(() => {
-  const list = filterRows(rows.value, filterSet.value).filter((r) => passQ(hintOf(r)))
+  const list = filterRows(rows.value, filterSet.value, cardSourceKey).filter((r) => passQ(hintOf(r)))
   return sortBy.value === 'quality' ? list.map((r, i) => ({ r, i, s: qualityScore(hintOf(r)) })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.r) : list
 })
 const total = computed(() => groups.value.reduce((n, g) => n + g.cards.length, 0))
-const failed = computed(() => groups.value.filter((g) => g.error))
-const returned = computed(() => groups.value.map((g) => g.provider))
-const filterProviders = computed<Provider[]>(() => [...returned.value, ...store.searchPending.filter((p) => !returned.value.includes(p))])
-const countOf = (p: Provider) => groups.value.find((g) => g.provider === p)?.cards.length ?? 0
+const failed = computed(() => sourceGroups.value.filter((g) => g.error))
+const pendingSources = computed(() => store.searchPending.flatMap(providerSearchSources))
+const isPending = (key: SearchSourceKey) => pendingSources.value.some((s) => s.key === key)
+const returnedSources = computed(() => sourceGroups.value.filter((g) => g.cards.length || g.error))
+const filterSources = computed<SearchSource[]>(() => [...returnedSources.value, ...pendingSources.value.filter((s) => !returnedSources.value.some((g) => g.key === s.key))])
+const groupOf = (key: SearchSourceKey) => sourceGroups.value.find((g) => g.key === key)
+const countOf = (key: SearchSourceKey) => groupOf(key)?.cards.length ?? 0
 watch(() => store.search?.query, () => { store.searchFilter = [] })
 
 const menuOpen = ref(false)
 const menu = ref<HTMLElement | null>(null)
-function toggleFilter(p: Provider) {
+function toggleFilter(p: SearchSourceKey) {
   const set = new Set(store.searchFilter)
   set.has(p) ? set.delete(p) : set.add(p)
   store.searchFilter = [...set]
@@ -82,8 +88,8 @@ function toggleFilter(p: Provider) {
 const filterLabel = computed(() => {
   const n = store.searchFilter.length
   if (!n) return '全部平台'
-  if (n === 1) return PROVIDER_NAME[store.searchFilter[0]!]
-  return `${n} 个平台`
+  if (n === 1) return filterSources.value.find((s) => s.key === store.searchFilter[0])?.name ?? '1 个来源'
+  return `${n} 个来源`
 })
 function onDoc(e: MouseEvent) {
   if (menuOpen.value && menu.value && !menu.value.contains(e.target as Node)) menuOpen.value = false
@@ -111,7 +117,7 @@ function metaText(row: { year: number; meta: string }): string {
     <div class="head">
       <h1 class="h1 q">“{{ store.query }}”</h1>
       <span v-if="store.search && groups.length" class="muted">
-        {{ rows.length }} 部作品 · {{ total }} 条结果 · {{ groups.length }} 个平台 · {{ (store.search.ms / 1000).toFixed(1) }}s
+        {{ rows.length }} 部作品 · {{ total }} 条结果 · {{ returnedSources.length }} 个来源 · {{ (store.search.ms / 1000).toFixed(1) }}s
       </span>
       <div class="qtools">
         <select v-model="qFilter" class="qsel" aria-label="按画质筛选">
@@ -127,12 +133,12 @@ function metaText(row: { year: number; meta: string }): string {
         </button>
         <div v-if="menuOpen" class="fmenu card" role="listbox" aria-multiselectable="true" aria-label="按平台筛选">
           <div class="fm-h"><span>筛选平台</span><button type="button" class="linkish" @click="store.searchFilter = []">全部</button></div>
-          <button v-for="p in filterProviders" :key="p" type="button" role="option" class="fm-i" :aria-selected="store.searchFilter.includes(p)" @click="toggleFilter(p)">
-            <span class="cb" :class="{ on: store.searchFilter.includes(p) }"><Icon v-if="store.searchFilter.includes(p)" name="check" :size="12" :stroke="3" /></span>
-            <PlatformLogo :provider="p" :size="16" />
-            <span class="fm-n">{{ PROVIDER_NAME[p] }}</span>
-            <span v-if="store.searchPending.includes(p)" class="spin" style="width: 12px; height: 12px" />
-            <span v-else class="mono muted small">{{ groups.find((g) => g.provider === p)?.error ? '!' : countOf(p) }}</span>
+          <button v-for="s in filterSources" :key="s.key" type="button" role="option" class="fm-i" :aria-selected="store.searchFilter.includes(s.key)" @click="toggleFilter(s.key)">
+            <span class="cb" :class="{ on: store.searchFilter.includes(s.key) }"><Icon v-if="store.searchFilter.includes(s.key)" name="check" :size="12" :stroke="3" /></span>
+            <PlatformLogo :provider="s.provider" :size="16" />
+            <span class="fm-n">{{ s.name }}</span>
+            <span v-if="isPending(s.key)" class="spin" style="width: 12px; height: 12px" />
+            <span v-else class="mono muted small">{{ groupOf(s.key)?.error ? '!' : countOf(s.key) }}</span>
           </button>
           <button type="button" class="fm-foot linkish" @click="go('accounts'); menuOpen = false">管理平台（排序 / 隐藏）</button>
         </div>
@@ -140,8 +146,8 @@ function metaText(row: { year: number; meta: string }): string {
     </div>
 
     <div v-if="store.searchPending.length || failed.length" class="status" aria-live="polite">
-      <span v-for="p in store.searchPending" :key="p" class="chip"><span class="spin" style="width: 10px; height: 10px" />{{ PROVIDER_NAME[p] }} 搜索中</span>
-      <span v-for="g in failed" :key="g.provider" class="chip warn" :title="g.error"><Icon name="alert" :size="13" />{{ PROVIDER_NAME[g.provider] }} 搜索失败</span>
+      <span v-for="p in pendingSources" :key="p.key" class="chip"><span class="spin" style="width: 10px; height: 10px" />{{ p.name }} 搜索中</span>
+      <span v-for="g in failed" :key="g.key" class="chip warn" :title="g.error"><Icon name="alert" :size="13" />{{ g.name }} 搜索失败</span>
     </div>
 
     <div v-if="store.searchError" class="error-box">{{ store.searchError }}</div>
@@ -161,10 +167,10 @@ function metaText(row: { year: number; meta: string }): string {
           <div class="srcs">
             <button
               v-for="c in row.sources" :key="c.provider + c.id" type="button" class="src" :disabled="!playable(c)"
-              :title="c.reason || `在${PROVIDER_NAME[c.provider]}打开`" @click="open(row, c)"
+              :title="c.reason || `在${cardSourceName(c)}打开`" @click="open(row, c)"
             >
               <PlatformLogo :provider="c.provider" :size="16" />
-              <span>{{ PROVIDER_NAME[c.provider] }}</span>
+              <span>{{ cardSourceName(c) }}</span>
               <span v-if="c.vip" class="chip warn tiny">VIP</span>
               <span v-else-if="c.target !== 'unavailable'" class="chip ok tiny">可看</span>
               <span v-else class="chip tiny">预约</span>

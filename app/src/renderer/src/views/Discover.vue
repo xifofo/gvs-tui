@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { PROVIDER_NAME, type Card, type Provider, type Section } from '@shared/api'
+import { type Card, type Section } from '@shared/api'
+import { providerSearchSources, type SearchSource } from '@shared/search-sources'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
@@ -9,8 +10,8 @@ import { errText, go, gvs, openCard, shownProviders, store } from '../store'
 
 defineOptions({ name: 'DiscoverView' })
 
-const browsable = computed<Provider[]>(() => shownProviders().filter((p) => p !== 'douyin'))
-const provider = ref<Provider | null>(null)
+const browsable = computed<SearchSource[]>(() => shownProviders().filter((p) => p !== 'douyin').flatMap(providerSearchSources))
+const provider = ref<SearchSource | null>(null)
 const sections = ref<Section[]>([])
 const section = ref<Section | null>(null)
 const cards = ref<Card[]>([])
@@ -31,27 +32,31 @@ watch(
   [browsable, connectionReady],
   ([list, ready], previous) => {
     if (!ready) { ++gen; loading.value = false; loadingMore.value = false; error.value = ''; return }
-    if (!previous?.[1] || !provider.value || !list.includes(provider.value)) void pick(list.includes(provider.value!) ? provider.value : list[0] ?? null)
+    const existing = list.find(source => source.key === provider.value?.key)
+    if (!previous?.[1] || !existing) void pick(existing ?? list[0] ?? null)
   },
   { immediate: true },
 )
 
-async function pick(p: Provider | null) {
+async function pick(p: SearchSource | null) {
   loadingMore.value = false
   moreError.value = ''
   provider.value = p
   sections.value = []
   section.value = null
   cards.value = []
+  notice.value = ''
   error.value = ''
   const g = ++gen
   if (!p || !connectionReady.value) { loading.value = false; return }
   loading.value = true
   try {
-    const list = await gvs('catalog', p)
+    const list = await gvs('catalog', p.provider)
     if (g !== gen) return
-    sections.value = list
-    const first = list.find((s) => s.available) ?? list[0]
+    const scoped = p.provider === 'migu' ? list.filter(s => s.sourceTerminal === (p.key === 'migu-tv' ? 'tv' : 'mobile')) : list
+    sections.value = scoped
+    const first = scoped.find((s) => s.available) ?? scoped[0]
+    if (!first && p.provider === 'migu') { notice.value = '此来源目录尚未就绪，请更新网关。'; return }
     await choose(first ?? null)
   } catch (e) {
     if (g === gen) error.value = errText(e)
@@ -73,7 +78,7 @@ async function choose(s: Section | null) {
   const g = ++gen
   loading.value = true
   try {
-    const r = await gvs('browse', provider.value, { ...s })
+    const r = await gvs('browse', provider.value.provider, { ...s })
     if (g !== gen) return
     cards.value = r.cards
     for (const c of r.channels) if (!sections.value.some((x) => x.id === c.id)) sections.value.push(c)
@@ -93,7 +98,7 @@ async function loadMore() {
   loadingMore.value = true
   moreError.value = ''
   try {
-    const r = await gvs('browse', provider.value, { ...section.value }, next.value)
+    const r = await gvs('browse', provider.value.provider, { ...section.value }, next.value)
     if (g !== gen) return
     const seen = new Set(cards.value.map((c) => c.id || c.title))
     const fresh = r.cards.filter((c) => !seen.has(c.id || c.title))
@@ -153,8 +158,8 @@ onBeforeUnmount(() => io?.disconnect())
     <div class="head">
       <h1 class="h1">发现</h1>
       <div class="tabs">
-        <button v-for="p in browsable" :key="p" type="button" class="pill" :class="{ on: p === provider }" :aria-label="PROVIDER_NAME[p]" :aria-pressed="p === provider" @click="pick(p)">
-          <PlatformLogo :provider="p" :size="16" />{{ PROVIDER_NAME[p] }}
+        <button v-for="p in browsable" :key="p.key" type="button" class="pill" :class="{ on: p.key === provider?.key }" :aria-label="p.name" :aria-pressed="p.key === provider?.key" @click="pick(p)">
+          <PlatformLogo :provider="p.provider" :size="16" />{{ p.name }}
         </button>
       </div>
     </div>
@@ -229,6 +234,8 @@ onBeforeUnmount(() => io?.disconnect())
         <span class="m">{{ c.meta || c.desc }}</span>
       </button>
     </section>
+
+    <div v-if="notice && cards.length && !loading" class="notice" role="status">{{ notice }}</div>
 
     <div v-if="more && !loading" ref="sentinel" class="sent">
       <template v-if="loadingMore">

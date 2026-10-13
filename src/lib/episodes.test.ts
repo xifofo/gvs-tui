@@ -2,6 +2,15 @@ import { describe, expect, test } from 'bun:test'
 import { parseEpisodes, episodeCollections } from './episodes.ts'
 import { folder, type Naming } from './name.ts'
 
+test('Migu clock durations remain full episode seconds instead of the minute prefix', () => {
+  const eps = parseEpisodes({ episodes: [
+    { vid: 'migu', duration: '45:25' }, { vid: 'hour', duration: '01:45:25' },
+    { vid: 'seconds', duration: '2725' }, { vid: 'ms', duration_ms: 2725000 },
+    { vid: 'invalid', duration: '45:99' },
+  ] })
+  expect(eps.map(ep => ep.duration)).toEqual([2725, 6325, 2725, 2725, undefined])
+})
+
 test('season-specific details fill missing episode seasons without replacing explicit metadata', () => {
   const eps = parseEpisodes({ title: '大王饶命 第2季', episodes: [
     { vid: 'first', number: 1 },

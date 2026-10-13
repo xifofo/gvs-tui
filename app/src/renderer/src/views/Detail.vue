@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { PROVIDER_NAME } from '@shared/api'
+import { cardSourceName } from '@shared/search-sources'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
@@ -226,7 +226,7 @@ watch(d, () => {
       <div class="hero">
         <div class="wrap"><Poster class="poster hero-target" :url="d.poster" :provider="d.provider" :title="d.title" :title-size="22" /></div>
         <div class="info">
-          <div class="src"><PlatformLogo :provider="d.provider" :size="18" /><span>{{ PROVIDER_NAME[d.provider] }}</span><span v-if="d.vip" class="chip warn">VIP</span></div>
+          <div class="src"><PlatformLogo :provider="d.provider" :size="18" /><span>{{ cardSourceName(d) }}</span><span v-if="d.vip" class="chip warn">VIP</span></div>
           <h1 class="title" :title="d.title">{{ d.title }}</h1>
           <div class="facts">
             <span v-if="d.year" class="fact mono">{{ d.year }}</span>
@@ -241,9 +241,9 @@ watch(d, () => {
           </div>
           <div v-if="alternates.length" class="alts" role="group" aria-label="切换平台">
             <span class="muted small">也在</span>
-            <span class="alt on"><PlatformLogo :provider="d.provider" :size="16" />{{ PROVIDER_NAME[d.provider] }}</span>
-            <button v-for="a in alternates" :key="a.provider + a.id" type="button" class="alt" :title="`切换到 ${PROVIDER_NAME[a.provider]} 的版本`" @click="switchSource(a)">
-              <PlatformLogo :provider="a.provider" :size="16" />{{ PROVIDER_NAME[a.provider] }}<span v-if="a.vip" class="vip">VIP</span>
+            <span class="alt on"><PlatformLogo :provider="d.provider" :size="16" />{{ cardSourceName(d) }}</span>
+            <button v-for="a in alternates" :key="a.provider + a.id" type="button" class="alt" :title="`切换到 ${cardSourceName(a)} 的版本`" @click="switchSource(a)">
+              <PlatformLogo :provider="a.provider" :size="16" />{{ cardSourceName(a) }}<span v-if="a.vip" class="vip">VIP</span>
             </button>
           </div>
           <p v-if="d.desc" class="desc" :class="{ open: descOpen }">{{ d.desc }}</p>

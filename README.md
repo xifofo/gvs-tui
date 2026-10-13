@@ -254,8 +254,12 @@ bun run scripts/repair-youku-audio.ts 'input.mkv' --delay-ms 2000
 
 ## 咪咕视频
 
-Ctrl+9 切换咪咕，支持搜索、榜单、手机分享链接、完整分集、画质选择与本机 HLS 下载。“咪咕扫码”只需用咪咕视频 App 扫一次，自动验证 TV 能力。同一集通过源站 assetId 匹配，画质列表合并 TV 4K 与 App 2K HDR Vivid，默认按实际分辨率选最高，也能手动选 HDR Vivid。TV 直达 `tv:单集ID` 保留兼容。
+Ctrl+9 切换咪咕，支持搜索、榜单、手机分享链接、完整分集、画质选择与本机 HLS 下载。设置分别提供「咪咕 App」与「咪咕 TV」扫码、状态和退出；两端均使用咪咕视频 App 扫码确认，会话彼此独立。
 
-网关需要支持 unified 的 migu Provider 并配置手机/TV 协议材料；会话按 API Key 保存，客户端不持久化 token。统一入口用同一个手机单集 ID 和 mobile:5/tv:8 等来源画质标识取流，切换来源仍共用同集6小时扣次窗口。4K Vivid未验证；受保护、试看及降档流不可下载。API走本机隧道，媒体直连CDN。
+搜索中的咪咕与咪视界作品卡分开。App 使用手机分集和 `terminal=mobile`，TV 作品保留 `tv-series:作品ID`、单集保留 `tv:单集ID` 并使用 `terminal=tv`。各端只展示自己的画质，不跨端匹配或合并；下载前按原终端、单集和画质重新取链。网关需部署保留 TV 分集前缀的版本，并分别配置手机/TV 协议材料。API 走本机隧道，媒体直连 CDN。
+
+0.2.48 / Electron 0.1.47 配合网关3.9.66：首页推荐与分类也分别携带终端，TUI栏目显示“咪咕 App / TV · 推荐”等来源标题；Electron首页显示两个独立入口。App搜索从官方专题核对正片作品，《伟大的长征》不再只返回作者和花絮。
+
+旧任务若保存 `mobile:5/tv:8` 等合并画质标识，需重新打开对应来源的作品选择分集和画质。受保护、试看及降档流不可下载。
 
 相关回归：`bun test src/lib/migu.test.ts src/migu-runtime.test.ts`；本机媒体下载：`bun test scripts/web-video-download.test.ts`。

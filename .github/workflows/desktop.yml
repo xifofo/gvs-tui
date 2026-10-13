@@ -71,6 +71,8 @@ jobs:
         run: npm pkg set version="${GITHUB_REF_NAME#desktop-v}"
       - run: node node_modules/electron/install.js
       - run: bun run typecheck
+      - name: Verify search source mapping
+        run: bun test src/main/cards.test.ts src/main/search-sources.test.ts src/shared
       - name: Verify bounded download concurrency
         working-directory: .
         run: |
@@ -79,6 +81,24 @@ jobs:
           bun test src/lib/iq-subtitles.test.ts src/lib/iqcn-subtitles.test.ts
           bun test src/lib/jobs-hub.test.ts --test-name-pattern "Douyin passes configured concurrency"
       - run: bun x electron-vite build
+      - name: Verify Migu manifest transport in Electron (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          bun x vite build --config scripts/media-probe-smoke.config.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $probeEntry = (Resolve-Path '../.build/media-probe-smoke/smoke.cjs').Path
+          $probe = Start-Process -FilePath 'node_modules/electron/dist/electron.exe' -ArgumentList $probeEntry -WorkingDirectory '..' -WindowStyle Hidden -PassThru -Wait
+          Get-Content -LiteralPath '../.build/media-probe-smoke/result.json'
+          exit $probe.ExitCode
+      - name: Verify separate Migu App and TV search filters (Windows)
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: pwsh
+        run: |
+          $smoke = Start-Process -FilePath 'app/node_modules/electron/dist/electron.exe' -ArgumentList 'app/scripts/migu-search-smoke.cjs' -WindowStyle Hidden -PassThru -Wait
+          Get-Content -LiteralPath '.build/migu-search-smoke/result.json'
+          exit $smoke.ExitCode
       - run: bun x electron-builder ${{ matrix.target }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"

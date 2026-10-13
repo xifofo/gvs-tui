@@ -78,10 +78,12 @@ export type AppState = {
   platform: string
 }
 
-export type Section = { id: string; title: string; mode: string; available: boolean; reason?: string }
+export type Section = { id: string; title: string; mode: string; available: boolean; reason?: string; sourceTerminal?: 'mobile' | 'tv' }
 
 export type Card = {
   provider: Provider
+  /** 咪咕的作品来源；服务端平台权限仍统一使用 migu。 */
+  sourceTerminal?: 'mobile' | 'tv'
   id: string
   title: string
   poster: string
@@ -166,6 +168,7 @@ export type QualityView = {
   width: number
   height: number
   size: number
+  duration?: number
   codec: string
   drm: string
   hdr: string

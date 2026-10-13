@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { ipcArgs } from '@shared/ipc-args'
+import type { SearchSourceKey } from '@shared/search-sources'
 import { userMessage, userFacing } from '@shared/user-message'
 import type {
   AppState,
@@ -75,9 +76,10 @@ export const store = reactive({
   /** 首次引导进行中（连上网关后继续第 2、3 步） */
   onboarding: false,
   /** 搜索页的平台筛选（空 = 全部） */
-  searchFilter: [] as Provider[],
+  searchFilter: [] as SearchSourceKey[],
 
   qr: null as null | 'youku' | 'tencent' | 'iqcn' | 'mgtv' | 'migu' | 'bilibili',
+  miguQrTerminal: 'mobile' as 'mobile' | 'tv',
   /** 打开着的确认框数量：Esc 返回时要避开 */
   dialogCount: 0,
   update: null as UpdateState | null,

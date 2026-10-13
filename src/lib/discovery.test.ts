@@ -23,6 +23,21 @@ const row = (id: string, rank = 1) => ({
   target: { type: 'detail', id },
 })
 
+test('Migu discovery labels and dispatches each source recommendation independently', async () => {
+  const calls: Array<Record<string,unknown>>=[]
+  const d=new Discovery(async(_p,action,input)=>{
+    if(action==='browse_catalog')return {sections:[{id:'mobile:recommend',title:'推荐',mode:'home',contentType:'recommendation',available:true,sourceTerminal:'mobile'},{id:'tv:recommend',title:'推荐',mode:'home',contentType:'recommendation',available:true,sourceTerminal:'tv'}]}
+    calls.push(input)
+    return {items:[row(input.terminal==='tv'?'tv-series:968082109':'968082110')],hasMore:false}
+  },()=>{})
+  await d.open('migu')
+  expect(d.visibleSections.map(s=>s.title)).toEqual(['咪咕 App · 推荐','咪咕 TV · 推荐'])
+  expect(calls[0]).toMatchObject({terminal:'mobile',sectionId:'mobile:recommend'})
+  await d.choose(1)
+  expect(calls[1]).toMatchObject({terminal:'tv',sectionId:'tv:recommend'})
+  expect(d.view.rows[0]?.id).toBe('tv-series:968082109')
+})
+
 test('IQ opens its actual rank columns when the default home mode has no section', async () => {
   const calls: Array<{action:string;input:Record<string,unknown>}> = []
   const d = new Discovery(async (_p,action,input) => {

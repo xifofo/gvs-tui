@@ -113,16 +113,16 @@ export async function probeWebVideo(invoke: Invoke, provider: WebVideoProvider, 
   if (provider === 'migu') return miguOptions(await invoke(provider,'qualities',{id,...miguCapabilities(id)}))
   return provider === 'mgtv' ? mgtvOptions(await invoke(provider,'qualities',{vid:id,...mgtvCapabilities})) : bilibiliOptions(await invoke(provider,'resolve',{id}))
 }
-export function miguCapabilities(id: string) { return {terminal:id.startsWith('tv:') ? 'tv' : 'unified',devicePreset:'max'} }
+export function miguCapabilities(id: string) { return {terminal:id.startsWith('tv:') || id.startsWith('tv-series:') ? 'tv' : 'mobile',devicePreset:'max'} }
 export function miguOptions(data: Obj): {qualities:Quality[];audios:Audio[]} {
   const qualities = rows(data.qualityOptions).filter(q=>q.available === true).map((q):Quality=>({
     id:str(q.id),stream:str(q.id),label:str(q.label)||str(q.id),
     title:[str(q.rateTypeDesc),num(q.width)&&num(q.height) ? `${num(q.width)}×${num(q.height)}` : '源站画质'].filter(Boolean).join(' · '),
-    size:num(q.size),width:num(q.width),height:num(q.height),tier:num(q.height),codec:str(q.codec),drm:'none',
+    size:num(q.size),duration:num(q.duration),width:num(q.width),height:num(q.height),tier:num(q.height),codec:str(q.codec),drm:'none',
     hdr:q.hdrType === 'CUVAHDR' ? 'vivid' : str(q.hdrType).toLowerCase(),
     audios:[{id:'embedded',label:'随视频内嵌',lang:'原声',codec:'',isDefault:true,selected:true,embedded:true}],
   }))
-  qualities.sort((a,b)=>(b.id === str(data.recommendedQuality) ? 1 : 0)-(a.id === str(data.recommendedQuality) ? 1 : 0)||b.width*b.height-a.width*a.height)
+  qualities.sort((a,b)=>(b.id === str(data.recommendedQuality) ? 1 : 0)-(a.id === str(data.recommendedQuality) ? 1 : 0)||b.width*b.height-a.width*a.height||b.size-a.size)
   if (!qualities.length) {
     const options = rows(data.qualityOptions)
     if (options.length && options.every(q => q.unavailableReason === 'protected_stream')) throw new Error('该媒体受保护，本次咪咕各档画质均暂不支持下载；请换其他作品，无需重复扫码')
