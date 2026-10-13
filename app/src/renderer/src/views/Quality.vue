@@ -295,6 +295,8 @@ const renditionDuration = (sec?: number) => sec ? [Math.floor(sec / 3600), Math.
 /** 码流名给人看：红果的 id 是「1080p|bytevc1|」这种拼接串，去掉空段和标题里已有的部分，编码换成通用名 */
 function streamCode(q: { stream: string; label: string }): string {
   if (d.value?.provider === 'iqcn') return ''
+  // 咪咕 App 的码流串含内部档位/用户编号（u121417|b1810…），编码与分辨率已单独成列，不展示
+  if (miguApp.value) return ''
   if (d.value?.provider === 'bilibili') return CODEC_NAME[q.stream.split('|')[1]?.toLowerCase() || ''] || ''
   const label = q.label.toLowerCase()
   const parts = q.stream.split('|').map((t) => t.trim()).filter((t) => t && !label.includes(t.toLowerCase()))
