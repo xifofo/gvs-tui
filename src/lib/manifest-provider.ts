@@ -22,7 +22,7 @@ export function manifestSources(data: Record<string, unknown>): ManifestSource[]
   }).filter(m => !!m.url)
 }
 export function manifestInput(provider: string, cfg: Pick<FileConfig, 'hamiClient'>, id: string, quality = 'auto'): Record<string, unknown> {
-  return { id, ...(provider === 'hamivideo' ? { client: cfg.hamiClient || 'tv', quality } : provider === 'friday' ? { quality } : {}) }
+  return { ...(provider === 'appletvplus' && id.startsWith('https://') ? {url:id} : {id}), ...(provider === 'hamivideo' ? { client: cfg.hamiClient || 'tv', quality } : provider === 'friday' || provider === 'appletvplus' ? { quality } : {}) }
 }
 export async function resolveManifest(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient'>, provider: string, id: string, quality = 'auto'): Promise<ManifestSource[]> {
   const data = await cli.invoke(provider, 'resolve', manifestInput(provider, cfg, id, quality))
@@ -31,6 +31,13 @@ export async function resolveManifest(cli: Pick<GwClient, 'invoke'>, cfg: Pick<F
   return sources
 }
 export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: string, id: string): Promise<{ qualities: Quality[]; audios: [] }> {
+  if (provider === 'appletvplus') {
+    const data = await cli.invoke(provider, 'probe', manifestInput(provider, cfg, id))
+    const rows = Array.isArray(data.qualities) ? data.qualities.filter(isObj) : []
+    const qualities: Quality[] = rows.filter(q => str(q.id) && Number(q.height) > 0).map(q => ({ id: str(q.id), label: str(q.label), title: '按网页账号权益授权 · PlayReady · 本机 HLS 下载解密', size: 0, width: Number(q.width) || 0, height: Number(q.height), codec: str(q.codec), drm: 'playready', stream: str(q.id), hdr: str(q.hdr), fps: Number(q.fps) || undefined, tier: tierHeight(Number(q.width) || 0, Number(q.height)) }))
+    if (!qualities.length) throw new Error('Apple TV 没有返回可用画质')
+    return { qualities, audios: [] }
+  }
   const sources = await resolveManifest(cli, cfg, provider, id)
   return { qualities: sources.map(s => {
     const selectable = provider === 'friday' ? [1080,2160].includes(s.height) : provider === 'hamivideo' && cfg.hamiClient !== 'web' && [480,720,1080,2160].includes(s.height)
@@ -53,16 +60,16 @@ export function parseContentKeys(value: unknown): string[] {
 
 export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient'>, provider: string, id: string, quality = 'auto'): Promise<ManifestSource[]> {
   const input = manifestInput(provider, cfg, id, quality)
-  if (provider === 'hamivideo' || provider === 'friday') input.download = true
+  if (provider === 'hamivideo' || provider === 'friday' || provider === 'appletvplus') input.download = true
   const sources = manifestSources(await cli.invoke(provider, 'resolve', input, undefined, { timeoutMs: 120_000 }))
   if (!sources.length) throw new Error('网关没有返回可用媒体清单')
   for (const source of sources) {
     if (source.live) throw new Error('直播录制尚未接入；不会启动无限下载')
     if (source.clear) continue
-    if (!['hamivideo', 'friday'].includes(provider) || source.drm !== 'widevine' || !source.contentKeys.length) {
+    const supported = provider === 'appletvplus' ? source.drm === 'playready' && source.format.toLowerCase() === 'hls' : ['hamivideo', 'friday'].includes(provider) && source.drm === 'widevine' && source.format.toLowerCase() === 'dash'
+    if (!supported || !source.contentKeys.length) {
       requireClearDownload(source)
     }
-    if (source.format.toLowerCase() !== 'dash') throw new Error('受保护下载需要 DASH 清单')
   }
   return sources
 }
@@ -70,8 +77,9 @@ export function requireClearDownload(source: ManifestSource): void {
   if (source.live) throw new Error('直播录制尚未接入；不会启动无限下载')
   if (!source.clear) throw new Error('DRM_CLIENT_UNAVAILABLE：网关当前返回许可证而非可直接使用的内容密钥；尚未接入此授权媒体处理，不会按明文下载，也不会请求设备私钥')
 }
-export function providerLink(text: string): { provider: 'mewatch' | 'hamivideo' | 'friday' | 'linetv'; url: string } | undefined {
+export function providerLink(text: string): { provider: 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'appletvplus'; url: string } | undefined {
+  if (/^umc\.cmc\.[a-z0-9]+$/.test(text.trim())) return {provider:'appletvplus',url:text.trim()}
   const found = text.match(new RegExp('https://[^ <>]+', 'g')) || []
-  for (const value of found) { try { const u = new URL(value.trim()); if (u.username || u.password) continue; if (u.hostname === 'hamivideo.hinet.net') return { provider: 'hamivideo', url: u.href }; if (u.hostname === 'mewatch.sg' || u.hostname === 'www.mewatch.sg') return { provider: 'mewatch', url: u.href }; if (u.hostname === 'video.friday.tw') return { provider: 'friday', url: u.href }; if (u.hostname === 'linetv.tw' || u.hostname === 'www.linetv.tw') return { provider: 'linetv', url: u.href } } catch {} }
+  for (const value of found) { try { const u = new URL(value.trim()); if (u.username || u.password) continue; if (u.hostname === 'tv.apple.com' && !u.port && /\/(show|movie|episode)\//.test(u.pathname)) return {provider:'appletvplus',url:u.href}; if (u.hostname === 'hamivideo.hinet.net') return { provider: 'hamivideo', url: u.href }; if (u.hostname === 'mewatch.sg' || u.hostname === 'www.mewatch.sg') return { provider: 'mewatch', url: u.href }; if (u.hostname === 'video.friday.tw') return { provider: 'friday', url: u.href }; if (u.hostname === 'linetv.tw' || u.hostname === 'www.linetv.tw') return { provider: 'linetv', url: u.href } } catch {} }
   return undefined
 }

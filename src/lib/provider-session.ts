@@ -1,10 +1,10 @@
-export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu'
-export type SessionCommand = { provider: SessionProvider; op: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string }
+export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus'
+export type SessionCommand = { provider: SessionProvider; op: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string }
 export type ProviderSessionView = { provider: SessionProvider; terminal?: 'mobile' | 'tv' | 'unified'; state: string; authenticated: boolean; summary: string; qrDataUrl?: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
 const positive = (v: unknown, fallback: number) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback
-const OPS = { mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']), friday: new Set(['import', 'status', 'refresh', 'qr', 'web', 'poll', 'logout']), linetv: new Set(['import', 'status', 'refresh', 'logout']) }
+const OPS = { appletvplus: new Set(['web','import','status','verify','logout']), mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']), friday: new Set(['import', 'status', 'refresh', 'qr', 'web', 'poll', 'logout']), linetv: new Set(['import', 'status', 'refresh', 'logout']) }
 
 /** Source credentials are transient: never persist or log command inputs. */
 export class ProviderSessions {
@@ -49,6 +49,10 @@ export class ProviderSessions {
     const miguFlow = this.miguFlows.get(miguTerminal)
     const key = c.provider + (c.provider === 'migu' ? ':'+miguTerminal : web ? ':web' : ':tv')
     const input: Record<string, unknown> = { op: c.op }
+    if (c.provider === 'appletvplus' && c.op === 'verify') {
+      if (!/^umc\.cmc\.[a-z0-9]+$/.test(c.id || '')) throw new Error('请输入用于验证播放权益的 Apple TV 单集或电影 ID')
+      input.id = c.id
+    }
     if (c.provider === 'migu') {
       input.terminal=miguTerminal
       if (miguTerminal === 'tv') input.verifyId='968181178'
@@ -213,6 +217,10 @@ export class ProviderSessions {
     }
     if (c.provider === 'linetv') {
       view.summary = authenticated ? 'LINE TV 已登录；会员 / FHD 以账号权益为准' : '匿名可看 SD；导入本人 Cookie 解锁会员内容'
+    }
+    if (c.provider === 'appletvplus') {
+      view.summary = text(data.summary) || (authenticated ? 'Apple TV 网页会话已验证' : '请导入本人官网 Cookie；App 会话不能直接代替网页 CK')
+      if (data.url) { const u = new URL(text(data.url)); if (u.protocol !== 'https:' || u.hostname !== 'tv.apple.com' || u.port || u.username || u.password) throw new Error('拒绝非官方 Apple TV 登录地址'); view.url = u.href }
     }
     if (c.provider === 'mewatch' && state === 'pending') {
       view.userCode = text(data.userCode) || previous?.userCode

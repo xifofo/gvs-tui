@@ -577,6 +577,7 @@ export class Core {
     if (this.has('hamivideo')) void this.providerSession({ provider: 'hamivideo', op: 'status' }).catch(() => {})
     if (this.has('friday')) void this.providerSession({ provider: 'friday', op: 'status' }).catch(() => {})
     if (this.has('linetv')) void this.providerSession({ provider: 'linetv', op: 'status' }).catch(() => {})
+    if (this.has('appletvplus')) void this.providerSession({ provider: 'appletvplus', op: 'status' }).catch(() => {})
     for (const p of ['mgtv','bilibili','migu'] as const) if (this.has(p)) void this.providerSession({provider:p,op:'status'}).catch(()=>{})
     if (this.has('migu')) void this.providerSession({provider:'migu',op:'status',terminal:'tv'}).catch(()=>{})
   }
@@ -1192,7 +1193,7 @@ export class Core {
     if (link.kind === 'mgtv' || link.kind === 'bilibili' || link.kind === 'migu') return this.detail(link.kind,link.url,hint)
     if (link.kind === 'iqcn') return this.detail('iqcn', link.url, hint)
     if (link.kind === 'iq') return this.detail('iq', link.url, hint)
-    if (link.kind === 'mewatch' || link.kind === 'hamivideo' || link.kind === 'friday' || link.kind === 'linetv') return this.detail(link.kind, link.url, hint)
+    if (link.kind === 'mewatch' || link.kind === 'hamivideo' || link.kind === 'friday' || link.kind === 'linetv' || link.kind === 'appletvplus') return this.detail(link.kind, link.url, hint)
     if (link.kind === 'youku') {
       let data: Record<string, unknown> = {}
       try {

@@ -1016,6 +1016,8 @@ export async function downloadPlaylist(opts: {
   key?: string
   /** Explicit Widevine download: per-content KID:KEY pairs, never CDM credentials. */
   contentKeys?: string[]
+  /** Keep selected provider subtitle groups when muxing a complete HLS master. */
+  keepSubtitles?: boolean
   /** Already fetched by the gateway before a short-lived MPD signature expires. */
   manifestText?: string
   /** Select an exact pixel height while keeping the best audio. */
@@ -1084,8 +1086,9 @@ export async function downloadPlaylist(opts: {
     }
     let source = opts.src
     if (opts.manifestText) {
-      if (!opts.manifestText.trimStart().startsWith('<') || !/<(?:\w+:)?MPD\b/.test(opts.manifestText) || Buffer.byteLength(opts.manifestText) > 8 << 20) throw new Error('网关返回的 DASH 清单无效')
-      source = join(workDir, 'source.mpd')
+      const manifestKind = opts.manifestText.trimStart().startsWith('#EXTM3U') ? 'm3u8' : opts.manifestText.trimStart().startsWith('<') && /<(?:\w+:)?MPD\b/.test(opts.manifestText) ? 'mpd' : ''
+      if (!manifestKind || Buffer.byteLength(opts.manifestText) > 8 << 20) throw new Error('网关返回的媒体清单无效')
+      source = join(workDir, `source.${manifestKind}`)
       writeFileSync(source, opts.manifestText, { mode: 0o600 })
     } else if (opts.transport === 'node') {
       // The supplied CENC key replaces remote/skd key discovery entirely.
@@ -1127,7 +1130,7 @@ export async function downloadPlaylist(opts: {
       ...(opts.select === 'video' ? ['--select-video'] : opts.contentKeys?.length && opts.select === 'muxed' ? [] : ['--auto-select']),
       ...(opts.select === 'video' ? ['best'] : []),
       ...(opts.select === 'video' ? ['--drop-audio', 'all', '--drop-subtitle', 'all'] : []),
-      ...(opts.select === 'muxed' ? ['--drop-subtitle', 'all'] : []),
+      ...(opts.select === 'muxed' ? opts.keepSubtitles ? ['--select-subtitle','all'] : ['--drop-subtitle', 'all'] : []),
       '--binary-merge',
       '--del-after-done', 'true',
       // Keep RE's redirected-output detection. Its forced ANSI/NonAnsiWriter

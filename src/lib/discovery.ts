@@ -116,6 +116,11 @@ export function fallbackSections(provider: string): Section[] {
     available = true,
     reason = '',
   ): Section => ({ id, title, mode, contentType, available, reason })
+  if (provider === 'appletvplus')
+    return [
+      section('apple-upgrade-home', 'Apple TV 推荐待升级', 'home', 'recommendation', false, '当前网关未接入 Apple TV，请升级网关后浏览'),
+      section('apple-upgrade-rank', 'Apple TV 榜单待升级', 'rank', 'rank', false, '当前网关未接入 Apple TV，请升级网关后浏览'),
+    ]
   if (provider === 'youku')
     return [
       section('legacy-recommend', '平台推荐', 'home', 'recommendation'),

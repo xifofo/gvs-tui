@@ -1423,6 +1423,7 @@ export class Runtime {
     if (iqcnLink) { if (!this.has('iqcn')) { this.say('当前 Key 没有爱奇艺国内版权限', 'warn'); return }; void this.detail('iqcn', iqcnLink); return }
     if (iqLink) { if (!this.has('iq')) { this.say('当前 Key 没有 IQ 海外版权限', 'warn'); return }; void this.detail('iq', iqLink); return }
     if (manifest) { if (!this.has(manifest.provider)) { this.say('当前 Key 没有该平台权限', 'warn'); return }; void this.detail(manifest.provider, manifest.url); return }
+    if (p === 'appletvplus' && !/^umc\.cmc\.[a-z0-9]+$/.test(query)) { this.say('Apple TV 请从发现页选作品，或输入官网链接/作品 ID', 'info'); return }
     if (!supportsSearch(p)) { void this.detail(p, query); return }
     const yk = extractYoukuVideoId(query),
       dy = extractDouyinURL(query),

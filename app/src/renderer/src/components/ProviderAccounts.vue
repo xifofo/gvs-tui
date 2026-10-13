@@ -9,6 +9,7 @@ const views = reactive<Record<string, ProviderSessionView>>({})
 const cookie = ref(''), phone = ref(''), code = ref(''), profile = ref(''), pin = ref('')
 const iqUsername = ref(''), iqPassword = ref(''), iqAreaCode = ref('')
 const iqStatusError = ref('')
+const appleVerifyID = ref('')
 const accountScope = computed(() => store.state?.accountScope || ((store.state?.settings.host || '') + ':' + (store.state?.settings.keyMasked || '')))
 const iqSummary = computed(() => iqStatusError.value || views.iq?.summary || store.state?.accounts.find(a => a.provider === 'iq')?.summary)
 let revision = 0
@@ -63,6 +64,16 @@ onBeforeUnmount(() => { revision++ })
 </script>
 
 <template>
+  <div v-if="allowed('appletvplus')" class="provider-account">
+    <h3>Apple TV · 官网 Cookie</h3>
+    <p>在 Apple TV 官网完成本人登录后导入 Cookie。目录和详情免登录，下载以账号权益和服务端 PlayReady 配置为准。</p>
+    <a class="btn sm" href="https://tv.apple.com/jp" target="_blank" rel="noopener noreferrer">打开 Apple TV 官网</a>
+    <textarea v-model="cookie" autocomplete="off" spellcheck="false" placeholder="本人官网 Cookie：需包含 itua 和 media-user-token" />
+    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'appletvplus',op:'import',cookie})">导入官网 CK</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'logout'})">退出</button></div>
+    <input v-model="appleVerifyID" autocomplete="off" placeholder="单集或电影 ID：umc.cmc.…" />
+    <button class="btn sm" :disabled="busy || !appleVerifyID.trim()" @click="command({provider:'appletvplus',op:'verify',id:appleVerifyID.trim()})">验证播放权益</button>
+    <p v-if="views.appletvplus" aria-live="polite">{{ views.appletvplus.summary }}</p>
+  </div>
   <div v-for="terminal in allowed('migu') ? (['mobile','tv'] as const) : []" :key="terminal" class="provider-account">
     <h3>{{ terminal === 'mobile' ? '咪咕 App' : '咪咕 TV（咪视界）' }}</h3>
     <p>{{ terminal === 'mobile' ? '使用咪咕视频 App 扫码，读取 App 目录与画质，支持源站可用的 HDR Vivid。' : '使用咪咕视频 App 扫码授权咪视界，读取 TV 目录与画质，支持源站可用的 4K。' }}</p>

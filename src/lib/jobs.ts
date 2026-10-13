@@ -381,7 +381,7 @@ export async function runTask(
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
         break
-      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv':
+      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus':
         await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
         break
       case 'hongguo':
@@ -1333,6 +1333,7 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
   emit('下载', 0.05, '源站 CDN → 本机；网关不转发视频')
   await writeFinal(out, async dest => {
     await downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, contentKeys: source.contentKeys,
+      keepSubtitles: t.provider === 'appletvplus',
       manifestText: source.manifest, videoHeight: source.height || undefined, threads: cfg.threads,
       select: 'muxed', muxTracks: true, transport: 're', workDir: work, workTag: 'manifest', signal,
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },

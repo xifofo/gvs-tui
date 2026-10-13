@@ -80,9 +80,11 @@ export function createIQCatalogFetch(options: { log: (line: string) => void; now
     const results = await Promise.allSettled(modes.map(async value => {
       const target = new URL(input)
       target.searchParams.set('modeCode', value)
-      const timeout = AbortSignal.timeout(options.searchTimeoutMs ?? 8_000)
-      const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout
-      return readSearch(await fetcher(target.href, { ...init, signal }))
+      const timeout = new AbortController()
+      const timer = setTimeout(() => timeout.abort(new DOMException('IQ catalog search timed out', 'TimeoutError')), options.searchTimeoutMs ?? 8_000)
+      const signal = init.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal
+      try { return await readSearch(await fetcher(target.href, { ...init, signal })) }
+      finally { clearTimeout(timer) }
     }))
     init.signal?.throwIfAborted()
     const first = results[0]!, second = results[1]
