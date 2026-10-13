@@ -3,6 +3,7 @@ bin/*
 dist/
 *.exe
 !bin/ffmpeg.exe
+!bin/ffprobe.exe
 !bin/mkvmerge.exe
 !bin/N_m3u8DL-RE.exe
 !bin/packager-win-x64.exe

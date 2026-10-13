@@ -95,7 +95,7 @@ export function mediaSpecsFromProbe(payload: string, options: ProbeAudioOptions 
   } catch { return { status: 'unavailable' } }
 }
 
-/** Host ffprobe from the tools directory or PATH; never downloaded. */
+/** Bundled ffprobe (repo bin / installed resources\\bin) first, then PATH; never downloaded. */
 export function hostFFprobe(): string | undefined {
   const executable = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
   return [tuiBinDir(), ...(process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':')]

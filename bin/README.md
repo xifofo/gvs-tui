@@ -2,7 +2,8 @@
 
 这些媒体工具由普通 Git 跟踪，clone/pull 后即可使用，无需 Git LFS、解压或另外下载工具。仅适用于 Windows x64。`manifest.json` 记录确切版本、文件长度及 SHA-256；`bun run tools:check` 在禁止网络的条件下验证文件和启动。macOS 的 `bin/ffmpeg`、`bin/MP4Box` 由 `tools:prepare` 生成为指向 Homebrew 的 wrapper，不要把 Cellar 里的 Mach-O 复制进来，也不要提交这些 wrapper。
 
-- `ffmpeg.exe`：9.0.1 essentials，102,856,192 字节，低于 GitHub 单文件 100 MiB 上限。采用 essentials 而非超过上限的 full 版；项目使用的流复制、解码检查、AES 解密、H.264/HEVC/AAC 功能已验证。不包含用于本机诊断的 ffprobe/ffplay，因为运行时不调用它们。
+- `ffmpeg.exe`：9.0.1 essentials，102,856,192 字节，低于 GitHub 单文件 100 MiB 上限。采用 essentials 而非超过上限的 full 版；项目使用的流复制、解码检查、AES 解密、H.264/HEVC/AAC 功能已验证。不包含 ffplay。
+- `ffprobe.exe`：同一 9.0.1 essentials 发行包中的 ffprobe，102,652,416 字节；用于下载完成后读取实际视频规格（自动命名）。未找到时运行时退回读取 ffmpeg 输入头。来源、源码与许可证同 ffmpeg.exe。
   - [原始发行包](https://github.com/GyanD/codexffmpeg/releases/download/9.0.1/ffmpeg-9.0.1-essentials_build.zip)
   - [对应 FFmpeg 源码](https://github.com/FFmpeg/FFmpeg/tree/bf1b838f2a)，[Gyan 构建与依赖说明](https://www.gyan.dev/ffmpeg/builds/)
   - GPL v3；许可证和上游完整构建配置见 `licenses/FFmpeg-GPL-3.0.txt`、`licenses/FFmpeg-build-README.txt`。
