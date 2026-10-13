@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('gvs',{
       {id:'tv:series',title:'电视剧',mode:'home',available:true,sourceTerminal:'tv'},
     ] : [{id:'fixture',title:'离线测试',mode:'home',available:true}]
     if(method==='browse')return {cards:args[0]==='migu'?clone(cards.filter(c=>c.sourceTerminal===args[1].sourceTerminal&&c.title==='伟大的长征')):[],channels:[],more:false,next:'',notice:''}
+    if(method==='historyShowCounts')return {}
+    if(method==='qualityHint')return null
     if(method==='parseLink')return {kind:'none'}
     if(method==='searchTargets')return providers
     if(method==='searchProvider')return {provider:args[0],cards:args[0]==='migu'?clone(cards):[card('youku','youku-show','其他平台作品')],error:''}
