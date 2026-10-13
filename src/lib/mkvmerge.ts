@@ -74,13 +74,13 @@ export async function mkvmergeRemux(
   outPath: string,
   onProgress?: (n: number, total: number) => void,
   signal?: AbortSignal,
-  audioLanguageFallback = '',
+  languageFallback = '',
 ): Promise<void> {
   const args = ['-o', outPath]
   const info = await identify(mkvmerge, inPath, signal)
-  for (const track of info.tracks.filter(t => t.type === 'audio')) {
-    args.push('--track-name', `${track.id}:`)
-    if (audioLanguageFallback && isUnknownAudioLanguage(trackLanguage(track))) args.push('--language', `${track.id}:${audioLanguageFallback}`)
+  for (const track of info.tracks.filter(t => t.type === 'audio' || t.type === 'video')) {
+    if (track.type === 'audio') args.push('--track-name', `${track.id}:`)
+    if (languageFallback && isUnknownAudioLanguage(trackLanguage(track))) args.push('--language', `${track.id}:${languageFallback}`)
   }
   args.push(inPath)
   return run(mkvmerge, args, { out: outPath, inputs: [inPath], cb: onProgress }, signal)
@@ -95,9 +95,12 @@ export async function mkvmergeRemux(
  */
 export type MuxAudio = { path: string; title?: string; lang?: string; delayMs?: number; isDefault?: boolean }
 
-export function mkvmergeMuxArgs(outPath: string, videoPath: string, audios: MuxAudio[]): string[] {
+export function mkvmergeMuxArgs(outPath: string, videoPath: string, audios: MuxAudio[], videoLanguages: ReadonlyArray<{ id: number; language: string }> = []): string[] {
   audios = orderedMuxAudios(audios)
-  const args = ['-o', outPath, '--no-audio', '--compression', '0:none', videoPath]
+  const args = ['-o', outPath, '--no-audio', '--compression', '0:none']
+  // Track IDs belong to this video input, before the separate audio inputs.
+  for (const track of videoLanguages) args.push('--language', `${track.id}:${track.language}`)
+  args.push(videoPath)
   const defaultIndex = defaultAudioIndex(audios)
   audios.forEach((a, i) => {
     const delay = a.delayMs ?? 0
@@ -120,7 +123,7 @@ export async function mkvmergeMux(
   onProgress?: (n: number, total: number) => void,
   signal?: AbortSignal,
   onWarning?: (message: string) => void,
-  audioLanguageFallback = '',
+  languageFallback = '',
 ): Promise<void> {
   audios = orderedMuxAudios(audios)
   const ffmpeg = await ensureFFmpeg()
@@ -128,6 +131,17 @@ export async function mkvmergeMux(
   let work = ''
   try {
     work = scratchDir(outPath, 'gvs-mux-')
+    let videoLanguages: Array<{ id: number; language: string }> = []
+    if (languageFallback) {
+      try {
+        const info = await identify(mkvmerge, videoPath, signal)
+        videoLanguages = info.tracks.filter(t => t.type === 'video' && isUnknownAudioLanguage(trackLanguage(t)))
+          .map(t => ({ id: t.id, language: languageFallback }))
+      } catch (e) {
+        signal?.throwIfAborted()
+        onWarning?.('未能读取源视频语言，保留原标签')
+      }
+    }
     // Catalog "原声" is not a language. Preserve meaningful input tags before
     // applying the TMDB fallback, and do this before any damaged-frame repair.
     await Promise.all(audios.map(async a => {
@@ -135,7 +149,7 @@ export async function mkvmergeMux(
       try {
         const info = await identify(mkvmerge, a.path, signal)
         const track = info.tracks.find(t => t.type === 'audio')
-        a.lang = resolveAudioLanguage(a.lang, track && trackLanguage(track), audioLanguageFallback)
+        a.lang = resolveAudioLanguage(a.lang, track && trackLanguage(track), languageFallback)
       } catch (e) {
         signal?.throwIfAborted()
         // Language inspection alone must not disable an otherwise usable input.
@@ -170,7 +184,7 @@ export async function mkvmergeMux(
     const initial = join(work, 'initial.mkv')
     // Do not apply negative adjustments before measuring: that could discard
     // early packets. Correction is done on a single shared Matroska timeline.
-    await run(mkvmerge, mkvmergeMuxArgs(initial, videoPath, audios.map(a => ({ ...a, delayMs: 0 }))), {
+    await run(mkvmerge, mkvmergeMuxArgs(initial, videoPath, audios.map(a => ({ ...a, delayMs: 0 })), videoLanguages), {
       out: initial, inputs: [videoPath, ...audios.map(a => a.path)], cb: onProgress,
     }, signal)
     const measure = async (path: string) => Promise.all([

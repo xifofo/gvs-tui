@@ -173,6 +173,41 @@ realMediaTest('IQ mux puts simplified and traditional subtitles first with corre
   } finally { rmSync(root, { recursive: true, force: true }) }
 }, 30000)
 
+realMediaTest('IQ video follows original language while each audio dub and Chinese subtitle retains its own language', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gvs-iq-track-language-'))
+  try {
+    const video = join(root, 'video.mkv'), audio = join(root, 'audio.m4a'), sub = join(root, 'sub.srt')
+    ff(['-f', 'lavfi', '-i', 'testsrc2=size=64x48:rate=25', '-t', '0.3', '-c:v', 'mpeg4', video])
+    ff(['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000', '-t', '0.3', '-c:a', 'aac', audio])
+    writeFileSync(sub, '1\n00:00:00,000 --> 00:00:00,200\n简体字幕\n')
+    const probe = (path: string) => JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', path],
+      { encoding: 'utf8', timeout: 10000 })).streams
+    const payloads = (path: string) => JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+      '-show_packets', '-show_data_hash', 'sha256', '-show_entries', 'packet=data_hash', '-of', 'json', path],
+      { encoding: 'utf8', timeout: 10000 })).packets.map((p: { data_hash: string }) => p.data_hash)
+    const videoPayloads = payloads(video)
+    for (const scenario of [
+      { name: 'thai-original', videoLanguage: 'th', audioLanguages: ['tha', 'tha'], expectedVideo: 'tha' },
+      { name: 'thai-selected-dub', videoLanguage: 'tha', audioLanguages: ['jpn', 'tha'], expectedVideo: 'tha' },
+      { name: 'fallback-default', videoLanguage: undefined, audioLanguages: ['jpn'], expectedVideo: 'jpn' },
+      { name: 'unknown-original', videoLanguage: 'und', audioLanguages: ['eng'], expectedVideo: 'und' },
+      { name: 'unknown-everywhere', videoLanguage: undefined, audioLanguages: ['und'], expectedVideo: 'und' },
+    ]) {
+      const dest = join(root, `${scenario.name}.mkv`)
+      await muxIQ('ffmpeg', { video, videoLanguage: scenario.videoLanguage,
+        audios: scenario.audioLanguages.map((language, index) => ({ path: audio, language, title: '原声', isDefault: index === 0 })),
+        subtitles: [{ path: sub, language: 'zho', title: '简体中文' }], dest, reservedOutput: false, emit: () => {} })
+      const streams = probe(dest)
+      expect(streams.find((s: { codec_type: string }) => s.codec_type === 'video').tags?.language ?? 'und').toBe(scenario.expectedVideo)
+      const audios = streams.filter((s: { codec_type: string }) => s.codec_type === 'audio')
+      expect(audios.map((s: { tags?: { language?: string } }) => s.tags?.language ?? 'und')).toEqual(scenario.audioLanguages)
+      expect(audios.map((s: { disposition: { default: number } }) => s.disposition.default)).toEqual(scenario.audioLanguages.map((_, i) => i === 0 ? 1 : 0))
+      expect(streams.find((s: { codec_type: string }) => s.codec_type === 'subtitle').tags.language).toBe('zho')
+      expect(payloads(dest)).toEqual(videoPayloads)
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}, 30000)
+
 test('IQ invalid reservations, mux failures and cancellation keep existing output and clean staging', async () => {
   const root = mkdtempSync(join(tmpdir(), 'gvs-iq-mux-fail-'))
   try {

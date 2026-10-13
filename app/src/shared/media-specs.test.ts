@@ -49,8 +49,8 @@ test('episode status: maps jobs to episodes of the same show only, best state wi
     expect(stateOf(s, { number: 2, season: 1 })).toBe('queued')
     expect(stateOf(s, { number: 3 })).toBeUndefined()
     expect(episodeKey(12, 2)).toBe('S02E12')
-    const renamed = episodeStates([{ groupId: 'iq:s:1', label: 'S02E05', state: 'running' }], 'iq', 's')
-    expect(stateOf(renamed, { number: 5, season: 1 })).toBe('running')
+    const renamed = episodeStates([{ groupId: 'iq:s:1', vid: 'v5', label: 'S02E05', state: 'running' }], 'iq', 's')
+    expect(stateOf(renamed, { vid: 'v5', number: 5, season: 1 })).toBe('running')
     expect(stateOf(renamed, { number: 50 })).toBeUndefined()
   })
 test('episode status: movies match by edition title', () => {

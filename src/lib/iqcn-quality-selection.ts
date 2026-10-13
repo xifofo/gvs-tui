@@ -3,6 +3,7 @@ import type { GwClient } from './client.ts'
 import type { DlTask } from './jobs.ts'
 import { asString, isObj } from './util.ts'
 import { iqcnEpisodeRendition } from './iqcn-rendition.ts'
+import { runLog } from './runlog.ts'
 
 export function iqcnSelection(quality: string): Record<string, string> {
   const parts = quality.split('|')
@@ -14,7 +15,7 @@ export function iqcnSelection(quality: string): Record<string, string> {
 }
 
 function code(value: unknown): number | undefined {
-  if ((typeof value !== 'number' && typeof value !== 'string') || value === '') return undefined
+  if ((typeof value !== 'number' && typeof value !== 'string') || typeof value === 'string' && !value.trim()) return undefined
   const n = Number(value)
   return Number.isInteger(n) && n >= 0 ? n : undefined
 }
@@ -61,6 +62,9 @@ function matches(actual: IQCNQualitySelection, expected: IQCNQualitySelection): 
   return (expected.codecCode === undefined || actual.codecCode === expected.codecCode)
     && (expected.dynamicRangeCode === undefined || actual.dynamicRangeCode === expected.dynamicRangeCode)
 }
+function uniqueRenditions(rows: Rendition[]): Rendition[] {
+  return [...new Map(rows.filter(row => row.selection.vid).map(row => [row.selection.vid, row])).values()]
+}
 
 /** Rebind the episode-specific VID without changing bitrate, fps, codec or range. */
 export async function resolveIQCNSelection(cli: GwClient, task: Pick<DlTask, 'vid' | 'quality' | 'iqcnQuality'> & Partial<Pick<DlTask, 'codec'>>, signal?: AbortSignal): Promise<Record<string, string>> {
@@ -77,6 +81,7 @@ export async function resolveIQCNSelection(cli: GwClient, task: Pick<DlTask, 'vi
   const current = currentProbe.rows
   const exact = current.find(row => sameTier(row.selection, requested) && row.selection.vid === requested.vid)
   let expected = task.iqcnQuality
+  let source: Rendition[] | undefined
   if (exact && (!expected || matches(exact.attributes, expected))) return exact.selection
   if (!expected?.sourceTvid) {
     // Upstream tasks without persisted rendition attributes still bind the
@@ -85,19 +90,31 @@ export async function resolveIQCNSelection(cli: GwClient, task: Pick<DlTask, 'vi
     throw new Error('爱奇艺国内版视频标识属于其他集，缺少原始画质依据，请重新选择画质')
   }
   if (expected.codecCode === undefined || expected.dynamicRangeCode === undefined) {
-    const source = expected.sourceTvid === task.vid ? current : (await probe(expected.sourceTvid)).rows
+    source = expected.sourceTvid === task.vid ? current : (await probe(expected.sourceTvid)).rows
     const original = source.find(row => sameTier(row.selection, requested) && row.selection.vid === requested.vid && matches(row.attributes, expected!))
     if (!original) throw new Error('爱奇艺国内版无法确认原始视频版本，请重新选择画质')
     expected = { ...original.attributes, ...expected,
       codecCode: expected.codecCode ?? original.attributes.codecCode,
       dynamicRangeCode: expected.dynamicRangeCode ?? original.attributes.dynamicRangeCode }
   }
-  // Missing codec/range is not evidence of equivalence (e.g. DV vs HDR10).
-  if (expected.codecCode === undefined || expected.dynamicRangeCode === undefined)
+  if (expected.codecCode === undefined)
     throw new Error('爱奇艺国内版缺少编码或动态范围依据，请更新网关或重新选择画质')
+  if (expected.dynamicRangeCode === undefined) {
+    // Some catalogs return -1 for every range. It remains unknown, not SDR.
+    // Rebind only when the verified source tier contains a single rendition;
+    // a selected VID alone cannot distinguish HDR/DV across different episodes.
+    const originals = source!.filter(row => sameTier(row.selection, requested) && matches(row.attributes, expected!))
+    if (uniqueRenditions(originals).length !== 1 || originals.some(row => row.attributes.dynamicRangeCode !== undefined))
+      throw new Error('原始集有多个同档视频版本，且动态范围未确认；请单独选择本集画质')
+  }
   const candidates = current.filter(row => sameTier(row.selection, requested) && matches(row.attributes, expected!))
-  const unique = [...new Map(candidates.filter(row => row.selection.vid).map(row => [row.selection.vid, row])).values()]
+  const unique = uniqueRenditions(candidates)
   if (!unique.length) throw new Error('当前集缺少所选码率、帧率、编码或动态范围版本，请重新选择可用画质')
   if (unique.length !== 1) throw new Error('当前集有多个相同规格的视频版本，无法确认对应地址，请单独选择本集画质')
+  if (expected.dynamicRangeCode === undefined) {
+    if (candidates.some(row => row.attributes.dynamicRangeCode !== undefined))
+      throw new Error('爱奇艺国内版缺少编码或动态范围依据，请更新网关或重新选择画质')
+    runLog(`iqcn rendition rebound tvid=${task.vid} source_tvid=${expected.sourceTvid} bid=${requested.bid} br=${requested.br} fr=${requested.fr} codec=${expected.codecCode} range=unknown source_variants=1 current_variants=1`)
+  }
   return unique[0]!.selection
 }

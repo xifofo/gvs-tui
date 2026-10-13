@@ -4,11 +4,16 @@
 // 咪咕媒体清单保留 Referer/UA，以 Node HTTP 读取，并按系统/PAC 代理路由。
 import { session } from 'electron'
 import { fetchDesktopService } from '../desktop-network'
-import { fetchNativeMediaProbe } from '../media-probe-transport'
+import { fetchNativeMediaProbe, fetchNativeMediaSegment } from '../media-probe-transport'
 
 /** Probe through the same system proxy used by the native media downloader. */
 export function fetchMediaProbe(url: string, init: RequestInit): Promise<Response> {
   return fetchNativeMediaProbe(url, init, target => session.defaultSession.resolveProxy(target))
+}
+
+/** Stream IQ media without the manifest size cap; preserve the same CDN headers and route. */
+export function fetchMediaSegment(url: string, init: RequestInit): Promise<Response> {
+  return fetchNativeMediaSegment(url, init, target => session.defaultSession.resolveProxy(target))
 }
 
 const PROXY_KEYS: Record<string, true> = { http_proxy: true, https_proxy: true, all_proxy: true }

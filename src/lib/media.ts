@@ -834,6 +834,12 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') { reject(e); return promise }
     }
   }
+  // The bundled .NET 10 macOS ARM64 runtime can abort in its precompiled HTTP
+  // header code during parallel IQ downloads. JIT that code for this path;
+  // keep the same downloader, concurrency and fragment restoration behavior.
+  const iqMethod = args.indexOf('--custom-hls-method')
+  const jitIQ = process.platform === 'darwin' && process.arch === 'arm64'
+    && iqMethod >= 0 && args[iqMethod + 1] === 'IQ_BBTS'
   const child = spawn(bin, args, {
     windowsHide: true,
     detached: process.platform !== 'win32',
@@ -845,10 +851,14 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
       // macOS console can report height -1 and crash its live progress renderer.
       TF_BUILD: 'true',
       DOTNET_SYSTEM_NET_HTTP_SOCKETSHTTPHANDLER_HTTP2SUPPORT: 'false',
+      ...(jitIQ ? { DOTNET_ReadyToRun: '0' } : {}),
       ...(cwd ? { TMP: cwd, TEMP: cwd, TMPDIR: cwd } : {}),
     },
   })
   let output = ''
+  // Runtime crashes print the root exception before a very long stack trace.
+  // Keep its beginning as well as the output tail used for normal failures.
+  let stderrHead = ''
   let deniedStatus = 0
   let exhausted = false
   let stopped = false
@@ -908,7 +918,10 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
   child.stdout.setEncoding('utf8')
   child.stderr.setEncoding('utf8')
   child.stdout.on('data', collect)
-  child.stderr.on('data', collect)
+  child.stderr.on('data', (chunk: string) => {
+    stderrHead = (stderrHead + chunk).slice(0, 4000)
+    collect(chunk)
+  })
   const logWatch = (logFile || cwd || fatalError) ? setInterval(() => {
     if (stopped) return
     if (fatalError?.()) { stop(); return }
@@ -954,7 +967,9 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     if (code === 0 && !failed) resolve(text)
     else {
       const slow = /Download speed too slow/i.test(text) ? 'Download speed too slow! ' : ''
-      reject(new Error(`N_m3u8DL-RE 下载失败 (${killSignal || code}): ${slow}${text.slice(-4000)}`))
+      const crashed = killSignal && ['SIGABRT', 'SIGSEGV', 'SIGBUS', 'SIGILL'].includes(killSignal)
+      const details = crashed ? `${cleanRELog(stderrHead).slice(0, 2000)}\n${text.slice(-2000)}` : text.slice(-4000)
+      reject(new Error(`N_m3u8DL-RE 下载失败 (${killSignal || code}): ${slow}${details}`))
     }
   })
   return promise

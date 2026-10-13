@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { downloadWebVideo } from '../src/lib/web-video-download'
 import { lookBundledFFmpeg, lookMkvmerge } from '../src/lib/tools'
@@ -25,6 +25,8 @@ beforeAll(async()=>{
     generate(['-f','lavfi','-i',`sine=frequency=${freq}:sample_rate=48000`,'-t','2','-ac',String(channels),'-c:a','aac',join(dir,name+'.mp4')])
   generate(['-i',join(dir,'video.mp4'),'-i',join(dir,'audio1.mp4'),'-map','0:v','-map','1:a','-c','copy',join(dir,'muxed.mp4')])
   generate(['-i',join(dir,'muxed.mp4'),'-c','copy','-hls_time','1','-hls_list_size','0','-hls_segment_filename',join(dir,'part%d.ts'),join(dir,'index.m3u8')])
+  writeFileSync(join(dir,'mgtv-master.m3u8'),'#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nindex.m3u8\n')
+  writeFileSync(join(dir,'mgtv-misleading-duration.m3u8'),readFileSync(join(dir,'index.m3u8'),'utf8').replace(/#EXTINF:[^,]+,/g,'#EXTINF:60,'))
   const allowed=new Set(readdirSync(dir))
   server=createServer((req,res)=>{
     const name=new URL(req.url||'/',base).pathname.slice(1)
@@ -81,7 +83,64 @@ test('MGTV downloads and remuxes a clear HLS fixture through the shared local me
   expect(requests.some(p=>p.endsWith('.ts'))).toBe(true)
 },60000)
 
-test('substituted or preview MGTV streams are rejected before any media is requested',async()=>{
+test('MGTV accepts a complete stream with a wrong preview flag and resolves duration for an old task',async()=>{
+  const t={...task('mgtv','9'),duration:0}
+  const cli={invoke:async()=>({vid:t.vid,actualQuality:'9',preview:true,previewRange:300,duration:2,
+    capabilities:{previewMetadata:{preview:0}},media:[{type:'video',url:base+'/index.m3u8',quality:'9',format:'hls',drm:false}]})} as unknown as Pick<GwClient,'invoke'>
+  const work=join(dir,'mgtv-preview-flag');mkdirSync(work)
+  const output=join(dir,'mgtv-preview-flag-output.mkv')
+  const events:string[]=[]
+  await downloadWebVideo(cli,cfg,t,output,work,(_status,_pct,log)=>events.push(log))
+  expect(inspect(output).tracks.map(t=>t.type)).toEqual(['video','audio'])
+  expect(events).toContain('核对芒果播放清单是否为完整内容')
+  expect(t.duration).toBe(0)
+},60000)
+
+test('MGTV blocks actual short previews even if top-level preview is false',async()=>{
+  for (const preview of [true,false]) {
+    const before=requests.length
+    const t={...task('mgtv','9'),duration:0}
+    const cli={invoke:async()=>({vid:t.vid,actualQuality:'9',preview,duration:2722,
+      media:[{type:'video',url:base+'/index.m3u8',quality:'9',format:'hls',drm:false}]})} as unknown as Pick<GwClient,'invoke'>
+    await expect(downloadWebVideo(cli,cfg,t,join(dir,'mgtv-short.mkv'),dir,()=>{})).rejects.toThrow('明显短于')
+    expect(requests.slice(before)).toEqual(['index.m3u8'])
+  }
+})
+
+test('MGTV downloads the exact media playlist checked below a single-variant master',async()=>{
+  const t=task('mgtv','9')
+  const before=requests.length
+  const cli={invoke:async()=>({vid:t.vid,actualQuality:'9',preview:true,duration:2,
+    media:[{type:'video',url:base+'/mgtv-master.m3u8',quality:'9',format:'hls',drm:false}]})} as unknown as Pick<GwClient,'invoke'>
+  const work=join(dir,'mgtv-master');mkdirSync(work)
+  const output=join(dir,'mgtv-master-output.mkv')
+  await downloadWebVideo(cli,cfg,t,output,work,()=>{})
+  expect(inspect(output).tracks.map(t=>t.type)).toEqual(['video','audio'])
+  expect(requests.slice(before).filter(p=>p==='mgtv-master.m3u8')).toHaveLength(1)
+  expect(requests.slice(before).filter(p=>p==='index.m3u8').length).toBeGreaterThan(1)
+},60000)
+
+test('MGTV validates real output duration even when a playlist overstates its duration',async()=>{
+  const t={...task('mgtv','9'),duration:0}
+  const cli={invoke:async()=>({vid:t.vid,actualQuality:'9',preview:true,duration:60,
+    media:[{type:'video',url:base+'/mgtv-misleading-duration.m3u8',quality:'9',format:'hls',drm:false}]})} as unknown as Pick<GwClient,'invoke'>
+  const work=join(dir,'mgtv-output-duration');mkdirSync(work)
+  await expect(downloadWebVideo(cli,cfg,t,join(dir,'mgtv-misleading-output.mkv'),work,()=>{}))
+    .rejects.toThrow('实际视频明显短于')
+},60000)
+
+test('MGTV refuses unknown expected duration and protected media before requesting CDN',async()=>{
+  const before=requests.length
+  for (const drm of [true,false]) {
+    const t={...task('mgtv','9'),duration:0}
+    const cli={invoke:async()=>({vid:t.vid,actualQuality:'9',preview:true,
+      media:[{type:'video',url:base+'/index.m3u8',quality:'9',format:'hls',drm}]})} as unknown as Pick<GwClient,'invoke'>
+    await expect(downloadWebVideo(cli,cfg,t,join(dir,'mgtv-unconfirmed.mkv'),dir,()=>{})).rejects.toThrow(drm?'该媒体受保护':'未提供有效整集时长')
+  }
+  expect(requests.length).toBe(before)
+})
+
+test('substituted or missing MGTV streams are rejected before any media is requested',async()=>{
   const before=requests.length
   for(const response of [{actualQuality:'4',media:[]},{actualQuality:'9',preview:true,media:[]}]) {
     const cli={invoke:async()=>({vid:'3660147',...response})} as unknown as Pick<GwClient,'invoke'>

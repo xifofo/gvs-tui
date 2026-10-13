@@ -145,6 +145,26 @@ test('successful exit preserves file diagnostics and redacts keys and media URLs
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('native crash retains the root exception before a long stack and redacts private data', async () => {
+  if (process.platform === 'win32') return
+  const script = `process.stderr.write('Fatal error.\\nSystem.AccessViolationException: invalid memory key=0123456789abcdef0123456789abcdef https://cdn.test/file?token=secret\\n' + 'stack frame\\n'.repeat(2000)); setTimeout(() => process.kill(process.pid, 'SIGABRT'), 100)`
+  const error = await runM3u8dl(process.execPath, ['-e', script], '').then(() => undefined, e => e as Error)
+  expect(error?.message).toContain('SIGABRT')
+  expect(error?.message).toContain('System.AccessViolationException')
+  expect(error?.message).not.toMatch(/0123456789abcdef|token=secret|https:\/\//)
+})
+
+test('IQ runtime compatibility is passed to the child without reducing concurrency or affecting other methods', async () => {
+  const script = `console.log(JSON.stringify({jit:process.env.DOTNET_ReadyToRun ?? null, args:process.argv.slice(1)}))`
+  const inherited = process.env.DOTNET_ReadyToRun ?? null
+  for (const method of ['IQ_BBTS', 'CENC']) {
+    const args = ['-e', script, '--', '--custom-hls-method', method, '--thread-count', '8']
+    const result = JSON.parse(await runM3u8dl(process.execPath, args, ''))
+    expect(result.jit).toBe(method === 'IQ_BBTS' && process.platform === 'darwin' && process.arch === 'arm64' ? '0' : inherited)
+    expect(result.args).toEqual(args.slice(3))
+  }
+})
+
 test('EXTINF list ignores key and placement tags', () => {
   const infs = hlsExtinfSeconds('#EXTM3U\n#EXTINF:7.983333,\nseg1\n#EXT-X-PLACEMENT-OPPORTUNITY\n#EXTINF:11.333333,\nseg2\n#EXT-X-KEY:METHOD=CENC\n#EXTINF:9.633333,\nseg3\n')
   expect(infs).toEqual([7.983333, 11.333333, 9.633333])

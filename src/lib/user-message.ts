@@ -4,6 +4,8 @@ export const defaultErrorMessage = '操作暂时未能完成，请稍后重试�
 const rules = errorCatalog.map(row => ({ ...row, re: new RegExp(row.pattern, 'i') }))
 const technical = /[\r\n{}<>]|https?:\/\/|wss?:\/\/|[A-Z][A-Z0-9]*_[A-Z0-9_]+|[A-Z]:[\\/]|\/(?:home|tmp|var|usr|etc)\/|\b(?:JSON|DRM|MTOP|UPS|interfaceKey|paramKey|aesKeyHex|diagnostic|stack|panic|sql|sqlite|select|insert|traceback|goroutine|authorization|cookie|token|pck|ccsn|TypeError|SyntaxError|ECONN\w*|http\s*\d+|em\s*[=:]\s*\d+)\b|上游|源站|解密|签名|反序列化|票据|令牌|设备证书|[a-zA-Z0-9_+/=.-]{32,}/i
 const iqAudioMessage = '音轨检查未通过，未生成成品。请继续任务重新下载音轨，已完成的视频会保留。'
+const iqAudioTransferMessage = '音轨分段下载失败，重试后仍未完成。请继续任务重试，已完成的视频和音轨分段会保留。'
+const downloaderCrashMessage = '本机下载组件异常退出，下载未完成。请更新客户端后继续任务重试。'
 
 export function errorCode(error: unknown): string {
   if (!error || typeof error !== 'object') return ''
@@ -15,11 +17,14 @@ export function errorCode(error: unknown): string {
 export function userMessage(error: unknown, fallback = defaultErrorMessage): string {
   const code = errorCode(error)
   if (code === 'IQ_AUDIO_VALIDATION_FAILED') return iqAudioMessage
+  if (code === 'IQ_AUDIO_TRANSFER_FAILED') return iqAudioTransferMessage
   const coded = rules.find(row => row.code === code)
   if (coded) return coded.message
   const row = error && typeof error === 'object' ? error as Record<string, unknown> : undefined
   const raw = (typeof error === 'string' ? error : error instanceof Error ? error.message : typeof row?.message === 'string' ? row.message : '').trim()
   if (/IQ 音轨解码检查失败/.test(raw)) return iqAudioMessage
+  if (/IQ 音轨分段下载失败/.test(raw)) return iqAudioTransferMessage
+  if (/N_m3u8DL-RE 下载失败 \(SIG(?:ABRT|SEGV|BUS|ILL)\)/.test(raw)) return downloaderCrashMessage
   if (/IQ 封装或音轨验收失败/.test(raw)) return '音视频封装或音轨检查未通过，未生成成品。请继续任务重试，已完成的视频会保留。'
   if (raw && [...raw].length <= 180 && /\p{Script=Han}/u.test(raw) && !technical.test(raw)) return raw
   const text = raw.split('; diagnostic=')[0]!.slice(0, 8192)

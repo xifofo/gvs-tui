@@ -34,7 +34,7 @@ function iqAudioLanguage(row: Record<string, unknown>): string {
 
 export function iqOptions(data: Record<string, unknown>): { qualities: Quality[]; audios: Audio[] } {
   const formats = Array.isArray(data.formats) ? data.formats.filter(isObj) : []
-  const tracks = (Array.isArray(data.audios) ? data.audios.filter(isObj) : []).filter(a => asString(a.id)).map(normalizeIQAudioLanguage)
+  const tracks = (Array.isArray(data.audios) ? data.audios.filter(isObj) : []).filter(a => asString(a.id)).map(a => normalizeIQAudioLanguage(a))
   const qualities = formats.map(f => {
     const width = Number(f.width) || 0, height = Number(f.height) || 0, tier = tierHeight(width,height)
     const label = tier >= 2160 ? '4K' : tier ? `${tier}P` : asString(f.label)
@@ -148,7 +148,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
       if (iqResumeIdentity(plan) !== identity) throw new Error('IQ 重新取链后片源或密钥改变，原分片已保留，请重新探测')
     }
   }
-  const available = Array.isArray(data.audios) ? data.audios.filter(isObj).map(normalizeIQAudioLanguage) : []
+  const available = Array.isArray(data.audios) ? data.audios.filter(isObj).map(a => normalizeIQAudioLanguage(a)) : []
   const requested = task.audioTracks?.length ? task.audioTracks.map(t => t.id) : available.filter(a => a.default === true).map(a => asString(a.id))
   if (!requested.length) throw new Error('IQ 没有返回默认独立音轨，请重新探测')
   const audioFiles: Array<{path:string;language:string;title:string;isDefault:boolean}> = []
@@ -156,15 +156,23 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   for (const [index,id] of requested.entries()) {
     signal?.throwIfAborted()
     emit('音轨下载',0.70+0.12*index/requested.length,`独立音轨 ${index+1}/${requested.length}`)
-    const audio = normalizeIQAudioLanguage(await cli.invoke('iq','audio',{vid:task.vid,audioId:id,renditionVid:plan.rendition},cli.extra(cfg,'iq'),{timeoutMs:150000}))
-    if (audio.clear !== true) throw new Error('IQ 独立音轨没有明确标记明文，已停止')
-    const parts = Array.isArray(audio.parts) ? audio.parts.filter(isObj) : []
-    if (!parts.length) throw new Error('IQ 独立音轨分段为空')
+    const loadAudio = async (timeoutMs: number) => {
+      signal?.throwIfAborted()
+      const audio = normalizeIQAudioLanguage(await cli.invoke('iq','audio',{vid:task.vid,audioId:id,renditionVid:plan.rendition},cli.extra(cfg,'iq'),{timeoutMs}), id)
+      signal?.throwIfAborted()
+      if (audio.clear !== true) throw new Error('IQ 独立音轨没有明确标记明文，已停止')
+      const parts = Array.isArray(audio.parts) ? audio.parts.filter(isObj) : []
+      if (!parts.length) throw new Error('IQ 独立音轨分段为空')
+      return { audio, parts }
+    }
+    const { audio, parts } = await loadAudio(150000)
     const paths = parts.map((_,pi)=>join(work,`iq-audio-${index}-${pi}.part`))
     audioPartPaths.push(...paths)
     const started=Date.now(), measure=transferSpeed()
     await downloadIQParts(parts.map((part,pi)=>({url:asString(part.url),path:paths[pi]!})),{
       identity:JSON.stringify([task.vid,plan.rendition,id]),threads:cfg.threads,headers:headersFor('https://www.iq.com/'),signal,
+      refreshParts:async () => (await loadAudio(30000)).parts.map(part => ({url:asString(part.url)})),
+      onRetry:(pi,attempt,reason)=>emit('音轨重试',0.70+0.12*index/requested.length,`${reason}，重试分段 ${pi+1}/${parts.length}（${attempt}/2）；保留已完成分段`),
       progress:(bytes,done,total)=>emit('音轨下载',0.70+0.12*(index+Math.min(1,Number(audio.size)>0?bytes/Number(audio.size):done/Math.max(1,total)))/requested.length,
         formatSpeed(0,1,(Date.now()-started)/1000,{segments:{done,total},transfer:measure(bytes)})),
     })
@@ -199,7 +207,10 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   const measured = usesMeasuredNaming(task)
   let muxAudio: Awaited<ReturnType<typeof muxIQ>>
   try {
-    muxAudio = await muxIQ(await ensureFFmpeg(), {video,audios:audioFiles,subtitles:subtitleFiles,
+    // The source-preferred language describes the original video. A manually
+    // selected dub may change the default audio without changing this language.
+    const preferredLanguage = asString(available.find(a => a.default === true)?.language)
+    muxAudio = await muxIQ(await ensureFFmpeg(), {video,videoLanguage:preferredLanguage || undefined,audios:audioFiles,subtitles:subtitleFiles,
       dest,reservedOutput:measured,signal,emit})
   } catch (error) {
     if (error instanceof IQAudioValidationError) invalidateIQAudioParts(audioPartPaths)

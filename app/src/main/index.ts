@@ -320,8 +320,8 @@ ipcMain.handle('gvs:call', async (_e, method: string, args: unknown[]) => {
 
 function createWindow(): void {
   win = new BrowserWindow({
-    width: 1320,
-    height: 840,
+    width: 1440,
+    height: 1080,
     minWidth: 1100,
     minHeight: 700,
     show: false,

@@ -98,3 +98,151 @@ test('IQ rejects unsolicited partial bodies and does not record them as complete
     expect(()=>readFileSync(path+'.complete.json')).toThrow()
   }finally{rmSync(dir,{recursive:true,force:true})}
 })
+
+const quickPolicy={responseTimeoutMs:30,idleTimeoutMs:30,slowWindowMs:40,minBytesPerSecond:0,retryDelayMs:0}
+
+test('IQ header stalls refresh one plan for concurrent workers and preserve completed parts',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'iq-audio-refresh-'))
+  const parts=Array.from({length:3},(_,i)=>({url:`https://old.iq.com/${i}.m4a?token=old`,path:join(dir,`${i}.part`)}))
+  let refreshes=0
+  const requests:string[]=[],reasons:string[]=[]
+  try{
+    await downloadIQParts([parts[0]!],{identity:'track',threads:1,headers:{},fetcher:async()=>new Response('kept')})
+    await downloadIQParts(parts,{identity:'track',threads:3,headers:{},policy:quickPolicy,
+      fetcher:async url=>{
+        requests.push(new URL(url).host+new URL(url).pathname)
+        return new URL(url).host==='old.iq.com' ? new Promise<Response>(()=>{}) : new Response(new URL(url).pathname)
+      },
+      refreshParts:async()=>{
+        refreshes++
+        await new Promise(resolve=>setTimeout(resolve,10))
+        return parts.map(p=>({url:p.url.replace('old.iq.com','new.iq.com').replace('token=old','token=fresh')}))
+      },onRetry:(_i,_a,reason)=>reasons.push(reason),
+    })
+    expect(refreshes).toBe(1)
+    expect(requests).toHaveLength(4)
+    expect(requests.some(url=>url.endsWith('/0.m4a'))).toBe(false)
+    expect(readFileSync(parts[0]!.path,'utf8')).toBe('kept')
+    expect(parts.slice(1).map(p=>readFileSync(p.path,'utf8'))).toEqual(['/1.m4a','/2.m4a'])
+    expect(reasons).toEqual(['音轨分段等待响应超时','音轨分段等待响应超时'])
+  }finally{rmSync(dir,{recursive:true,force:true})}
+})
+
+test('IQ refreshes a stalled response body and replaces the whole incomplete part',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'iq-audio-body-stall-')),path=join(dir,'audio.part')
+  let cancelled=0,refreshes=0
+  try{
+    await downloadIQParts([{url:'https://old.iq.com/file?token=old',path}],{identity:'track',threads:1,headers:{},policy:quickPolicy,
+      fetcher:async url=>new URL(url).host==='old.iq.com' ? new Response(new ReadableStream({
+        start(controller){controller.enqueue(new TextEncoder().encode('BAD'))},cancel(){cancelled++},
+      })) : new Response('GOOD'),
+      refreshParts:async()=>{refreshes++;return [{url:'https://new.iq.com/file?token=fresh'}]},
+    })
+    expect(refreshes).toBe(1)
+    expect(cancelled).toBe(1)
+    expect(readFileSync(path,'utf8')).toBe('GOOD')
+    expect(JSON.parse(readFileSync(path+'.complete.json','utf8')).bytes).toBe(4)
+  }finally{rmSync(dir,{recursive:true,force:true})}
+})
+
+test('IQ default policy completes slowly progressing parallel parts without refreshing or discarding bytes',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'iq-audio-slow-progress-'))
+  const parts=Array.from({length:3},(_,i)=>({url:`https://cdn.iq.com/${i}.m4a`,path:join(dir,`${i}.part`)}))
+  const expected=Buffer.alloc(12*128,7)
+  let requests=0,refreshes=0,retries=0
+  try{
+    // Keep the production speed floor, shortening only the time windows. The
+    // previous 64 KiB/s default repeatedly aborted these ~8 KiB/s transfers.
+    const options={identity:'slow-track',threads:3,headers:{},
+      policy:{responseTimeoutMs:500,idleTimeoutMs:250,slowWindowMs:40,retryDelayMs:0},
+      fetcher:async()=>{
+        requests++
+        let offset=0,timer:ReturnType<typeof setInterval>
+        return new Response(new ReadableStream({
+          start(controller){timer=setInterval(()=>{
+            controller.enqueue(expected.subarray(offset,offset+128));offset+=128
+            if(offset===expected.length){clearInterval(timer);controller.close()}
+          },15)},cancel(){clearInterval(timer)},
+        }),{headers:{'content-length':String(expected.length)}})
+      },
+      refreshParts:async()=>{refreshes++;return parts.map(p=>({url:p.url}))},
+      onRetry:()=>{retries++},
+    }
+    await downloadIQParts(parts,options)
+    expect(requests).toBe(3)
+    expect(refreshes).toBe(0)
+    expect(retries).toBe(0)
+    for(const part of parts){
+      expect(readFileSync(part.path)).toEqual(expected)
+      expect(JSON.parse(readFileSync(part.path+'.complete.json','utf8')).bytes).toBe(expected.length)
+    }
+    await downloadIQParts(parts,options)
+    expect(requests).toBe(3)
+  }finally{rmSync(dir,{recursive:true,force:true})}
+})
+
+test('IQ explicitly enabled low-speed policy refreshes at most twice and then stops without a completion record',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'iq-audio-low-speed-')),path=join(dir,'audio.part')
+  let refreshes=0,requests=0,cancelled=0
+  const reasons:string[]=[]
+  try{
+    await expect(downloadIQParts([{url:'https://cdn.iq.com/file?token=0',path}],{
+      identity:'track',threads:1,headers:{},policy:{...quickPolicy,minBytesPerSecond:10_000},
+      fetcher:async()=>{
+        requests++
+        let timer:ReturnType<typeof setInterval>
+        return new Response(new ReadableStream({start(controller){timer=setInterval(()=>controller.enqueue(new Uint8Array([1])),5)},cancel(){clearInterval(timer);cancelled++}}))
+      },
+      refreshParts:async()=>{refreshes++;return [{url:`https://cdn.iq.com/file?token=${refreshes}`}]},
+      onRetry:(_i,_a,reason)=>reasons.push(reason),
+    })).rejects.toThrow('音轨分段持续低速')
+    expect(requests).toBe(3)
+    expect(refreshes).toBe(2)
+    expect(cancelled).toBe(3)
+    expect(reasons).toEqual(['音轨分段持续低速','音轨分段持续低速'])
+    expect(()=>readFileSync(path+'.complete.json')).toThrow()
+  }finally{rmSync(dir,{recursive:true,force:true})}
+})
+
+test('IQ fresh links must describe the same physical parts before any replacement request',async()=>{
+  for(const change of ['file','window','count']){
+    const dir=mkdtempSync(join(tmpdir(),'iq-audio-changed-plan-')),path=join(dir,'audio.part')
+    let requests=0
+    try{
+      await expect(downloadIQParts([{url:'https://cdn.iq.com/file?start=0&end=10',path}],{
+        identity:'track',threads:1,headers:{},policy:quickPolicy,
+        fetcher:async()=>{requests++;throw new Error('connection closed')},
+        refreshParts:async()=>change==='count'?[]:[{url:change==='file'?'https://cdn.iq.com/other?start=0&end=10':'https://cdn.iq.com/file?start=1&end=10'}],
+      })).rejects.toThrow('IQ 重新取链后音轨分段改变')
+      expect(requests).toBe(1)
+      expect(()=>readFileSync(path+'.complete.json')).toThrow()
+    }finally{rmSync(dir,{recursive:true,force:true})}
+  }
+})
+
+test('IQ can pause while refreshing links without waiting for the gateway or opening another request',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'iq-audio-pause-refresh-')),path=join(dir,'audio.part')
+  const controller=new AbortController()
+  let requests=0
+  try{
+    await expect(downloadIQParts([{url:'https://cdn.iq.com/file',path}],{
+      identity:'track',threads:1,headers:{},signal:controller.signal,policy:quickPolicy,
+      fetcher:async()=>{requests++;throw new Error('connection closed')},
+      refreshParts:async()=>{setTimeout(()=>controller.abort(new Error('pause')),10);return new Promise(()=>{})},
+    })).rejects.toThrow('pause')
+    expect(requests).toBe(1)
+  }finally{rmSync(dir,{recursive:true,force:true})}
+})
+
+test('IQ removes stale completion records before retrying a truncated cached file',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'iq-audio-stale-marker-')),path=join(dir,'audio.part')
+  const parts=[{url:'https://cdn.iq.com/file',path}],options={identity:'track',threads:1,headers:{},policy:quickPolicy}
+  try{
+    await downloadIQParts(parts,{...options,fetcher:async()=>new Response('GOOD')})
+    writeFileSync(path,'truncated')
+    await expect(downloadIQParts(parts,{...options,fetcher:async()=>new Response(new ReadableStream({
+      start(controller){controller.enqueue(new TextEncoder().encode('BAD!'))},
+    }))})).rejects.toThrow('音轨分段传输停滞')
+    expect(()=>readFileSync(path+'.complete.json')).toThrow()
+  }finally{rmSync(dir,{recursive:true,force:true})}
+})

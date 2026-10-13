@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { fetchMediaProbe } from './proxy.ts'
+import { fetchMediaSegment } from './proxy.ts'
 import { asString, isObj } from './util.ts'
 
 type Preference = { version: 1; host: string; checkedAt: number }
@@ -99,7 +99,7 @@ export async function selectIQCDN(playlist: string, raw: unknown, options: {
       let winner = eligible.find(u => mediaURL(u)!.hostname === preferred)
       if (!winner && eligible.length > 1) {
         options.note?.('比较官方 CDN 的响应和传输速度')
-        const scores = await Promise.all(eligible.map(async u => ({ url: u, score: await probe(iqCDNWindow(u, line)!, options.headers, options.fetcher ?? fetchMediaProbe, options.signal) })))
+        const scores = await Promise.all(eligible.map(async u => ({ url: u, score: await probe(iqCDNWindow(u, line)!, options.headers, options.fetcher ?? fetchMediaSegment, options.signal) })))
         options.signal?.throwIfAborted()
         scores.sort((a,b) => b.score-a.score)
         if (scores[0]!.score > 0) {
