@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import HookSettingsCard from '../components/HookSettingsCard.vue'
+import DeviceFilesCard from '../components/DeviceFilesCard.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { PROVIDER_NAME, type Provider, type SettingsPatch } from '@shared/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -17,6 +18,7 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'download', label: '下载' },
   { key: 'appearance', label: '外观与动效' },
   { key: 'gateway', label: '网关' },
+  { key: 'devices', label: '设备文件' },
   { key: 'naming', label: '命名与刮削' },
   { key: 'about', label: '关于' },
 ]
@@ -355,6 +357,9 @@ const plat = (p: Provider) => hasProvider(p)
             </div>
           </template>
         </section>
+
+        <!-- 设备文件 -->
+        <DeviceFilesCard v-else-if="store.settingsTab === 'devices'" />
 
         <!-- 关于 -->
         <section v-else-if="store.settingsTab !== 'download'" class="card">

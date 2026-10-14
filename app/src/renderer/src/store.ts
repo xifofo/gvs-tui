@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 import { ipcArgs } from '@shared/ipc-args'
 import type { SearchSourceKey } from '@shared/search-sources'
-import { userMessage, userFacing } from '@shared/user-message'
+import { needsDeviceFile, userMessage, userFacing } from '@shared/user-message'
 import type {
   AppState,
   Card,
@@ -25,13 +25,14 @@ import { visibleProviders } from '@shared/provider-registry'
 
 export type View = 'home' | 'discover' | 'search' | 'detail' | 'quality' | 'downloads' | 'settings' | 'accounts' | 'calendar' | 'subscriptions' | 'history'
 /** 'account' 保留为兼容别名：账号已移到独立的「账号」页。 */
-export type SettingsTab = 'download' | 'appearance' | 'account' | 'gateway' | 'naming' | 'about'
+export type SettingsTab = 'download' | 'appearance' | 'account' | 'gateway' | 'devices' | 'naming' | 'about'
 
 // 参数可能是 Vue 响应式代理，IPC 的结构化克隆不认；统一转成纯数据再发。
 export const gvs = <K extends keyof GvsApi>(method: K, ...args: Parameters<GvsApi[K]>): ReturnType<GvsApi[K]> =>
   window.gvs.call(method, ...ipcArgs(args))
 
-type Toast = { id: number; message: string; tone: Tone }
+/** action：提示里附带的跳转，例如缺少设备文件时去设置上传 */
+type Toast = { id: number; message: string; tone: Tone; action?: { label: string; tab: SettingsTab } }
 
 export const store = reactive({
   state: null as AppState | null,
@@ -100,7 +101,9 @@ export const modalOpen = () => store.qr !== null || store.dialogCount > 0 || sto
 let toastId = 0
 export function toast(message: string, tone: Tone = 'muted'): void {
   const id = ++toastId
-  store.toasts.push({ id, message: tone === 'err' || tone === 'warn' ? userMessage(message) : message, tone })
+  const failure = tone === 'err' || tone === 'warn'
+  const action = failure && needsDeviceFile(message) ? { label: '去设置上传', tab: 'devices' as const } : undefined
+  store.toasts.push({ id, message: failure ? userMessage(message) : message, tone, action })
   setTimeout(() => {
     const i = store.toasts.findIndex((t) => t.id === id)
     if (i >= 0) store.toasts.splice(i, 1)

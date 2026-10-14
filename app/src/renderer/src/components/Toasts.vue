@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { store } from '../store'
+import { openSettings, store } from '../store'
 import Icon from './Icon.vue'
 
 const ICON: Record<string, string> = { ok: 'check', err: 'alert', warn: 'alert', muted: 'info' }
@@ -15,6 +15,7 @@ const close = (id: number) => {
       <div v-for="t in store.toasts" :key="t.id" class="toast" :class="t.tone">
         <Icon :name="ICON[t.tone] ?? 'info'" :size="16" :stroke="2.4" class="ic" />
         <span class="tx">{{ t.message }}</span>
+        <button v-if="t.action" type="button" class="act" @click="openSettings(t.action.tab); close(t.id)">{{ t.action.label }}</button>
         <button type="button" class="x" aria-label="关闭" @click="close(t.id)"><Icon name="x" :size="14" /></button>
       </div>
     </TransitionGroup>
@@ -31,6 +32,7 @@ const close = (id: number) => {
 .tx { flex-grow: 1; word-break: break-word; }
 .x { background: none; border: 0; padding: 2px; cursor: pointer; color: inherit; opacity: .6; display: flex; border-radius: 4px; }
 .x:hover { opacity: 1; }
+.act { flex-shrink: 0; background: none; border: 1px solid currentColor; border-radius: 6px; padding: 1px 8px; font: inherit; font-size: 12.5px; font-weight: 700; color: inherit; cursor: pointer; }
 .toast.ok { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
 .toast.ok .ic { color: var(--side-ok); }
 .toast.err { border-color: color-mix(in srgb, var(--err) 45%, var(--line)); }

@@ -8,7 +8,8 @@ import DownloadPagination from '../components/DownloadPagination.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
-import { ago, errText, gvs, store, toast, copyText } from '../store'
+import { ago, errText, gvs, openSettings, store, toast, copyText } from '../store'
+import { needsDeviceFile } from '@shared/user-message'
 
 const diagnosticsJob = ref<number | undefined>()
 const showDiagnostics = ref(false)
@@ -229,6 +230,7 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
             <div class="ja">
               <button v-if="j.provider === 'tencent'" type="button" class="btn sm diag" title="腾讯诊断" @click="diagnosticsJob = j.id; showDiagnostics = true"><Icon name="info" :size="14" /><span class="diag-t">腾讯诊断</span></button>
               <template v-if="j.state === 'failed'">
+                <button v-if="needsDeviceFile(j.err)" type="button" class="btn sm outline" @click="openSettings('devices')">去设置上传</button>
                 <button type="button" class="btn sm" :disabled="busy.has(j.id)" @click="call(() => gvs('retryJob', j.id), [j.id])">
                   <span v-if="busy.has(j.id)" class="spin" /><Icon v-else name="retry" :size="15" />重试
                 </button>
