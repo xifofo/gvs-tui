@@ -8,7 +8,7 @@ export const errorCatalog = [
   {
     "pattern": "DRM_CLIENT_DEVICE_LEVEL",
     "code": "DRM_CLIENT_DEVICE_LEVEL",
-    "message": "已上传设备文件的安全等级不满足本次请求（例如高画质需要 L1），请上传对应等级的设备文件或选择较低画质。"
+    "message": "设备文件等级不足或已失效，请在 App「设置 → 设备文件」重新上传更高等级的设备文件后重试。"
   },
   {
     "pattern": "DRM_CLIENT_DEVICE_UNREADABLE",
