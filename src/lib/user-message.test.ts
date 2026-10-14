@@ -15,6 +15,17 @@ test('native downloader crashes have a local component explanation in restored j
   expect(userMessage('N_m3u8DL-RE 下载失败 (1): ordinary failure')).not.toBe(message)
 })
 
+test('subtitle encoder failure is not reported as missing content', () => {
+  const raw = '解密后音视频校验失败：[sost#0:2 @ 0000021908d2f800] Automatic encoder selection failed Default encoder for format null (codec none) is probably disabled. Please choose an encoder manually.；Error opening output files: Encoder not found'
+  const message = userMessage(raw)
+  expect(message).toContain('音视频检查未通过')
+  expect(message).not.toContain('未找到所需内容')
+  expect(message).not.toMatch(/sost|Encoder|null/)
+  expect(userMessage(message)).toBe(message)
+  expect(userMessage('Encoder not found')).not.toContain('未找到所需内容')
+  expect(userMessage('http 404')).toContain('未找到所需内容')
+})
+
 test('IQ exhausted audio retries explain what can be resumed without exposing the network error',()=>{
   const error=new IQAudioTransferError(2,5,new Error('net::ERR_CONNECTION_CLOSED https://private.invalid?token=PRIVATE'))
   const message=userMessage(error)

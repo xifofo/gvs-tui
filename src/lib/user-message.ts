@@ -6,6 +6,7 @@ const technical = /[\r\n{}<>]|https?:\/\/|wss?:\/\/|[A-Z][A-Z0-9]*_[A-Z0-9_]+|[A
 const iqAudioMessage = '音轨检查未通过，未生成成品。请继续任务重新下载音轨，已完成的视频会保留。'
 const iqAudioTransferMessage = '音轨分段下载失败，重试后仍未完成。请继续任务重试，已完成的视频和音轨分段会保留。'
 const downloaderCrashMessage = '本机下载组件异常退出，下载未完成。请更新客户端后继续任务重试。'
+const decodeCheckMessage = '音视频检查未通过，未保存成品。请继续任务重试。'
 
 export function errorCode(error: unknown): string {
   if (!error || typeof error !== 'object') return ''
@@ -26,6 +27,7 @@ export function userMessage(error: unknown, fallback = defaultErrorMessage): str
   if (/IQ 音轨分段下载失败/.test(raw)) return iqAudioTransferMessage
   if (/N_m3u8DL-RE 下载失败 \(SIG(?:ABRT|SEGV|BUS|ILL)\)/.test(raw)) return downloaderCrashMessage
   if (/IQ 封装或音轨验收失败/.test(raw)) return '音视频封装或音轨检查未通过，未生成成品。请继续任务重试，已完成的视频会保留。'
+  if (/解密后音视频校验失败/.test(raw)) return decodeCheckMessage
   if (raw && [...raw].length <= 180 && /\p{Script=Han}/u.test(raw) && !technical.test(raw)) return raw
   const text = raw.split('; diagnostic=')[0]!.slice(0, 8192)
   const matched = rules.find(row => row.code === text || row.re.test(text))

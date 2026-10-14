@@ -204,26 +204,28 @@ export async function validateAudio(ffmpeg: string, path: string, signal?: Abort
 }
 
 /**
- * 全量解码校验（黄果等直下源的成品兜底）：把整个文件解码到 null，
+ * 全量解码校验（黄果等直下源的成品兜底）：把视频和音轨解码到 null。
  * `-loglevel error` 下任何输出（坏参考帧 / 分片损坏 / 错误解密）都算失败。
+ * 不映射字幕和附件。null 封装没有这些编码器，`-map 0` 会在打开输出时
+ * 报 Encoder not found（sost），校验还没解码就失败，成品会被删掉。
  * 返回错误行（最多 8 条）；空数组 = 通过。
  */
 export function validateVideoDecode(ffmpeg: string, path: string, signal?: AbortSignal): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', path, '-map', '0', '-f', 'null', '-'],
-      { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], signal })
-    let errs = ''
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (s: string) => { errs = (errs + s).slice(-262144) })
-    child.once('error', (e) => reject(signal?.aborted ? (signal.reason ?? e) : e))
-    child.once('close', (code) => {
-      if (signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }
-      const lines = errs.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-      if (lines.length) resolve(lines.slice(0, 8))
-      else if (code === 0) resolve([])
-      else resolve([`ffmpeg exit ${code}`])
-    })
+  const { promise, resolve, reject } = Promise.withResolvers<string[]>()
+  const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', path, '-map', '0:v', '-map', '0:a?', '-f', 'null', '-'],
+    { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], signal })
+  let errs = ''
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (s: string) => { errs = (errs + s).slice(-262144) })
+  child.once('error', (e) => reject(signal?.aborted ? (signal.reason ?? e) : e))
+  child.once('close', (code) => {
+    if (signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }
+    const lines = errs.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    if (lines.length) resolve(lines.slice(0, 8))
+    else if (code === 0) resolve([])
+    else resolve([`ffmpeg exit ${code}`])
   })
+  return promise
 }
 
 /**

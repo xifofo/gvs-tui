@@ -241,7 +241,7 @@ export const errorCatalog = [
     "message": "本次请求未获允许，请检查账号和使用权限；若原因不明，请联系客服。"
   },
   {
-    "pattern": "(?:http|status)[ :_]*404|NOT_FOUND|not found",
+    "pattern": "(?:http|status)[ :_]*404|NOT_FOUND|(?<!encoder )not found",
     "code": "NOT_FOUND",
     "message": "未找到所需内容，请刷新页面或检查链接后重试。"
   }
