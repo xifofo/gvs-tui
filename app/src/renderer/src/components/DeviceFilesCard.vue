@@ -87,7 +87,8 @@ async function remove(): Promise<void> {
       </div>
       <div class="sc">
         <template v-if="status?.[row.system].configured">
-          <span class="chip ok">已上传 {{ levelText(row.system, status[row.system].level) }}</span>
+          <span v-if="status[row.system].reupload" class="chip warn" title="网关里保存的是旧格式文件，已不能使用">需重新上传</span>
+          <span v-else class="chip ok">已上传 {{ levelText(row.system, status[row.system].level) }}</span>
           <span v-if="status[row.system].name" class="name mono" :title="status[row.system].name">{{ status[row.system].name }}</span>
         </template>
         <span v-else-if="status" class="chip warn">未上传</span>

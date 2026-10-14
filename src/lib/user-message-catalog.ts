@@ -16,6 +16,16 @@ export const errorCatalog = [
     "message": "已保存的设备文件无法读取，请在「设置 → 设备文件」删除后重新上传。"
   },
   {
+    "pattern": "DRM_CLIENT_DEVICE_REUPLOAD",
+    "code": "DRM_CLIENT_DEVICE_REUPLOAD",
+    "message": "已保存的设备文件来自旧版本格式，请在「设置 → 设备文件」重新上传。"
+  },
+  {
+    "pattern": "DRM_UPLOAD_BUSY",
+    "code": "DRM_UPLOAD_BUSY",
+    "message": "该 Key 的设备文件正在更新，请稍后重试。"
+  },
+  {
     "pattern": "DRM_CLIENT_DEVICE_INVALID",
     "code": "DRM_CLIENT_DEVICE_INVALID",
     "message": "设备文件无效，请上传本人可用的 Widevine v2 .wvd 或 PlayReady .prd 文件。"
