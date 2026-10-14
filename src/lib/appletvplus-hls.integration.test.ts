@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,7 +23,11 @@ mediaTest('Apple TV HLS CBCS jobs decrypt separate content KIDs and publish veri
   try {
     run(ffmpeg,['-nostdin','-v','error','-f','lavfi','-i','testsrc2=size=160x90:rate=10','-f','lavfi','-i','sine=sample_rate=48000','-t','3','-c:v','libx264','-preset','ultrafast','-g','10','-c:a','aac','source.mp4'])
     run(packager,['in=source.mp4,stream=video,init_segment=video-init.mp4,segment_template=video-$Number$.m4s,playlist_name=video.m3u8,drm_label=VIDEO','in=source.mp4,stream=audio,init_segment=audio-init.mp4,segment_template=audio-$Number$.m4s,playlist_name=audio.m3u8,hls_group_id=audio,hls_name=English,drm_label=AUDIO','--enable_raw_key_encryption','--keys',`label=VIDEO:key_id=${video.kid}:key=${video.key},label=AUDIO:key_id=${audio.kid}:key=${audio.key}`,'--protection_scheme','cbcs','--protection_systems','PlayReady','--hls_playlist_type','VOD','--segment_duration','1','--hls_master_playlist_output','master.m3u8'])
+    writeFileSync(join(root,'caption.vtt'),'WEBVTT\n\n00:00:00.000 --> 00:00:02.900\n测试字幕\n')
+    writeFileSync(join(root,'subs.m3u8'),'#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:3,\ncaption.vtt\n#EXT-X-ENDLIST\n')
     const manifest=readFileSync(join(root,'master.m3u8'),'utf8')
+      .replace('#EXT-X-STREAM-INF:', '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="中文",LANGUAGE="zh",AUTOSELECT=YES,URI="subs.m3u8"\n#EXT-X-STREAM-INF:')
+      .replace(/(#EXT-X-STREAM-INF:[^\n]+)/g, '$1,SUBTITLES="subs"')
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve))
     const base=`http://127.0.0.1:${(server.address() as {port:number}).port}`
     const cfg={outDir:join(root,'output'),tmpDir:join(root,'work'),threads:2,releaseGroup:'TEST'} as FileConfig
@@ -39,6 +43,10 @@ mediaTest('Apple TV HLS CBCS jobs decrypt separate content KIDs and publish veri
     run(ffmpeg,['-nostdin','-v','error','-xerror','-i',finished.log,'-map','0:v','-map','0:a','-f','null','-'])
     expect(requested.some(u=>u.includes('video-'))).toBe(true)
     expect(requested.some(u=>u.includes('audio-'))).toBe(true)
+    expect(requested.some(u=>u.includes('caption.vtt'))).toBe(true)
+    const probe=spawnSync(ffmpeg,['-hide_banner','-i',finished.log],{encoding:'utf8',windowsHide:true,timeout:10000})
+    expect(probe.stderr).toContain('Subtitle:')
+    expect(events.some(e=>e.status==='校验'&&e.log.includes('完整音视频校验'))).toBe(true)
     const logs=JSON.stringify(events);expect(logs).not.toContain(video.key);expect(logs).not.toContain(audio.key)
   } finally {await hub.cancelAll();server.closeAllConnections();if(server.listening)await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(root,{recursive:true,force:true})}
 },100000)

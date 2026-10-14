@@ -210,10 +210,31 @@ export async function validateAudio(ffmpeg: string, path: string, signal?: Abort
  * 报 Encoder not found（sost），校验还没解码就失败，成品会被删掉。
  * 返回错误行（最多 8 条）；空数组 = 通过。
  */
-export function validateVideoDecode(ffmpeg: string, path: string, signal?: AbortSignal): Promise<string[]> {
+export function validateVideoDecode(ffmpeg: string, path: string, signal?: AbortSignal, options: {
+  requireAudio?: boolean
+  onProgress?: (seconds: number) => void
+} = {}): Promise<string[]> {
   const { promise, resolve, reject } = Promise.withResolvers<string[]>()
-  const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', path, '-map', '0:v', '-map', '0:a?', '-f', 'null', '-'],
-    { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], signal })
+  const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error',
+    ...(options.requireAudio ? ['-xerror', '-err_detect', 'explode'] : []),
+    ...(options.onProgress ? ['-nostats', '-progress', 'pipe:1'] : []),
+    '-i', path, '-map', '0:v', '-map', options.requireAudio ? '0:a' : '0:a?', '-f', 'null', '-'],
+    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
+  let progressTail = '', lastSeconds = 0
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', (chunk: string) => {
+    const lines = (progressTail + chunk).split(/\r?\n/)
+    progressTail = lines.pop()?.slice(-1024) ?? ''
+    for (const line of lines) {
+      const match = /^out_time_us=(\d+)$/.exec(line)
+      if (!match) continue
+      const seconds = Number(match[1]) / 1_000_000
+      if (Number.isFinite(seconds) && seconds > lastSeconds) {
+        lastSeconds = seconds
+        options.onProgress?.(seconds)
+      }
+    }
+  })
   let errs = ''
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (s: string) => { errs = (errs + s).slice(-262144) })

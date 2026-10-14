@@ -7,10 +7,11 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web'
 import { asString, combinedSignal, human, isObj, sleep } from './util.ts'
-import { mkvmergeRemux } from './mkvmerge.ts'
+import { mkvmergeRemux, mkvmergeTrackFiles } from './mkvmerge.ts'
 import { ensureFFmpeg, ensureM3u8dl, ensureMkvmerge, ensurePackager } from './tools.ts'
 import { createHlsRelay, type RelayEvent } from './hls-relay.ts'
 import { moveFileSync } from './file-move.ts'
+import { runLog } from './runlog.ts'
 import { assertCencMp4Output, isMpegTsFile } from './media-output.ts'
 import { removeScratch, resumeScratchDir, scratchDir, scratchDirIn } from './scratch.ts'
 import { tencentActualVersion, type ActualVersion } from './actual-version.ts'
@@ -737,13 +738,46 @@ function dirFileSizes(dir: string, pred?: (name: string) => boolean): number {
   return n
 }
 
+/** The managed downloader merges/decrypts each HLS part inside its track
+ * directory. Its atomic decrypt output is a GUID, renamed to part.mp4 only
+ * on success. Other tracks can still be pending during this operation. */
+function rePartSidecar(dir: string): { phase: 'merge' | 'decrypt'; ratio: number; log: string } | undefined {
+  const root = join(dir, 'download')
+  try {
+    const files = (readdirSync(root, { recursive: true }) as string[]).map(name => {
+      const path = join(root, name)
+      try { const st = statSync(path); return st.isFile() ? {path,name,size:st.size,at:st.mtimeMs} : undefined } catch { return undefined }
+    }).filter((file): file is NonNullable<typeof file> => !!file)
+    const fragment = /^(?:\d+|_init)\.(?:ts|m4s|mp4|m4a|clip|webm)(?:\.tmp)?$/
+    const sources = files.filter(file => /(?:^|[\\/])parts[\\/]\d+[\\/]part\.(?:mp4|m4a|ts|webm)$/.test(file.name))
+    for (const src of sources.sort((a,b)=>b.at-a.at)) {
+      const parent = dirname(src.path)
+      const outputs = files.filter(file => dirname(file.path) === parent && /^[a-f\d]{32}\.(?:mp4|m4a|ts|webm)$/i.test(basename(file.path)))
+      const written = outputs.reduce((n,file)=>n+file.size,0)
+      if (outputs.length && src.size) return {phase:'decrypt',ratio:Math.min(0.99,written/src.size),log:`解密 ${human(written)}/${human(src.size)}`}
+      // Once a later part/track starts downloading, an old completed part
+      // must not conceal the new transfer speed.
+      if (files.some(file=>fragment.test(basename(file.path)) && file.at>src.at)) continue
+      const inputs = files.filter(file => dirname(file.path).startsWith(parent + (process.platform === 'win32' ? '\\' : '/')) && fragment.test(basename(file.path)))
+      const total = inputs.reduce((n,file)=>n+file.size,0)
+      if (total) return {phase:'merge',ratio:Math.min(1,src.size/total),log:`合并 ${human(src.size)}/${human(total)}`}
+    }
+  } catch { /* downloader has not created its part directories yet */ }
+}
+
 export function reWorkPhase(text: string, workDir?: string, listedTotal?: number): PlaylistPhase {
+  if (workDir) {
+    const part = rePartSidecar(workDir)
+    if (part) return part.phase
+  }
   const s = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-  const phase = /Decrypting using/i.test(s) ? 'decrypt' : /二进制合并|Binary merging/i.test(s) ? 'merge' : 'download'
+  // Track processing repeats: use the latest marker instead of letting a
+  // historical decrypt message permanently dominate all later tracks.
+  const markers = [...s.matchAll(/Decrypting using|二进制合并|Binary merging|ffmpeg合并|ffmpeg merging/gi)]
+  const last = markers.at(-1)?.[0] ?? ''
+  const phase = /Decrypting using/i.test(last) ? 'decrypt' : last ? 'merge' : 'download'
   if (phase !== 'download' && workDir) {
     const segments = reDownloadedSegments(workDir, listedTotal)
-    // RE merges each HLS part before it downloads the next part. A part's
-    // merge message must not permanently hide the remaining download speed.
     if (segments && segments.done < segments.total) return 'download'
   }
   return phase
@@ -751,6 +785,8 @@ export function reWorkPhase(text: string, workDir?: string, listedTotal?: number
 
 /** Byte progress for RE merge / Shaka decrypt. Demux has no output yet. */
 export function reSidecarProgress(dir: string, phase: 'merge' | 'decrypt'): { ratio: number; log: string } {
+  const part = rePartSidecar(dir)
+  if (part?.phase === phase) return part
   if (phase === 'merge') {
     const total = reDownloadedSegments(dir)?.bytes ?? dirFileSizes(join(dir, 'download'), name => !name.endsWith('.json'))
     const done = Math.max(...['mp4', 'ts', 'mkv', 'm4a', 'webm'].map(ext => fileSize(join(dir, `download.${ext}`))))
@@ -897,9 +933,8 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     else signal.addEventListener('abort', onAbort, { once: true })
   }
   const bumpPhase = (next: PlaylistPhase) => {
-    const order: PlaylistPhase[] = ['download', 'merge', 'decrypt']
-    if (order.indexOf(next) > order.indexOf(phase)) phase = next
-    if (phase === 'decrypt' && !decryptAt) decryptAt = Date.now()
+    if (next !== phase) decryptAt = next === 'decrypt' ? Date.now() : 0
+    phase = next
   }
   const emitSidecar = () => {
     if (!cb || !cwd) return
@@ -1205,15 +1240,22 @@ export async function downloadPlaylist(opts: {
     opts.cb?.(0, 1, { phase: 'download' })
     let progress = 0
     let phase: PlaylistPhase = 'download'
+    let lastDiagnosticAt = 0
+    let lastDiagnosticPhase: PlaylistPhase | undefined
     const decrypts = !!opts.key || !!opts.contentKeys?.length
     const report: ProgressCB = (n, total, info) => {
       const frac = total > 1 ? n / total : n
       if (info?.phase) {
-        const order: PlaylistPhase[] = ['download', 'merge', 'decrypt']
-        if (order.indexOf(info.phase) >= order.indexOf(phase)) phase = info.phase
+        phase = info.phase
       }
       progress = Math.max(progress, Math.min(0.99, playlistOverall(phase, frac, decrypts)))
       opts.cb?.(progress, 1, { phase, log: info?.log, segments: info?.segments, transfer: info?.transfer })
+      if (lastDiagnosticPhase !== phase || Date.now() - lastDiagnosticAt >= 30_000) {
+        lastDiagnosticAt = Date.now()
+        lastDiagnosticPhase = phase
+        const fragments = info?.segments ? ` segments=${info.segments.done}/${info.segments.total}` : ''
+        runLog(`playlist work=${workDir} phase=${phase} pct=${(progress * 100).toFixed(1)}${fragments} ${cleanRELog(info?.log || '')}`)
+      }
     }
     for (let slowRestart = 0; ; slowRestart++) {
       try {
@@ -1231,6 +1273,21 @@ export async function downloadPlaylist(opts: {
     }
     opts.signal?.throwIfAborted()
     let found = pickREOutput(workDir, opts.muxTracks)
+    if (!found && opts.muxTracks) {
+      // RE explicitly disables its mux when it detects Dolby Vision. Its
+      // successful exit still leaves complete, decrypted tracks at the root.
+      const inputs = readdirSync(workDir).filter(name => /^download(?:\.[\w-]+)*\.(?:mp4|m4a|aac|ac3|eac3|ts|webm|srt|vtt|ass)$/i.test(name))
+        .map(name => join(workDir,name)).filter(path=>fileSize(path)>0)
+      if (inputs.length) {
+        const merged = join(workDir,'download.MUX.mkv')
+        runLog(`playlist work=${workDir} fallback=mkvmerge tracks=${inputs.length}`)
+        report(0,1,{phase:'merge',log:'下载器保留独立轨道；本机封装 MKV'})
+        await mkvmergeTrackFiles(await ensureMkvmerge(),inputs,merged,(n,total)=>{
+          report(Math.min(0.99,n/Math.max(1,total)),1,{phase:'merge',log:`封装 MKV ${human(n)}/${human(total)}`})
+        },opts.signal)
+        found = merged
+      }
+    }
     if (!found) {
       const status = reHttpFailureMonitor().feed(diagnostics + '\n')
       if (status) throw new CdnDenied(status, '')

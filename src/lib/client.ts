@@ -23,7 +23,7 @@ export type KeyInfo = {
   daysLeft: number | null
 }
 
-type Envelope = { code: number; msg: string; data: unknown; error_code?: string }
+type Envelope = { code: number; msg: string; data: unknown; error_code?: string; request_id?: unknown; diagnostics?: unknown }
 
 /** 优酷登录态失效（本地 Yk-Sign 过期或被踢）。调用方应清掉本地签名并引导重新扫码。 */
 export class ReloginRequired extends Error {
@@ -259,8 +259,12 @@ export class GwClient {
       const http = typeof fields.httpStatus === 'number' && fields.httpStatus >= 100 && fields.httpStatus <= 599 ? fields.httpStatus : '-'
       const code = typeof fields.code === 'number' && Number.isFinite(fields.code) ? fields.code : '-'
       const errorCode = typeof fields.errorCode === 'string' && /^[A-Z0-9_]{1,64}$/.test(fields.errorCode) ? fields.errorCode : '-'
+      const requestId = typeof fields.requestId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(fields.requestId) ? fields.requestId : '-'
+      const details = safeGatewayDiagnostics(fields.diagnostics)
+      const stage = details?.stage ?? '-'
+      const upstreamHttp = details?.upstream_http ?? '-'
       runLog(
-        `invoke ${provider}/${action} ${summarizeInput(input)}${headerNote ? ` hdr=${headerNote}` : ''} ${Date.now() - t0}ms fail http=${http} code=${code} error_code=${errorCode} ${truncate(msg, 160)}`,
+        `invoke ${provider}/${action} ${summarizeInput(input)}${headerNote ? ` hdr=${headerNote}` : ''} ${Date.now() - t0}ms fail http=${http} code=${code} error_code=${errorCode} request_id=${requestId} stage=${stage} upstream_http=${upstreamHttp} ${truncate(msg, 160)}`,
       )
       throw e
     }
@@ -307,7 +311,11 @@ export class GwClient {
     if (!res.ok || env.code !== 0) {
       const message = limitError(typeof env.msg === 'string' ? env.msg : '') || `http ${res.status}`
       const error = env.error_code === 'RELOGIN_REQUIRED' || RELOGIN_RE.test(message) ? new ReloginRequired(message) : new Error(message)
-      throw Object.assign(error, { httpStatus: res.status, code: env.code, errorCode: env.error_code || '', retryAfterMs: retryAfterMillis(res.headers.get('Retry-After')), userMessage: userMessage({ message, error_code: env.error_code }) })
+      const rawRequestId = env.request_id ?? res.headers.get('X-Request-ID')
+      const requestId = typeof rawRequestId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(rawRequestId) ? rawRequestId : undefined
+      throw Object.assign(error, { httpStatus: res.status, code: env.code, errorCode: env.error_code || '', requestId,
+        diagnostics: safeGatewayDiagnostics(env.diagnostics),
+        retryAfterMs: retryAfterMillis(res.headers.get('Retry-After')), userMessage: userMessage({ message, error_code: env.error_code }) })
     }
     return env
   }
@@ -321,4 +329,14 @@ function limitError(msg: string): string {
     default:
       return msg
   }
+}
+
+/** Retain only server-provided failure coordinates; never log arbitrary data. */
+function safeGatewayDiagnostics(value: unknown): { stage: string; upstream_http?: number } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return
+  const row = value as Record<string, unknown>
+  if (typeof row.stage !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(row.stage)) return
+  const upstream = typeof row.upstream_http === 'number' && Number.isInteger(row.upstream_http)
+    && row.upstream_http >= 100 && row.upstream_http <= 599 ? row.upstream_http : undefined
+  return { stage: row.stage, ...(upstream ? { upstream_http: upstream } : {}) }
 }

@@ -27,6 +27,13 @@ mediaTest('subtitle tracks do not fail audio/video decode validation', async () 
     expect(mapped.status).not.toBe(0)
     expect(mapped.stderr).toMatch(/Encoder not found|sost/i)
     expect(await validateVideoDecode(ff, out)).toEqual([])
+    const progress: number[] = []
+    expect(await validateVideoDecode(ff, out, undefined, {requireAudio:true,onProgress:seconds=>progress.push(seconds)})).toEqual([])
+    expect(progress.some(seconds=>seconds>0)).toBe(true)
+    const silent = join(dir, 'silent.mkv')
+    const silentResult=spawnSync(ff,['-nostdin','-v','error','-y','-i',out,'-map','0:v','-c','copy',silent],{windowsHide:true,encoding:'utf8'})
+    expect(silentResult.status).toBe(0)
+    expect((await validateVideoDecode(ff,silent,undefined,{requireAudio:true})).join(' ')).toContain('matches no streams')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

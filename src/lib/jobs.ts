@@ -1341,8 +1341,21 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
     if (source.contentKeys.length) {
       emit('校验', 0.97, '检查解密后的完整音视频')
       const ffmpeg = await ensureFFmpeg()
-      await validateAudio(ffmpeg, dest, signal)
-      const errors = await validateVideoDecode(ffmpeg, dest, signal)
+      const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
+      let lastLogged = 0
+      const duration = t.duration ?? 0
+      const errors = await validateVideoDecode(ffmpeg, dest, signal, {
+        requireAudio: true,
+        onProgress: seconds => {
+          const ratio = duration > 0 ? Math.min(0.99, seconds / duration) : 0
+          const detail = `完整音视频校验 ${clock(seconds)}${duration > 0 ? ' / ' + clock(duration) : ''}`
+          emit('校验', 0.97 + 0.02 * ratio, detail)
+          if (Date.now() - lastLogged >= 30_000) {
+            lastLogged = Date.now()
+            runLog(`${t.provider} validation ${detail}`)
+          }
+        },
+      })
       if (errors.length) throw new Error(`解密后音视频校验失败：${errors.join('；')}`)
       const specs = await probeFinishedMedia(dest, signal)
       if (specs.status !== 'probed' || (source.height && specs.height !== source.height)) throw new Error(`成品分辨率校验失败（预期 ${source.height || '所选'}p，实际 ${specs.height ?? specs.status}），未发布下载文件`)

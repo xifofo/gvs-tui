@@ -288,3 +288,53 @@ test('runM3u8dl reports shaka tempfile growth while the process is still running
     expect(seen.some(s => s.phase === 'decrypt' && s.n > 0)).toBe(true)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }, 5000)
+
+
+test('Apple nested part merge reports bytes while other selected tracks are pending', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-apple-part-progress-'))
+  try {
+    const part = join(dir, 'download', '0__dvh1_', 'parts', '0000')
+    const fragments = join(part, '0__dvh1_')
+    mkdirSync(fragments, { recursive: true })
+    writeFileSync(join(fragments, '_init.mp4'), Buffer.alloc(20))
+    writeFileSync(join(fragments, '0000.m4s'), Buffer.alloc(480))
+    writeFileSync(join(fragments, '0001.m4s'), Buffer.alloc(500))
+    writeFileSync(join(part, 'part.mp4'), Buffer.alloc(500))
+    expect(reWorkPhase('Binary merging...', dir, 100)).toBe('merge')
+    const merging = reSidecarProgress(dir, 'merge')
+    expect(merging.ratio).toBeCloseTo(0.5)
+    expect(merging.log).toContain('500 B/1000 B')
+    writeFileSync(join(part, 'part.mp4'), Buffer.alloc(1000))
+    writeFileSync(join(part, 'a'.repeat(32) + '.mp4'), Buffer.alloc(400))
+    expect(reWorkPhase('Binary merging...\nDecrypting using SHAKA_PACKAGER...', dir, 100)).toBe('decrypt')
+    const decrypting = reSidecarProgress(dir, 'decrypt')
+    expect(decrypting.ratio).toBeCloseTo(0.4)
+    expect(decrypting.log).toContain('400 B/1000 B')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('RE reports nested decrypt growth even when its console output ends at merge', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-apple-part-live-'))
+  try {
+    const part = join(dir, 'download', '0__dvh1_', 'parts', '0000')
+    const fragments = join(part, '0__dvh1_')
+    mkdirSync(fragments, { recursive: true })
+    writeFileSync(join(fragments, '0000.m4s'), Buffer.alloc(1000))
+    const script = `const fs=require('node:fs');const path=require('node:path');
+      console.log('Selected streams:');console.log('Vid | 100 Segments');console.log('Save Name: download');
+      fs.writeFileSync(${JSON.stringify(join(part, 'part.mp4'))},Buffer.alloc(1000));
+      console.log('Binary merging...');
+      setTimeout(()=>fs.writeFileSync(${JSON.stringify(join(part, 'b'.repeat(32) + '.mp4'))},Buffer.alloc(500)),300);
+      setTimeout(()=>{
+        fs.unlinkSync(${JSON.stringify(join(part, 'b'.repeat(32) + '.mp4'))});
+        const next=${JSON.stringify(join(dir,'download','audio','parts','0000','track'))};
+        fs.mkdirSync(next,{recursive:true});fs.writeFileSync(path.join(next,'0000.m4s.tmp'),Buffer.alloc(200));
+      },650);
+      setTimeout(()=>{},1100);`
+    const seen: { n: number; phase?: string; log?: string }[] = []
+    await runM3u8dl(process.execPath, ['-e', script], '', (n,_total,info) => seen.push({n,phase:info?.phase,log:info?.log}), undefined, dir)
+    const decryptIndex=seen.findIndex(s=>s.phase==='decrypt' && s.n>0 && s.log?.includes('500 B/1000 B'))
+    expect(decryptIndex).toBeGreaterThanOrEqual(0)
+    expect(seen.slice(decryptIndex+1).some(s=>s.phase==='download')).toBe(true)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+},5000)

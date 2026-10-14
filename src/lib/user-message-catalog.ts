@@ -1,6 +1,26 @@
 // Generated from gateway/internal/usermsg/catalog.json; run scripts/sync-user-messages.mjs.
 export const errorCatalog = [
   {
+    "pattern": "APPLETV_LOGIN_REQUIRED",
+    "code": "APPLETV_LOGIN_REQUIRED",
+    "message": "Apple TV 尚未导入可用登录信息，请在平台账号设置中重新导入本人网页登录信息。"
+  },
+  {
+    "pattern": "APPLETV_NOT_ENTITLED",
+    "code": "APPLETV_NOT_ENTITLED",
+    "message": "Apple TV 本次未返回该作品的播放权益，请在官网检查当前账号、账号地区和该作品是否可播放。"
+  },
+  {
+    "pattern": "PLAYREADY_DEVICE_REQUIRED",
+    "code": "PLAYREADY_DEVICE_REQUIRED",
+    "message": "Apple TV 下载授权设备尚未配置，请联系管理员配置 PlayReady 设备。"
+  },
+  {
+    "pattern": "PLAYREADY_(?:HELPER|CDM)_UNAVAILABLE",
+    "code": "PLAYREADY_HELPER_UNAVAILABLE",
+    "message": "Apple TV 下载授权组件不可用，请联系管理员检查 PlayReady 运行环境。"
+  },
+  {
     "pattern": "migu (?:mobile|TV) login required|mgtv.*login required|bilibili.*(?:login required|cookie required|Cookie header required|Cookie is not logged in|upstream code -101)",
     "code": "VIDEO_LOGIN_REQUIRED",
     "message": "请在平台账号设置中登录后重试；咪咕扫码一次后自动检查TV能力，B站请导入本人网页登录信息。"

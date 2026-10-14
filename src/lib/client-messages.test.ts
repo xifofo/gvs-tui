@@ -78,3 +78,37 @@ test('localized unsupported report action allows search without further report r
   await client.invoke('tencent', 'search', { q: '另一个' })
   expect(actions).toEqual(['report', 'search', 'search'])
 })
+
+
+test('Apple failures retain request id and stage in exceptions and local logs without raw secrets', async () => {
+  const dir = mkdtempSync(join(tmpdir(),'gvs-apple-error-'))
+  const oldPath=process.env.GVS_TUI_LOG_PATH, oldLog=process.env.GVS_TUI_LOG, enabled=runLogEnabled()
+  try {
+    process.env.GVS_TUI_LOG_PATH=join(dir,'run.log'); process.env.GVS_TUI_LOG='1'; setRunLogDisabled(false)
+    mock=spyOn(globalThis,'fetch').mockResolvedValue(Response.json({
+      code:503,msg:'Apple TV 本次未返回该作品的播放权益。',error_code:'APPLETV_NOT_ENTITLED',request_id:'request-fixture-123',
+      diagnostics:{stage:'entitlement',upstream_http:403,raw:'PRIVATE_RAW_SECRET',cookie:'PRIVATE_COOKIE'},
+    },{status:503}))
+    const client=new GwClient('https://gateway.example','PRIVATE_KEY')
+    await expect(client.invoke('appletvplus','resolve',{id:'umc.cmc.fixture',download:true})).rejects.toMatchObject({
+      httpStatus:503,errorCode:'APPLETV_NOT_ENTITLED',requestId:'request-fixture-123',diagnostics:{stage:'entitlement',upstream_http:403},
+    })
+    const log=readFileSync(process.env.GVS_TUI_LOG_PATH,'utf8')
+    expect(log).toContain('request_id=request-fixture-123 stage=entitlement upstream_http=403')
+    expect(log).not.toContain('PRIVATE_')
+    expect(userMessage({errorCode:'APPLETV_NOT_ENTITLED'})).toContain('播放权益')
+    expect(userMessage({errorCode:'PLAYREADY_DEVICE_REQUIRED'})).toContain('授权设备尚未配置')
+  } finally {
+    if(oldPath===undefined)delete process.env.GVS_TUI_LOG_PATH;else process.env.GVS_TUI_LOG_PATH=oldPath
+    if(oldLog===undefined)delete process.env.GVS_TUI_LOG;else process.env.GVS_TUI_LOG=oldLog
+    setRunLogDisabled(!enabled);rmSync(dir,{recursive:true,force:true})
+  }
+})
+
+test('invalid or absent gateway diagnostics remain optional and are discarded', async () => {
+  mock=spyOn(globalThis,'fetch').mockResolvedValue(Response.json({code:503,msg:'服务暂时不可用。',error_code:'SERVICE_UNAVAILABLE',
+    request_id:'https://private.invalid/?token=secret',diagnostics:{stage:'Authorization: Bearer PRIVATE_TOKEN',upstream_http:999},
+  },{status:503}))
+  try {await new GwClient('https://gateway.example','key').invoke('appletvplus','resolve',{});throw new Error('expected failure')}
+  catch(error){expect(error).toMatchObject({httpStatus:503,errorCode:'SERVICE_UNAVAILABLE',requestId:undefined,diagnostics:undefined})}
+})

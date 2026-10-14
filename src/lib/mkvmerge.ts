@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { defaultAudioIndex, orderedMuxAudios } from './audio-selection.ts'
 import { statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { truncate } from './util.ts'
 import { ensureFFmpeg } from './tools.ts'
 import { firstPresentationMs, relativePresentationStarts, isEac3ProbeError, dropFirstAudioPacket } from './media-timing.ts'
@@ -243,4 +243,37 @@ async function identify(bin: string, path: string, signal?: AbortSignal): Promis
       try { if (code !== 0 && code !== 1) throw new Error(`mkvmerge 轨道识别失败: ${err}`); resolve(JSON.parse(out)) } catch (e) { reject(e) }
     })
   })
+}
+
+/** RE can disable its own mux for Dolby Vision. Mkvmerge accepts these
+ * decrypted MP4 tracks and keeps the selected audio/subtitle files. */
+export async function mkvmergeTrackFiles(bin: string, inputs: string[], out: string,
+  cb?: (n: number, total: number) => void, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  const records = await Promise.all(inputs.map(async path => ({path,info:await identify(bin,path,signal)})))
+  const tracks = records.flatMap(record=>record.info.tracks)
+  if (!tracks.some(track=>track.type==='video') || !tracks.some(track=>track.type==='audio')) {
+    throw new Error('独立轨道封装失败：缺少已完成的视频或音频轨道')
+  }
+  const args = ['-o',out,'--no-chapters']
+  let firstAudio = true
+  for (const {path,info} of records) {
+    const match = /^download\.([a-z]{2,3}(?:-[a-z0-9]{2,8})*)(?:\.[\w-]+)*\.(?:m4a|aac|ac3|eac3|srt|vtt|ass)$/i.exec(basename(path))
+    for (const track of info.tracks) {
+      if (match && isUnknownAudioLanguage(trackLanguage(track))) args.push('--language',`${track.id}:${match[1]}`)
+      if (track.type==='subtitles') args.push('--default-track',`${track.id}:no`)
+      if (track.type==='audio') {
+        args.push('--default-track',`${track.id}:${firstAudio?'yes':'no'}`)
+        firstAudio = false
+      }
+    }
+    args.push(path)
+  }
+  await run(bin,args,{out,inputs,cb},signal)
+  const finished = await identify(bin,out,signal)
+  for (const type of ['video','audio','subtitles']) {
+    if (finished.tracks.filter(track=>track.type===type).length !== tracks.filter(track=>track.type===type).length) {
+      throw new Error(`独立轨道封装校验失败：${type} 轨道数量不一致`)
+    }
+  }
 }
