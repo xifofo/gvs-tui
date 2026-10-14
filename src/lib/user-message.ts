@@ -14,6 +14,16 @@ export function errorCode(error: unknown): string {
   return typeof row.errorCode === 'string' ? row.errorCode : typeof row.error_code === 'string' ? row.error_code : ''
 }
 
+const deviceFileCodes = new Set(['DRM_CLIENT_DEVICE_REQUIRED', 'DRM_CLIENT_DEVICE_LEVEL', 'DRM_CLIENT_DEVICE_UNREADABLE'])
+const deviceFileMessages = new Set(errorCatalog.filter(row => deviceFileCodes.has(row.code)).map(row => row.message as string))
+
+/** 网关要求用户先上传或更换本人设备文件（原始错误或已转换的提示都能识别）。 */
+export function needsDeviceFile(error: unknown): boolean {
+  if (deviceFileCodes.has(errorCode(error))) return true
+  const text = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
+  return deviceFileMessages.has(text.trim()) || /DRM_CLIENT_DEVICE_(?:REQUIRED|LEVEL|UNREADABLE)/.test(text)
+}
+
 /** Only use at display/IPC boundaries; internal retries keep original errors. */
 export function userMessage(error: unknown, fallback = defaultErrorMessage): string {
   const code = errorCode(error)

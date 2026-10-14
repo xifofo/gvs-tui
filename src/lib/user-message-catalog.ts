@@ -1,6 +1,56 @@
 // Generated from gateway/internal/usermsg/catalog.json; run scripts/sync-user-messages.mjs.
 export const errorCatalog = [
   {
+    "pattern": "DRM_CLIENT_DEVICE_REQUIRED",
+    "code": "DRM_CLIENT_DEVICE_REQUIRED",
+    "message": "该平台获取内容密钥需要你本人的设备文件，请在 App「设置 → 设备文件」上传 Widevine .wvd 或 PlayReady .prd 后重试。"
+  },
+  {
+    "pattern": "DRM_CLIENT_DEVICE_LEVEL",
+    "code": "DRM_CLIENT_DEVICE_LEVEL",
+    "message": "已上传设备文件的安全等级不满足本次请求（例如高画质需要 L1），请上传对应等级的设备文件或选择较低画质。"
+  },
+  {
+    "pattern": "DRM_CLIENT_DEVICE_UNREADABLE",
+    "code": "DRM_CLIENT_DEVICE_UNREADABLE",
+    "message": "已保存的设备文件无法读取，请在「设置 → 设备文件」删除后重新上传。"
+  },
+  {
+    "pattern": "DRM_CLIENT_DEVICE_INVALID",
+    "code": "DRM_CLIENT_DEVICE_INVALID",
+    "message": "设备文件无效，请上传本人可用的 Widevine v2 .wvd 或 PlayReady .prd 文件。"
+  },
+  {
+    "pattern": "DRM_CLIENT_DEVICE_TOO_LARGE",
+    "code": "DRM_CLIENT_DEVICE_TOO_LARGE",
+    "message": "设备文件超过 1 MB 上限，请确认选择的是 .wvd 或 .prd 文件。"
+  },
+  {
+    "pattern": "DRM_CLIENT_STORE_UNAVAILABLE",
+    "code": "DRM_CLIENT_STORE_UNAVAILABLE",
+    "message": "网关暂时无法保存或读取设备文件，请联系管理员。"
+  },
+  {
+    "pattern": "DRM_SYSTEM_INVALID",
+    "code": "DRM_SYSTEM_INVALID",
+    "message": "设备文件类型只能是 Widevine 或 PlayReady。"
+  },
+  {
+    "pattern": "DRM_RATE_LIMITED",
+    "code": "DRM_RATE_LIMITED",
+    "message": "设备文件操作过于频繁，请稍后再试。"
+  },
+  {
+    "pattern": "PLAYREADY_HELPER_BUSY",
+    "code": "PLAYREADY_HELPER_BUSY",
+    "message": "PlayReady 设备检查繁忙，请稍后重试。"
+  },
+  {
+    "pattern": "PROVIDER_SECRET_KEY_REQUIRED",
+    "code": "PROVIDER_SECRET_KEY_REQUIRED",
+    "message": "网关未配置加密密钥，暂时不能保存设备文件，请联系管理员。"
+  },
+  {
     "pattern": "APPLETV_LOGIN_REQUIRED",
     "code": "APPLETV_LOGIN_REQUIRED",
     "message": "Apple TV 尚未导入可用登录信息，请在平台账号设置中重新导入本人网页登录信息。"

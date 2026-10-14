@@ -14,9 +14,9 @@ import { parseEpisodes as parseEps } from '@tui/episodes.ts'
 // 只是去掉了按键状态机，改成显式参数。
 import { app } from 'electron'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import QRCode from 'qrcode'
-import { GwClient, ReloginRequired, GW_DEFAULT_ACCOUNT, type KeyInfo } from '@tui/client.ts'
+import { DRM_MAX_BYTES, GwClient, ReloginRequired, GW_DEFAULT_ACCOUNT, type DRMStatus, type DRMSystem, type KeyInfo } from '@tui/client.ts'
 import { selectAudioTracks } from '@tui/audio-selection.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from '@tui/vault-migrate.ts'
@@ -1769,9 +1769,39 @@ export class Core {
   outDir(): string {
     return this.cfg.outDir
   }
+
+  /** 设备文件：只在用户打开「设置 → 设备文件」时查询，下载前不预检，由网关返回错误。 */
+  async drmStatus(): Promise<DRMStatus> {
+    return this.client().drmStatus()
+  }
+
+  async uploadDRM(system: DRMSystem, filePath: string): Promise<DRMStatus> {
+    const ext = drmExtension(system)
+    if (!filePath.toLowerCase().endsWith(ext)) throw new Error(`请选择 ${ext} 文件`)
+    const info = statSync(filePath)
+    if (!info.isFile() || info.size <= 0 || info.size > DRM_MAX_BYTES) throw new Error('设备文件为空或超过 1 MB 上限')
+    const bytes = readFileSync(filePath)
+    try {
+      await this.client().putDRM(system, bytes, basename(filePath))
+    } finally {
+      bytes.fill(0)
+    }
+    return this.client().drmStatus()
+  }
+
+  async deleteDRM(system: DRMSystem): Promise<DRMStatus> {
+    drmExtension(system)
+    return this.client().deleteDRM(system)
+  }
 }
 
 /** 任务的运行配置：当前设置 + pin。key / cookie / sign 仍然来自当前设置。 */
 function runCfg(cfg: FileConfig, pin: Pin): FileConfig {
   return { ...cfg, ...pin }
+}
+
+function drmExtension(system: string): string {
+  if (system === 'widevine') return '.wvd'
+  if (system === 'playready') return '.prd'
+  throw new Error('设备文件类型无效')
 }

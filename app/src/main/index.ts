@@ -261,6 +261,17 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
     })
     return r.canceled ? '' : (r.filePaths[0] ?? '')
   },
+  drmStatus: () => core.drmStatus(),
+  uploadDRM: async (system) => {
+    const widevine = system === 'widevine'
+    const r = await dialog.showOpenDialog(win!, {
+      properties: ['openFile'],
+      filters: [widevine ? { name: 'Widevine 设备文件', extensions: ['wvd'] } : { name: 'PlayReady 设备文件', extensions: ['prd'] }],
+    })
+    if (r.canceled || !r.filePaths[0]) return null
+    return core.uploadDRM(system, r.filePaths[0])
+  },
+  deleteDRM: (system) => core.deleteDRM(system),
   youkuQrStart: () => core.youkuQrStart(),
   iqcnQrStart: () => core.iqcnQrStart(),
   iqcnQrPoll: () => core.iqcnQrPoll(),

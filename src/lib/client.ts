@@ -1,3 +1,4 @@
+import type { DRMFileStatus, DRMStatus, DRMSystem } from './drm-types.ts'
 import { truncate } from './util.ts'
 import type { FileConfig } from './config.ts'
 import { fetchGateway } from './proxy.ts'
@@ -55,6 +56,8 @@ function hashTail(s: string): string {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
   return (h >>> 0).toString(36)
 }
+
+export { DRM_MAX_BYTES, type DRMFileStatus, type DRMStatus, type DRMSystem } from './drm-types.ts'
 
 export class GwClient {
   host: string
@@ -270,6 +273,23 @@ export class GwClient {
     }
   }
 
+  /** 本 Key 上传的设备文件状态；不含文件内容 */
+  async drmStatus(): Promise<DRMStatus> {
+    const env = await this.request('GET', '/v1/drm/devices', undefined, undefined, 15_000)
+    return env.data as DRMStatus
+  }
+
+  /** 上传或替换本 Key 的设备文件；网关校验格式并加密保存 */
+  async putDRM(system: DRMSystem, bytes: Uint8Array, name: string): Promise<DRMFileStatus> {
+    const env = await this.request('PUT', `/v1/drm/devices/${system}`, bytes, { 'X-DRM-Name': encodeURIComponent(name.slice(0, 128)) }, 60_000)
+    return env.data as DRMFileStatus
+  }
+
+  async deleteDRM(system: DRMSystem): Promise<DRMStatus> {
+    const env = await this.request('DELETE', `/v1/drm/devices/${system}`, undefined, undefined, 15_000)
+    return env.data as DRMStatus
+  }
+
   async keyInfo(): Promise<KeyInfo> {
     const env = await this.request('GET', '/v1/key')
     return (env.data ?? {}) as KeyInfo
@@ -283,8 +303,11 @@ export class GwClient {
     timeoutMs = DEFAULT_TIMEOUT_MS,
   ): Promise<Envelope> {
     const headers: Record<string, string> = { Authorization: `Bearer ${this.key}` }
-    let payload: string | undefined
-    if (body !== undefined) {
+    let payload: string | Uint8Array<ArrayBuffer> | undefined
+    if (body instanceof Uint8Array) {
+      headers['Content-Type'] = 'application/octet-stream'
+      payload = body as Uint8Array<ArrayBuffer>
+    } else if (body !== undefined) {
       headers['Content-Type'] = 'application/json'
       payload = JSON.stringify(body)
     }
