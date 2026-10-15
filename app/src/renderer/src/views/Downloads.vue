@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import UploadProgress from '../integrations/plutofish/UploadProgress.vue'
+import { transferState, transferLabel, transferPercent } from '@shared/job-transfer'
+import PublicationDetails from '../integrations/plutofish/PublicationDetails.vue'
 import { actualVersionDetail, actualVersionSummary } from '../../../../../src/lib/actual-version'
 import TencentDiagnostics from '../components/TencentDiagnostics.vue'
 import { computed, reactive, ref, watch } from 'vue'
@@ -14,28 +17,31 @@ import { needsDeviceFile } from '@shared/user-message'
 const diagnosticsJob = ref<number | undefined>()
 const showDiagnostics = ref(false)
 const page = ref<HTMLElement | null>(null)
-type Filter = 'all' | 'active' | 'paused' | 'failed' | 'done'
+type Filter = 'all' | 'active' | 'pending' | 'paused' | 'failed' | 'done'
 const filter = computed({ get: () => store.dlFilter as Filter, set: (v: Filter) => (store.dlFilter = v) })
 
 const count = (pred: (j: JobView) => boolean) => store.jobs.filter(pred).length
-const isActive = (j: JobView) => j.state === 'running' || j.state === 'queued'
+const isActive = (j: JobView) => transferState(j) === 'active'
+const isDone = (j: JobView) => transferState(j) === 'done'
 const counts = computed(() => ({
   all: store.jobs.length,
   active: count(isActive),
-  paused: count((j) => j.state === 'paused'),
-  failed: count((j) => j.state === 'failed'),
-  done: count((j) => j.state === 'done'),
+  pending: count((j) => transferState(j) === 'pending'),
+  paused: count((j) => transferState(j) === 'paused'),
+  failed: count((j) => transferState(j) === 'failed'),
+  done: count(isDone),
 }))
 const TABS: Array<{ key: Filter; label: string; empty: string }> = [
   { key: 'all', label: '全部', empty: '还没有下载任务。搜一部剧，选好集数和画质就能开始。' },
-  { key: 'active', label: '进行中', empty: '没有正在下载或排队的任务' },
+  { key: 'active', label: '进行中', empty: '没有正在下载、上传或排队的任务' },
+  { key: 'pending', label: '待处理', empty: '没有需要补全信息的任务' },
   { key: 'paused', label: '已暂停', empty: '没有暂停的任务' },
   { key: 'failed', label: '失败', empty: '没有失败的任务' },
   { key: 'done', label: '已完成', empty: '还没有已完成的任务' },
 ]
 
 const match = (j: JobView) =>
-  filter.value === 'all' ? true : filter.value === 'active' ? isActive(j) : j.state === filter.value
+  filter.value === 'all' || transferState(j) === filter.value
 
 const groups = computed(() => {
   const map = new Map<string, { id: string; title: string; provider: JobView['provider']; poster: string; quality: string; jobs: JobView[] }>()
@@ -74,13 +80,12 @@ const folds = reactive<Record<string, boolean>>({})
 const barClass = (j: JobView) =>
   j.state === 'done' ? 'done' : j.state === 'failed' ? 'fail' : j.state === 'paused' ? 'pause' : /封装|合并|mux|remux/i.test(j.status) ? 'mux' : ''
 const pct = (j: JobView) => Math.round((j.state === 'done' ? 1 : j.pct) * 100)
-const doneCount = (jobs: JobView[]) => jobs.filter((j) => j.state === 'done').length
+const doneCount = (jobs: JobView[]) => jobs.filter(isDone).length
 
-const groupPct = (jobs: JobView[]) => (jobs.length ? Math.round((jobs.reduce((s, j) => s + (j.state === 'done' ? 1 : j.pct), 0) / jobs.length) * 100) : 0)
+const groupPct = (jobs: JobView[]) => jobs.length ? Math.round(jobs.reduce((s, j) => s + transferPercent(j), 0) / jobs.length) : 0
 const groupBar = (jobs: JobView[]) =>
-  jobs.every((j) => j.state === 'done') ? 'done' : jobs.some(isActive) ? '' : jobs.some((j) => j.state === 'failed') ? 'fail' : 'pause'
-const groupStatus = (j: JobView) =>
-  j.state === 'queued' ? '排队中' : j.state === 'paused' ? '已暂停' : j.state === 'failed' ? '失败' : j.state === 'done' ? '完成' : j.status
+  jobs.every(isDone) ? 'done' : jobs.some(isActive) ? '' : jobs.some((j) => transferState(j) === 'failed') ? 'fail' : 'pause'
+const groupStatus = transferLabel
 const base = (p: string) => p.split(/[\\/]/).pop() || p
 const sub = (j: JobView) =>
   j.state === 'failed' ? j.err
@@ -98,12 +103,12 @@ const mediaDetail = (j: JobView) => {
 }
 
 const isFolded = (g: { id: string; jobs: JobView[] }) =>
-  folds[g.id] ?? (filter.value === 'all' && g.jobs.every((j) => j.state === 'done'))
+  folds[g.id] ?? (filter.value === 'all' && g.jobs.every(isDone))
 const toggleFold = (g: { id: string; jobs: JobView[] }) => (folds[g.id] = !isFolded(g))
 
 /** 整组完成并自动收起后回到页首，避免停在缩短后的列表中间。 */
 watch(
-  () => pagedGroups.value.map((g) => ({ id: g.id, done: g.jobs.every((j) => j.state === 'done'), folded: isFolded(g) })),
+  () => pagedGroups.value.map((g) => ({ id: g.id, done: g.jobs.every(isDone), folded: isFolded(g) })),
   (current, previous) => {
     const before = new Map(previous.map((g) => [g.id, g]))
     const autoFolded = current.some((g) => {
@@ -131,7 +136,9 @@ async function call(fn: () => Promise<unknown>, ids: number[] = []) {
 }
 const idsOf = (jobs: JobView[]) => jobs.map((j) => j.id)
 const activeIds = (g: { jobs: JobView[] }) => idsOf(g.jobs.filter(isActive))
-const pausedIds = (g: { jobs: JobView[] }) => idsOf(g.jobs.filter((j) => j.state === 'paused'))
+const pausedIds = (g: { jobs: JobView[] }) => idsOf(g.jobs.filter((j) => transferState(j) === 'paused'))
+const pauseTask = (id: number) => store.jobs.find(j => j.id === id)?.state === 'done' ? gvs('controlPublication', id, 'pause') : gvs('pauseJob', id)
+const resumeTask = (id: number) => store.jobs.find(j => j.id === id)?.state === 'done' ? gvs('controlPublication', id, 'resume') : gvs('resumeJob', id)
 const runEach = async (fn: (id: number) => Promise<unknown>, ids: number[]) => {
   for (const id of ids) await fn(id)
 }
@@ -154,13 +161,14 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
         <h1 class="h1">下载</h1>
         <div class="stats">
           <div class="stat"><b class="run">{{ counts.active }}</b><span>进行中</span></div>
+          <div class="stat"><b class="run">{{ counts.pending }}</b><span>待处理</span></div>
           <div class="stat"><b>{{ counts.paused }}</b><span>已暂停</span></div>
           <div class="stat"><b class="bad">{{ counts.failed }}</b><span>失败</span></div>
           <div class="stat"><b class="good">{{ counts.done }}</b><span>已完成</span></div>
         </div>
         <div class="acts">
-          <button type="button" class="btn" :disabled="!counts.active" @click="call(() => gvs('pauseAll'))"><Icon name="pause" :size="15" />全部暂停</button>
-          <button type="button" class="btn" :disabled="!counts.paused" @click="call(() => gvs('resumeAll'))"><Icon name="play" :size="15" />全部继续</button>
+          <button type="button" class="btn" :disabled="!counts.active" @click="call(() => runEach(pauseTask, idsOf(store.jobs.filter(isActive))))"><Icon name="pause" :size="15" />全部暂停</button>
+          <button type="button" class="btn" :disabled="!counts.paused" @click="call(() => runEach(resumeTask, idsOf(store.jobs.filter(j => transferState(j) === 'paused'))))"><Icon name="play" :size="15" />全部继续</button>
           <button type="button" class="btn" :disabled="!counts.done" @click="call(() => gvs('clearFinished'))"><Icon name="trash" :size="16" />清除已完成</button>
           <button type="button" class="btn" @click="call(() => gvs('openPath', ''))"><Icon name="folder" :size="16" />打开下载目录</button>
         </div>
@@ -192,12 +200,12 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
             <button
               v-if="activeIds(g).length"
               type="button" class="btn sm" :disabled="anyBusy(activeIds(g))"
-              @click="call(() => runEach((id) => gvs('pauseJob', id), activeIds(g)), activeIds(g))"
+              @click="call(() => runEach(pauseTask, activeIds(g)), activeIds(g))"
             >暂停组</button>
             <button
               v-else-if="pausedIds(g).length"
               type="button" class="btn sm outline" :disabled="anyBusy(pausedIds(g))"
-              @click="call(() => runEach((id) => gvs('resumeJob', id), pausedIds(g)), pausedIds(g))"
+              @click="call(() => runEach(resumeTask, pausedIds(g)), pausedIds(g))"
             ><Icon name="play" :size="14" />继续组</button>
             <button type="button" class="btn sm icon" aria-label="删除整组" title="删除整组" @click="pendingConfirm = { kind: 'group', job: null, group: { title: g.title, ids: idsOf(g.jobs) } }"><Icon name="trash" :size="15" /></button>
             <button type="button" class="btn sm icon fold" :aria-expanded="!isFolded(g)" :aria-label="isFolded(g) ? '展开' : '折叠'" @click="toggleFold(g)"><Icon name="chevron" :size="16" /></button>
@@ -209,11 +217,13 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
             <span class="mono lbl">{{ j.label }}</span>
             <div class="st">
               <div class="status-line">
-                <span class="stt" :class="j.state">{{ groupStatus(j) }}</span>
-                <span v-if="j.state === 'done'" class="muted completed-at">· {{ ago(j.finishedAt) || '刚刚' }}</span>
+                <span class="stt" :class="transferState(j)">{{ groupStatus(j) }}</span>
+                <span v-if="j.state === 'done'" class="muted completed-at">· 下载于 {{ ago(j.finishedAt) || '刚刚' }}</span>
               </div>
               <span v-if="sub(j)" class="muted sub" :title="subTitle(j)">{{ sub(j) }}</span>
               <span v-if="mediaSummary(j)" class="muted sub" :title="mediaDetail(j)">{{ mediaSummary(j) }}</span>
+              <UploadProgress v-if="j.state === 'done' && j.publication" :job="j" />
+              <PublicationDetails :draft="j.publication" />
               <span v-if="j.state === 'done' && j.note" class="sub job-note" :title="j.note">{{ j.note }}</span>
               <span v-if="j.hooks?.length || j.ed2k" class="hooks">
                 <span v-for="h in j.hooks" :key="h.event + h.startedAt" class="chip tiny" :class="{ ok: h.state === 'ok', warn: h.state === 'failed' || h.state === 'timeout' }" :title="`${h.command}\n${h.message || ''}\n日志：${h.log}`">
@@ -224,6 +234,7 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
               </span>
             </div>
             <div class="bar">
+              <span class="small dim">下载</span>
               <div class="progress" :class="barClass(j)"><div :style="{ width: pct(j) + '%' }" /></div>
               <span class="mono small dim pc">{{ pct(j) }}%</span>
             </div>
@@ -332,6 +343,7 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
 .stt.done { color: var(--ok); }
 .stt.failed { color: var(--err); }
 .stt.paused { color: var(--ink-3); }
+.stt.pending, .stt.active { color: var(--orange-text); }
 .stt.queued { color: var(--ink-3); font-weight: 500; }
 .sub { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .job-note { color: var(--orange-text); }
@@ -352,6 +364,13 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
   .gbar { width: 160px; }
 }
 @media (max-width: 900px) { .diag-t { display: none; } }
+/* 发布详情需要可读宽度，小窗把状态与详情放到独立整行。 */
+@media (max-width: 600px) {
+  .gh { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; padding: 12px; }
+  .ga { grid-column: 3; grid-row: 1; }
+  .gbar { grid-column: 1 / -1; width: 100%; }
+  .job { padding: 12px; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "lbl ja" "st st" "bar bar"; row-gap: 10px; }
+}
 .diag-layer { position: fixed; inset: 0; z-index: 60; background: rgb(0 0 0 / 38%); display: flex; justify-content: flex-end; }
 .diag-drawer { width: min(520px, 92vw); height: 100%; margin: 0 !important; border-radius: 16px 0 0 16px; overflow: auto; box-shadow: var(--ui-shadow-surface); }
 .drawer-enter-active, .drawer-leave-active { transition: opacity var(--ui-duration-base, .2s) var(--ui-ease-out, ease); }

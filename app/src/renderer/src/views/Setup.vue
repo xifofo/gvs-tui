@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import PlutoFishFields from '../integrations/plutofish/ConnectionFields.vue'
+import type { PlutoFishInput } from '@shared/api'
 import { PROVIDER_NAME, PROVIDERS, type Provider } from '@shared/api'
 import { orderProviders, providerMeta } from '@shared/provider-registry'
 import type { QualityCap } from '@shared/ui-prefs'
@@ -12,10 +14,17 @@ import { errText, go, gvs, prefs, savePrefs, store } from '../store'
 const host = ref(store.state?.settings.host || 'https://')
 const key = ref('')
 const desktopProxy = ref(store.state?.settings.desktopProxy || '')
+const plutofish = ref<PlutoFishInput>({ url: store.state?.plutofish?.url || '', key: '' })
 const busy = ref(false)
 const error = ref(store.state?.keyError ?? '')
+const connectionError = computed(() => {
+  const message = error.value || store.state?.keyError || ''
+  const plutoError = store.state?.plutofish?.error
+  return plutoError && message.includes(plutoError) ? '' : message
+})
 /** 已连上（configured）但仍在引导里时，从第 2 步继续 */
 const step = ref<1 | 2 | 3>(store.state?.configured ? 2 : 1)
+watch(() => store.state?.configured, (ready) => { if (!ready) step.value = 1 })
 
 async function connect() {
   if (busy.value || store.state?.connecting) return
@@ -23,8 +32,8 @@ async function connect() {
   error.value = ''
   store.onboarding = true
   try {
-    store.state = await gvs('setup', host.value, key.value, desktopProxy.value)
-    if (store.state.configured) step.value = 2
+    store.state = await gvs('setup', host.value, key.value, desktopProxy.value, { ...plutofish.value })
+    if (store.state.configured) { key.value = ''; plutofish.value.key = ''; step.value = 2 }
   } catch (e) {
     error.value = errText(e)
   } finally {
@@ -62,7 +71,7 @@ function finish() {
 
 const brandPlats = computed(() => (store.state?.providers?.length ? store.state.providers : PROVIDERS.filter((p) => p !== 'douyin')).slice(0, 9))
 const STEPS = [
-  { n: 1, title: '连接网关', hint: '地址、Key 与代理' },
+  { n: 1, title: '连接服务', hint: '网关与 PlutoFish 双重鉴权' },
   { n: 2, title: '选择常用平台并登录', hint: '只显示你用的平台' },
   { n: 3, title: '下载目录与默认画质', hint: '之后可在设置里修改' },
 ] as const
@@ -88,27 +97,28 @@ const STEPS = [
 
     <section class="right">
       <!-- 1 连接网关 -->
-      <form v-if="step === 1" class="card hard form" @submit.prevent="connect">
+      <form v-if="step === 1" class="card hard form dual-auth" @submit.prevent="connect">
         <div class="title">
           <span class="muted small">第 1 步 / 共 3 步</span>
-          <h2>连接你的网关</h2>
-          <span class="dim">地址和 Key 找网关管理员要，只保存在这台电脑上。</span>
+          <h2>连接网关与 PlutoFish</h2>
+          <span class="dim">分别填写网关和 PlutoFish 的凭据，两项验证通过后才能进入。</span>
         </div>
         <label class="field strong-label">网关地址
-          <input v-model="host" class="input strong mono" placeholder="https://your-gateway.example" autocomplete="off" required />
+          <input v-model="host" :disabled="busy || store.state?.connecting" class="input strong mono" placeholder="https://your-gateway.example" autocomplete="off" required />
         </label>
-        <label class="field strong-label">API Key
+        <label class="field strong-label">网关 API Key
           <span v-if="store.state?.settings.hasKey" class="dim">已保存 Key，留空继续使用。</span>
-          <input v-model="key" class="input strong mono" :placeholder="store.state?.settings.keyMasked || 'sk_live_…'" autocomplete="off" :required="!store.state?.settings.hasKey" />
+          <input v-model="key" type="password" :disabled="busy || store.state?.connecting" class="input strong mono" :placeholder="store.state?.settings.keyMasked || 'sk_live_…'" autocomplete="off" :required="!store.state?.settings.hasKey" />
         </label>
         <label class="field strong-label">代理地址
           <span class="dim">填写 HTTP/HTTPS 代理地址和端口；留空使用系统代理。</span>
-          <input v-model="desktopProxy" class="input strong mono" placeholder="http://127.0.0.1:7890" autocomplete="off" spellcheck="false" />
+          <input v-model="desktopProxy" :disabled="busy || store.state?.connecting" class="input strong mono" placeholder="http://127.0.0.1:7890" autocomplete="off" spellcheck="false" />
         </label>
-        <div v-if="error || store.state?.keyError" class="error-box" role="alert">{{ error || store.state?.keyError }}</div>
+        <PlutoFishFields v-model="plutofish" :state="store.state?.plutofish" :disabled="busy || store.state?.connecting" />
+        <div v-if="connectionError" class="error-box" role="alert">{{ connectionError }}</div>
         <button type="submit" class="btn primary big" :disabled="busy || store.state?.connecting">
           <span v-if="busy || store.state?.connecting" class="spin" />
-          <span>{{ busy || store.state?.connecting ? '连接中…' : '连接，下一步' }}</span>
+          <span>{{ busy || store.state?.connecting ? '连接中…' : '验证并进入' }}</span>
           <Icon v-if="!busy" name="arrow" />
         </button>
         <div class="note"><Icon name="check" :size="15" :stroke="2.5" style="color: var(--ok)" />连上后会自动建立隧道，需要本机出网的平台请求从本机发出</div>
@@ -199,6 +209,7 @@ const STEPS = [
 .muted-l { font-size: 12px; color: var(--ink-3); }
 .right { flex: 1; min-width: 0; overflow-y: auto; padding: 44px 52px; display: flex; flex-direction: column; align-items: center; }
 .form { width: 520px; max-width: 100%; margin: auto 0; flex-shrink: 0; padding: 34px; border-radius: 12px; box-shadow: 8px 8px 0 var(--ink); display: flex; flex-direction: column; gap: 20px; }
+.dual-auth { gap: 12px; padding: 24px; }
 .wide { width: 100%; max-width: 920px; display: flex; flex-direction: column; gap: 18px; margin: auto 0; }
 .title { display: flex; flex-direction: column; gap: 8px; }
 .title h2 { font-size: 26px; font-weight: 900; }

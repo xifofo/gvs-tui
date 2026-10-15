@@ -1,0 +1,89 @@
+/** 下载器流程离线测试覆盖完成回执丢失、重启恢复和失败后继续上报，不触碰用户网盘。 */
+import { expect, test } from 'bun:test'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import type OSS from 'ali-oss'
+import { PlutoFishConnection } from './connection.ts'
+import { PublicationWorker } from './publication-worker.ts'
+import { completePublication, preparePublication } from './publication.ts'
+import type { PublicationDraft } from './publication-types.ts'
+import type { DlTask } from '../../lib/jobs.ts'
+import type { OSSFactory } from './oss-upload.ts'
+
+test('Complete 回执丢失后重启核验原文件，目录上报失败可重放且不重复上传', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'plutofish-worker-'))
+  const path = join(directory, 'E01.mkv'), data = Buffer.alloc(1024, 9)
+  writeFileSync(path, data)
+  const identity = { id: 'pub', name: 'Publisher', kind: 'publisher' as const, sourceAccount: { id: 'source', alias: 'source', name: 'Source' }, categories: [{ value: 'short', label: '短剧' }] }
+  const connection = new PlutoFishConnection({ load: () => ({ url: 'https://example.com', key: 'secret' }), verify: async () => identity })
+  await connection.verify()
+  const draft = completePublication(preparePublication({ provider: 'hongguo', sourceWorkId: 'series1', title: '第一集', series: '红果作品', vid: 'ep1', season: 1, episode: 1, tmdbId: 0, quality: '1080', codec: 'h264', group: '', plot: '' } as DlTask, connection.view(), 'short'), path,
+    { media: { status: 'probed', width: 1080, height: 1920, codec: 'h264', dynamicRange: 'SDR' }, file: { size: data.length } })
+  let uploaded = false, catalogFail = true, puts = 0, starts = 0, view: PublicationDraft = draft
+  const finalReports: unknown[] = []
+  connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, payload: unknown): Promise<T> => {
+    const input = payload as { action?: string }
+    if (route === 'tasks/report') return { outcome: 'applied' } as T
+    if (input.action === 'release' || input.action === 'heartbeat') return { dispatch: { status: 'uploading' } } as T
+    if (route === 'files/report') {
+      finalReports.push(structuredClone(payload))
+      if (catalogFail) throw new Error('PlutoFish 上报失败（HTTP 503）')
+      return { outcome: 'duplicate' } as T
+    }
+    if (input.action === 'verify') {
+      if (!uploaded) throw new Error('115 文件未完成')
+      return { dispatch: { status: 'ready', fileId: '123', pickCode: 'original', filePickCode: 'finishedfile' } } as T
+    }
+    if (input.action === 'credentials') return { credentials: { accessKeyId: 'TEMP-ID', accessKeySecret: 'TEMP-SECRET', securityToken: 'TEMP-TOKEN', expiration: new Date(Date.now() + 3600_000).toISOString(), endpoint: 'https://up-file.115.com', rate: 0 } } as T
+    starts++
+    return { dispatch: { status: 'uploading', pickCode: 'original', bucket: 'bucket', object: 'object', endpoint: 'https://up-file.115.com', callback: '{}' } } as T
+  }
+  const factory: OSSFactory = () => ({ close() {}, client: {
+    async initMultipartUpload() { return { uploadId: 'UPLOAD-1' } as OSS.InitMultipartUploadResult },
+    async listParts() { return { uploadId: 'UPLOAD-1', bucket: 'bucket', name: 'object', parts: [], isTruncated: false } as unknown as OSS.ListPartsResult },
+    async uploadPart(_name, _id, _number, buffer) { puts++; return { etag: createHash('md5').update(buffer).digest('hex') } as OSS.UploadPartResult },
+    async completeMultipartUpload() { uploaded = true; throw new Error('response lost') },
+  } })
+  const phases: string[] = [], bytes: number[] = []
+  const changed = (value: PublicationDraft) => { view = value; if (value.progress?.phase) phases.push(value.progress.phase); bytes.push(value.progress?.uploadedBytes ?? 0) }
+  let worker = new PublicationWorker(connection, changed, { directory, factory, manual: true })
+  const settle = async (stage: string) => {
+    for (let i = 0; i < 100; i++) {
+      await worker.tick()
+      if (view.progress?.stage === stage) return
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    throw new Error(`did not reach ${stage}: ${view.progress?.stage}`)
+  }
+  try {
+    worker.register(draft)
+    worker.event(draft, { id: 1, done: true, status: '完成', pct: 1, log: path, err: '' })
+    await settle('failed')
+    expect(puts).toBe(1)
+    expect(phases).toContain('hashing')
+    expect(phases).toContain('uploading')
+    expect(bytes).toContain(data.length)
+    expect(view.progress?.sizeBytes).toBe(data.length)
+    expect(finalReports).toHaveLength(0)
+    await worker.close()
+    worker = new PublicationWorker(connection, changed, { directory, factory, manual: true })
+    worker.control(draft.fileKey, 'resume')
+    await settle('failed')
+    expect(finalReports).toHaveLength(1)
+    catalogFail = false
+    worker.control(draft.fileKey, 'resume')
+    await settle('completed')
+    await worker.tick()
+    expect(finalReports).toHaveLength(2)
+    expect(finalReports[0]).toEqual(finalReports[1])
+    expect(finalReports[0]).toMatchObject({ resource: { pickCode: 'finishedfile' } })
+    expect(starts).toBe(1)
+    expect(puts).toBe(1)
+    expect(view.progress?.synced).toBeTrue()
+    expect(phases).toContain('verifying')
+    expect(phases).toContain('reporting')
+    for (const name of readdirSync(directory).filter(n => n.endsWith('.json'))) expect(readFileSync(join(directory, name), 'utf8')).not.toContain('TEMP-')
+  } finally { await worker.close(); connection.close(); rmSync(directory, { recursive: true, force: true }) }
+})

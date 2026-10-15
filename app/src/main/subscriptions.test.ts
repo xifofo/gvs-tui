@@ -14,7 +14,7 @@ function harness() {
   const deps = {
     detail: async () => ({ provider: 'tencent', id: 's1', title: '剧', poster: '', desc: '', category: '', year: 2026, tags: [], score: '', vip: false, drm: '', kind: 'show', episodeCount: eps.length, episodes: eps, pickNoun: '集' }) as DetailView,
     probe: async () => ({ token: 7, qualities, audios: [{ id: 'aac', label: '普通话', lang: 'zh', codec: 'aac', isDefault: true, selected: true, embedded: true }], vip: null, warning: '' }),
-    enqueue: (r: EnqueueRequest) => { enq.push(r); return r.episodes.length },
+    enqueue: (r: EnqueueRequest): number | Promise<number> => { enq.push(r); return r.episodes.length },
     notify: (t: string, b: string) => void notes.push(`${t}|${b}`),
     changed: () => {},
     load: () => saved || null,
@@ -50,6 +50,23 @@ test('first check records baseline, later checks download new episodes by rules'
   expect([h.enq[0]!.quality, h.enq[0]!.audioIds, h.enq[0]!.token]).toEqual([0, ['aac'], 7])
   expect(v.episodes[2]!.downloaded?.tier).toBe(1)
   expect(h.notes.length).toBe(2)
+})
+
+test('subscription waits for title resolution and does not record a rejected asynchronous enqueue as downloaded', async () => {
+  const h = harness()
+  const s = h.m.subscribe({ provider: 'tencent', showId: 's1', title: '剧', poster: '', kind: 'show', rules: 'any' })
+  h.m.stop()
+  await h.m.checkNow(s.id)
+  h.setEps(3)
+  let reject!: (reason: Error) => void
+  h.deps.enqueue = () => new Promise((_resolve, fail) => { reject = fail })
+  const checking = h.m.checkNow(s.id)
+  await Bun.sleep(1)
+  expect(h.m.view().subs[0]!.episodes.find(e => e.vid === 'v3')?.downloaded).toBeUndefined()
+  reject(new Error('发布端或源账号已改变'))
+  await checking
+  expect(h.m.view().subs[0]!.episodes.find(e => e.vid === 'v3')?.downloaded).toBeUndefined()
+  expect(h.notes.some(note => note.includes('已加入下载'))).toBe(false)
 })
 
 test('upgrade re-downloads when a better tier appears; persistence round-trips', async () => {

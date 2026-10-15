@@ -1,9 +1,10 @@
+import type { PlutoFishView } from './integrations/plutofish/types.ts'
 import type { TmdbSeason } from './lib/tmdb-types'
 import type { TencentPlayParams } from './lib/tencent-edition-types'
 export type { TencentPlayParams } from './lib/tencent-edition-types'
 import type { CompletedMedia } from './lib/actual-version'
 
-export type Job = { id: number; title: string; status: string; pct: number; log: string; err: string; note?: string; phase?: string; completedMedia?: CompletedMedia }
+export type Job = { id: number; title: string; status: string; pct: number; log: string; err: string; note?: string; phase?: string; completedMedia?: CompletedMedia; publication?: import('./integrations/plutofish/publication-types.ts').PublicationDraft }
 export type Row = {
   title: string
   id: string
@@ -72,6 +73,7 @@ export type Quality = {
 /** Selectable audio track (only some platforms expose more than one). */
 export type Audio = { id: string; label: string; lang: string; codec: string; isDefault: boolean; selected: boolean; embedded?: boolean; vid?: string; url?: string }
 export type Detail = {
+  posterUrl?: string
   title: string
   desc: string
   category: string
@@ -178,6 +180,8 @@ export type Snapshot = {
   /** Probing the stream list failed and the next Enter downloads with defaults. */
   probeFailed: boolean
   query?: string
+  plutofish?: PlutoFishView
+  connectionForm?: { field: number; url: string; keyLength: number; gatewayKeyLength: number }
   hostInput?: string
   hostFocused: boolean
   keyFocused: boolean

@@ -47,8 +47,12 @@ import type { CompletedMedia, MediaSpecs } from './actual-version.ts'
 import { probeFinishedMedia } from './gvs-record.ts'
 
 export type DlTask = {
+  publication?: import('../integrations/plutofish/publication-types.ts').PublicationDraft
   tencentPlayParams?: import('../types.ts').TencentPlayParams
   provider: string
+  /** Stable platform work ID and source artwork for titles without TMDB. */
+  sourceWorkId?: string
+  posterUrl?: string
   title: string
   series: string
   vid: string
@@ -78,6 +82,10 @@ export type DlTask = {
   /** Details of the explicitly matched TMDB title, retained for resume/retry. */
   tmdbMetadata?: TmdbDetails
   nameDots: string
+  /** Resolved once for new tasks; restored queues keep this exact prefix. */
+  filenameTitle?: string
+  namingOrder?: 'title-year'
+  outputNaming?: import('./output-naming').OutputNaming
   year: number
   plot: string
   kind?: MediaKind
@@ -298,6 +306,8 @@ export function jobNaming(t: DlTask, cfg: FileConfig): Naming {
     kind: t.kind ?? (t.provider === 'hongguo' || t.provider === 'huangguo' || t.provider === 'douyin' ? 'short' : 'show'),
     title: t.series || t.title,
     nameDots: t.nameDots,
+    filenameTitle: t.filenameTitle,
+    namingOrder: t.namingOrder,
     year: t.year,
     season: t.season,
     episode: t.episode,

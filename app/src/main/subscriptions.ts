@@ -15,7 +15,7 @@ export type SubDeps = {
   isDownloaded?: (provider: Provider, vid: string) => boolean
   detail(provider: Provider, id: string): Promise<DetailView>
   probe(provider: Provider, episodes: EpisodeView[], accountId?: string): Promise<ProbeResult>
-  enqueue(req: EnqueueRequest): number
+  enqueue(req: EnqueueRequest): number | Promise<number>
   notify(title: string, body: string, sub: Subscription): void
   changed(view: SubsView): void
   load(): string | null
@@ -222,7 +222,7 @@ export class SubscriptionManager {
     const probe = await this.deps.probe(d.provider, eps, sub.accountId)
     const m = pickBest(sub.rules, candidatesOf(probe))
     if (!m) return '规则组没有一档满足，等待更好的版本'
-    const n = this.deps.enqueue({ ...this.request(d, eps, probe.token, m.index, m.audioIds), accountId: sub.accountId })
+    const n = await this.deps.enqueue({ ...this.request(d, eps, probe.token, m.index, m.audioIds), accountId: sub.accountId })
     for (const e of eps) {
       const rec = sub.episodes.find((x) => x.vid === e.vid)
       if (rec) rec.downloaded = { tier: m.tier, label: m.label, at: this.now() }
@@ -240,7 +240,7 @@ export class SubscriptionManager {
     const probe = await this.deps.probe(d.provider, [ep], sub.accountId)
     const m = pickBest(sub.rules, candidatesOf(probe))
     if (!shouldUpgrade(rec.downloaded!.tier, m)) return ''
-    this.deps.enqueue({ ...this.request(d, [ep], probe.token, m!.index, m!.audioIds), accountId: sub.accountId })
+    await this.deps.enqueue({ ...this.request(d, [ep], probe.token, m!.index, m!.audioIds), accountId: sub.accountId })
     const from = rec.downloaded!.label
     rec.downloaded = { tier: m!.tier, label: m!.label, at: this.now() }
     this.deps.notify(`《${sub.title}》洗版`, `第 ${rec.number} 集 ${from} → ${m!.label}`, sub)

@@ -1,3 +1,10 @@
+import type { PlutoFishInput, PlutoFishView, PublisherDirectoryPage } from '../../../src/integrations/plutofish/types.ts'
+import type { PublicationDraft, PublicationInput } from '../../../src/integrations/plutofish/publication-types.ts'
+import type { PublicationContext, PublicationPreferences } from '../../../src/integrations/plutofish/publication-preferences.ts'
+export type { PublicationContext, PublicationPreferences } from '../../../src/integrations/plutofish/publication-preferences.ts'
+export type { PublicationDraft, PublicationInput } from '../../../src/integrations/plutofish/publication-types.ts'
+export type { PlutoFishInput, PlutoFishView } from '../../../src/integrations/plutofish/types.ts'
+export type { PublisherDirectory, PublisherDirectoryPage } from '../../../src/integrations/plutofish/types.ts'
 import type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
 import type { DRMStatus, DRMSystem } from '../../../src/lib/drm-types'
 export type { DRMFileStatus, DRMStatus, DRMSystem } from '../../../src/lib/drm-types'
@@ -66,6 +73,7 @@ export type SettingsView = {
 export type SettingsPatch = Partial<Omit<SettingsView, 'keyMasked' | 'hasKey' | 'ui'>> & { key?: string; ui?: Partial<UiPrefs> }
 
 export type AppState = {
+  plutofish?: PlutoFishView
   accountScope?: string
   configured: boolean
   connecting: boolean
@@ -191,8 +199,10 @@ export type { TmdbSeason, TmdbSeasonList } from '../../../src/lib/tmdb-types'
 import type { TmdbSeasonList } from '../../../src/lib/tmdb-types'
 
 export type EnqueueRequest = {
+  naming?: import('../../../src/lib/output-naming.ts').OutputNaming
+  publication?: PublicationInput
   token: number
-  detail: Pick<DetailView, 'provider' | 'id' | 'title' | 'year' | 'kind' | 'poster'>
+  detail: Pick<DetailView, 'provider' | 'id' | 'title' | 'year' | 'kind' | 'poster'> & { desc?: string }
   episodes: EpisodeView[]
   quality: number
   audioIds: string[]
@@ -206,6 +216,7 @@ export type EnqueueRequest = {
 }
 
 export type JobView = {
+  publication?: PublicationDraft
   id: number
   groupId: string
   groupTitle: string
@@ -270,7 +281,7 @@ export type HistoryEntry = {
 }
 export type HistoryQuery = { text?: string; provider?: string; showId?: string; limit?: number; offset?: number }
 
-export type NamingPreview = { folder: string; file: string; note?: string }
+export type NamingPreview = { relativeFolders?: string[]; folder: string; file: string; note?: string; title?: string; year?: number; season?: number }
 
 export type QRImage = { title: string; image: string }
 export type QRStart = { images: QRImage[]; hint: string }
@@ -296,7 +307,7 @@ export interface GvsApi {
   tencentDiagnostics(jobID?: number): Promise<TencentDiagnostic[]>
   providerSession(command: SessionCommand): Promise<ProviderSessionView>
   state(): Promise<AppState>
-  setup(host: string, key: string, desktopProxy?: string): Promise<AppState>
+  setup(host: string, key: string, desktopProxy?: string, plutofish?: PlutoFishInput): Promise<AppState>
   saveSettings(patch: SettingsPatch): Promise<AppState>
   catalog(provider: Provider, country?: string): Promise<Section[]>
   browse(provider: Provider, section: Section, cursor?: string): Promise<BrowseResult>
@@ -309,12 +320,19 @@ export interface GvsApi {
   /** accountId：用指定账号探测（空 = 默认）；会员/登录错误时自动换号重试 */
   probe(provider: Provider, episodes: EpisodeView[], accountId?: string): Promise<ProbeResult>
   namingPreview(req: EnqueueRequest): Promise<NamingPreview>
+  publicationPreferences(context: PublicationContext): Promise<PublicationPreferences | null>
+  refreshPublicationCategories(): Promise<PlutoFishView>
+  savePublicationPreferences(context: PublicationContext, input: PublicationPreferences['publication']): Promise<void>
   tmdbSearch(title: string, tv: boolean): Promise<TmdbHit[]>
   tmdbSeasons(id: number): Promise<TmdbSeasonList>
   enqueue(req: EnqueueRequest): Promise<number>
   jobs(): Promise<JobView[]>
   retryJob(id: number): Promise<void>
   /** 暂停：停掉进程、保留已下载的部分；排队中的直接挂起 */
+  controlPublication(id: number, action: 'pause' | 'resume'): Promise<void>
+  completePublicationSetup(id: number, category: string): Promise<void>
+  createPublisherDirectories(sourceAccountId: string, directoryId: string, segments: string[]): Promise<PublisherDirectoryPage>
+  publisherDirectories(sourceAccountId: string, directoryId: string, cursor?: string): Promise<PublisherDirectoryPage>
   pauseJob(id: number): Promise<void>
   /** 继续：重新排队，能续传的从断点接着下 */
   resumeJob(id: number): Promise<void>

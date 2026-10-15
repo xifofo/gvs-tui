@@ -25,7 +25,7 @@ import { visibleProviders } from '@shared/provider-registry'
 
 export type View = 'home' | 'discover' | 'search' | 'detail' | 'quality' | 'downloads' | 'settings' | 'accounts' | 'calendar' | 'subscriptions' | 'history'
 /** 'account' 保留为兼容别名：账号已移到独立的「账号」页。 */
-export type SettingsTab = 'download' | 'appearance' | 'account' | 'gateway' | 'devices' | 'naming' | 'about'
+export type SettingsTab = 'download' | 'appearance' | 'account' | 'gateway' | 'devices' | 'plutofish' | 'naming' | 'about'
 
 // 参数可能是 Vue 响应式代理，IPC 的结构化克隆不认；统一转成纯数据再发。
 export const gvs = <K extends keyof GvsApi>(method: K, ...args: Parameters<GvsApi[K]>): ReturnType<GvsApi[K]> =>
@@ -63,7 +63,7 @@ export const store = reactive({
   qualityInline: false,
 
   settingsTab: 'download' as SettingsTab,
-  dlFilter: 'all' as 'all' | 'active' | 'paused' | 'failed' | 'done',
+  dlFilter: 'all' as 'all' | 'active' | 'pending' | 'paused' | 'failed' | 'done',
 
   probe: null as ProbeResult | null,
   probeEpisodes: [] as EpisodeView[],

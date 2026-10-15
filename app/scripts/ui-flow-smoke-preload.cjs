@@ -106,6 +106,8 @@ contextBridge.exposeInMainWorld('gvs', {
         return { token: 701, qualities: clone(qualities), audios: clone(audios), vip: { canPlay: true, isVip: true, hasTrial: false, note: '' }, warning: '' }
       }
       case 'namingPreview': return { folder: `D:/GVS/Downloads/${title} (2026)/Season 01`, file: `${title}.S01E${String(args[0].episodes[0].number).padStart(2, '0')}.${qualities[args[0].quality].label}.GVS.mkv`, note: '其余集数自动命名' }
+      case 'publicationPreferences': return null
+      case 'savePublicationPreferences': return
       case 'enqueue': {
         // Delay intentionally makes a same-tick double click observable.
         await delay(300)

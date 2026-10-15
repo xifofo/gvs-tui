@@ -1,14 +1,29 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
-import type { CheckWindow, Subscription, SubscriptionPatch } from '@shared/api'
+import { computed, reactive, ref } from 'vue'
+import type { CheckWindow, PublicationInput, PublicationPreferences, Subscription, SubscriptionPatch, TmdbHit } from '@shared/api'
 import { formatRules, parseRules } from '@shared/rule-groups'
 import { windowText } from '@shared/subscription'
+import { outputNaming, type OutputNaming } from '@shared/output-naming'
 import Icon from './Icon.vue'
 import AccountPicker from './AccountPicker.vue'
-import { accountsOf } from '../store'
+import { accountsOf, errText, store } from '../store'
+import PublicationFields from '../integrations/plutofish/PublicationFields.vue'
 
-const props = defineProps<{ sub: Pick<Subscription, 'title' | 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'provider' | 'accountId'>; globalMinutes: number; saving?: boolean }>()
+const props = defineProps<{ sub: Pick<Subscription, 'title' | 'rules' | 'autoDownload' | 'upgrade' | 'window' | 'provider' | 'accountId' | 'showId' | 'kind'>; globalMinutes: number; saving?: boolean }>()
 const emit = defineEmits<{ save: [patch: SubscriptionPatch]; cancel: [] }>()
+const publication = ref<PublicationInput>({ category: '' })
+const publicationFields = ref<InstanceType<typeof PublicationFields> | null>(null)
+const tmdb = ref<TmdbHit | null>(null)
+const season = ref('')
+const naming = ref<OutputNaming>({})
+const publicationSaving = ref(false)
+const publicationError = ref('')
+function restorePublication(saved: PublicationPreferences) {
+  tmdb.value = saved.tmdb
+  naming.value = { ...saved.naming }
+  const number = saved.naming?.season ?? saved.tmdbSeason
+  season.value = number === undefined ? '' : String(number)
+}
 
 const PRESETS = [
   { label: '最高画质 + 杜比', rules: '4K & Dolby > 4K > 1080P & Dolby > 1080P > any' },
@@ -51,9 +66,16 @@ const invalid = computed(() => !!parsed.value.errors.length || !parsed.value.tie
 function toggleDay(d: number) {
   form.days = form.days.includes(d) ? form.days.filter((x) => x !== d) : [...form.days, d]
 }
-function submit() {
-  if (invalid.value) return
-  emit('save', { accountId: form.accountId || undefined, rules: formatRules(parsed.value), autoDownload: form.autoDownload, upgrade: form.upgrade, window: win.value })
+async function submit() {
+  if (invalid.value || !publicationFields.value?.categoryValid || publicationSaving.value || props.saving) return
+  publicationSaving.value = true
+  publicationError.value = ''
+  try {
+    outputNaming({ ...naming.value, season: season.value === '' ? undefined : Number(season.value) })
+    await publicationFields.value?.save()
+    emit('save', { accountId: form.accountId || undefined, rules: formatRules(parsed.value), autoDownload: form.autoDownload, upgrade: form.upgrade, window: win.value })
+  } catch (e) { publicationError.value = errText(e) }
+  finally { publicationSaving.value = false }
 }
 </script>
 
@@ -103,9 +125,16 @@ function submit() {
       <AccountPicker v-model="form.accountId" :provider="sub.provider" label="订阅账号" />
     </section>
 
+    <section class="blk">
+      <PublicationFields ref="publicationFields" v-model="publication" :connection="store.state?.plutofish" :provider="sub.provider" :source-work-id="sub.showId" :kind="tmdb?.kind ?? sub.kind" :title="sub.title" :year="tmdb?.year ?? 0" :tmdb="tmdb" :naming="{ ...naming, season: season === '' ? undefined : Number(season) }" :tmdb-season="!tmdb || season === '' ? undefined : Number(season)" :episodes="[]" :remember="false" @match="tmdb = $event; season = ''; naming = {}" @restore="restorePublication" />
+      <label class="field">文件名标题<input v-model="naming.title" class="input" maxlength="160" placeholder="自动：英文优先" /></label>
+      <label class="field">年份<input :value="naming.year" type="number" min="1000" max="9999" class="input mono" placeholder="自动" @input="naming.year = ($event.target as HTMLInputElement).value === '' ? undefined : Number(($event.target as HTMLInputElement).value)" /></label>
+      <label v-if="(tmdb?.kind ?? sub.kind) === 'show'" class="field">输出季号<input v-model="season" type="number" min="0" max="999" step="1" class="input mono" placeholder="沿用平台季号" /></label>
+    </section>
+    <p v-if="publicationError" class="error-box" role="alert">{{ publicationError }}</p>
     <div class="acts">
       <button type="button" class="btn" @click="emit('cancel')">取消</button>
-      <button type="submit" class="btn primary" :disabled="invalid || saving"><Icon name="check" :size="15" />保存</button>
+      <button type="submit" class="btn primary" :disabled="invalid || !publicationFields?.categoryValid || saving || publicationSaving || publicationFields?.loading"><Icon name="check" :size="15" />保存</button>
     </div>
   </form>
 </template>

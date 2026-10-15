@@ -1,3 +1,11 @@
+import { PublicationWorker } from '../../../src/integrations/plutofish/publication-worker.ts'
+import { publicationCategoryError } from '../../../src/integrations/plutofish/categories.ts'
+import { verifiedGatewayKey } from '../../../src/integrations/plutofish/gateway.ts'
+import { PlutoFishConnection } from '../../../src/integrations/plutofish/connection.ts'
+import { completePublication, preparePublication } from '../../../src/integrations/plutofish/publication.ts'
+import { savePublication } from '../../../src/integrations/plutofish/publication-store.ts'
+import { PublicationPreferenceStore, type PublicationContext, type PublicationPreferences } from '../../../src/integrations/plutofish/publication-preferences.ts'
+import type { PlutoFishInput } from '../../../src/integrations/plutofish/types.ts'
 import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { userMessage, errorCode } from '@tui/user-message.ts'
@@ -35,15 +43,17 @@ import {
 } from '@tui/jobs.ts'
 import { extractTencentLinks, extractYoukuVideoId, extractIQLink, extractIQCNLink } from '@tui/link.ts'
 import { youkuSpokenLangKey } from '@tui/media.ts'
-import { completedFilename, filename, folder, tierHeight, dots } from '@tui/name.ts'
-import { previewFilename, usesMeasuredNaming } from '@tui/completed-naming.ts'
+import { filename, folder, folderSegments, tierHeight, dots } from '@tui/name.ts'
+import { usesMeasuredNaming } from '@tui/completed-naming.ts'
+import { namingPreviewFilename, NAMING_PREVIEW_NOTE } from '@tui/naming-preview.ts'
 import { moviePlayables, probeOptions, qualityChoiceLabel, youkuEditionsFromDetail, youkuMoviePick } from '@tui/quality.ts'
 import { selectedTencentQuality } from '@tui/tencent-quality-selection.ts'
 import { selectedIQCNQuality, restoreIQCNSourceHints } from '@tui/iqcn-quality-selection.ts'
 import { runLog } from '@tui/runlog.ts'
 import { applyTencentLogin, pollTencentDualQR, tencentTVLoginInput } from '@tui/tencent-qr.ts'
 import { fetchTencentAccount, txAccountSummary, type TxAccount } from '@tui/tencent-account.ts'
-import { tmdbSearch, tmdbSeasons } from '@tui/tmdb.ts'
+import { tmdbSearch, tmdbSeasons, tmdbFilenameTitle } from '@tui/tmdb.ts'
+import { outputNaming } from '@tui/output-naming.ts'
 import { mediaKindFromMetadata, movieEdition } from '@tui/media-kind.ts'
 import { parseSeriesTitle, seriesSeason, tmdbSeasonOverride } from '@tui/series-title.ts'
 import { ensureTools, lookBundledFFmpeg, lookMP4Box, lookMkvmerge, lookM3u8dl } from '@tui/tools.ts'
@@ -316,11 +326,27 @@ export class Core {
   private readonly hub: JobHub
   private probeToken = 0
   private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[] }>()
+  private readonly publicationPreferenceStore = new PublicationPreferenceStore()
+  private readonly seededPreferenceBindings = new Set<string>()
   private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | { kind: 'bilibili' } | null = null
+
+  readonly plutofish = new PlutoFishConnection({ changed: () => this.emit.state() })
+
+  private readonly publications = new PublicationWorker(this.plutofish, draft => {
+    for (const rec of this.jobs.values()) if (rec.task.publication?.fileKey === draft.fileKey) rec.task.publication = draft
+    this.pushJobs()
+  })
 
   constructor(private readonly emit: Emit) {
     this.hub = new JobHub((e) => this.onJob(e))
     this.loadJobs()
+    for (const rec of this.jobs.values()) if (rec.task.publication) {
+      try {
+        const savedDraft = structuredClone(rec.task.publication)
+        this.publications.register(rec.task.publication)
+        if (rec.view.state === 'done' && !rec.task.publication.progress?.stage.match(/^(uploading|paused|failed|cancelled|completed)$/)) this.publications.event(savedDraft, { id: rec.view.id, done: true, status: '完成', pct: 1, log: rec.view.output, err: '' })
+      } catch { rec.view.note = '发布清单暂不可用，请检查目录或关闭其他发布器' }
+    }
   }
 
   // ---------------------------------------------------------------- 生命周期
@@ -334,8 +360,10 @@ export class Core {
       this.emit.state()
       return
     }
-    if (this.cfg.key.trim()) await this.connect()
-    else this.emit.state()
+    if (this.cfg.key.trim()) {
+      try { await this.connect() }
+      catch { this.keyInfo = null; this.connecting = false; this.emit.state() }
+    } else this.emit.state()
   }
 
   /**
@@ -344,6 +372,7 @@ export class Core {
    * 所以先等 cancelAll 把进程收掉（最多 3 秒），再把没停干净的任务标成已暂停。
    */
   async shutdown(): Promise<void> {
+    ++this.connectionRevision
     this.tunnelAbort?.abort()
     try {
       await Promise.race([
@@ -353,6 +382,7 @@ export class Core {
     } catch {
       /* 尽力而为 */
     }
+    await this.publications.close()
     let dirty = false
     for (const rec of this.jobs.values()) {
       if (rec.view.state !== 'running' && rec.view.state !== 'queued') continue
@@ -366,6 +396,7 @@ export class Core {
       this.emit.jobs(this.jobList())
       this.flushJobs()
     }
+    this.plutofish.close()
   }
 
   // ---------------------------------------------------------------- 任务持久化
@@ -436,7 +467,7 @@ export class Core {
   }
 
   /** 原子写：先写 .tmp 再 rename，半截文件不会把上次的任务列表弄丢。 */
-  private flushJobs(): void {
+  private flushJobs(strict = false): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
@@ -458,6 +489,7 @@ export class Core {
       renameSync(tmp, path)
     } catch (e) {
       runLog(`jobs save failed ${errText(e)}`)
+      if (strict) throw new Error('任务保存失败，请检查本机目录权限后重试')
     }
   }
 
@@ -499,7 +531,7 @@ export class Core {
     this.emit.state()
   }
 
-  private async connect(): Promise<void> {
+  private async connect(plutofish?: PlutoFishInput): Promise<void> {
     const revision = ++this.connectionRevision
     this.vaultMigrationReady = false
     this.providerStartupChecked = false
@@ -510,6 +542,7 @@ export class Core {
     this.providerSessions.setScope(this.cfg.host + String.fromCharCode(0) + this.cfg.key)
     this.iqStartupChecked = false
     this.iqStatusCheck = 'idle'
+    this.keyInfo = null
     this.connecting = true
     this.keyError = ''
     this.emit.state()
@@ -518,7 +551,9 @@ export class Core {
     this.gwMulti = new Set()
     this.cli = cli
     try {
-      const info = await cli.keyInfo()
+      await this.plutofish.verify(plutofish)
+      if (revision !== this.connectionRevision) return
+      const info = await verifiedGatewayKey(cli)
       if (revision !== this.connectionRevision) return
       this.keyInfo = info
     } catch (e) {
@@ -540,6 +575,7 @@ export class Core {
     if (revision !== this.connectionRevision) return
     this.vaultMigrationReady = true
     this.connecting = false
+    this.plutofish.monitor()
     this.probeProviderSessions()
     this.emit.state()
   }
@@ -685,7 +721,8 @@ export class Core {
   }
 
   private client(): GwClient {
-    if (!this.cli) throw new Error('还没有连接网关')
+    this.plutofish.assertReady()
+    if (!this.cli || !this.keyInfo) throw new Error('还没有连接网关')
     return this.cli
   }
 
@@ -706,7 +743,8 @@ export class Core {
   state(): AppState {
     return {
       accountScope: createHash('sha256').update(this.cfg.host + String.fromCharCode(0) + this.cfg.key).digest('hex'),
-      configured: !!this.keyInfo,
+      configured: !!this.keyInfo && this.plutofish.ready && !this.connecting,
+      plutofish: this.plutofish.view(),
       connecting: this.connecting,
       keyName: this.keyInfo?.name ?? '',
       keyError: this.keyError,
@@ -805,20 +843,21 @@ export class Core {
 
   // ---------------------------------------------------------------- 配置
 
-  async setup(host: string, key: string, proxyAddress = this.cfg.desktopProxy ?? ''): Promise<AppState> {
+  async setup(host: string, key: string, proxyAddress = this.cfg.desktopProxy ?? '', plutofish?: PlutoFishInput): Promise<AppState> {
+    if (this.connecting) throw new Error('正在验证连接，请稍候')
     const h = host.trim().replace(/\/+$/, '')
-    const k = key.trim() || this.cfg.key.trim()
+    const k = key.trim() || (h === this.cfg.host ? this.cfg.key.trim() : '')
     if (!/^https?:\/\//.test(h)) throw new Error('网关地址要以 http:// 或 https:// 开头')
     if (!k) throw new Error('请填写 API Key')
     const proxy = normalizeDesktopProxy(proxyAddress)
-    const prev = { host: this.cfg.host, key: this.cfg.key, desktopProxy: this.cfg.desktopProxy, route: desktopProxy(), connected: !!this.keyInfo }
+    const prev = { host: this.cfg.host, key: this.cfg.key, desktopProxy: this.cfg.desktopProxy, route: desktopProxy() }
     this.providerAccounts.clear()
     this.cfg.host = h
     this.cfg.key = k
     this.cfg.desktopProxy = proxy
     setDesktopProxy(proxy)
     try {
-      await this.connect()
+      await this.connect(plutofish)
     } catch (e) {
       this.cfg.host = prev.host
       this.cfg.key = prev.key
@@ -826,8 +865,9 @@ export class Core {
       setDesktopProxy(prev.route)
       this.connectionRevision++
       this.providerSessions.setScope(this.cfg.host + String.fromCharCode(0) + this.cfg.key)
-      if (prev.connected) void this.connect().catch(() => {})
-      else this.emit.state()
+      this.keyInfo = null
+      this.connecting = false
+      this.emit.state()
       throw new Error(`连接失败：${errText(e)}`)
     }
     saveConfig(this.cfg)
@@ -1392,14 +1432,55 @@ export class Core {
 
   // ---------------------------------------------------------------- 入队
 
+  private categoryRefresh?: Promise<ReturnType<PlutoFishConnection['view']>>
+
+  /** 重取当前发布身份中的分类，不依赖启动时的旧快照，也不修改凭据。 */
+  refreshPublicationCategories(): Promise<ReturnType<PlutoFishConnection['view']>> {
+    if (!this.categoryRefresh) this.categoryRefresh = this.plutofish.verify(undefined, true)
+      .then(() => this.plutofish.view()).finally(() => { this.categoryRefresh = undefined })
+    return this.categoryRefresh
+  }
+
+  publicationPreferences(context: PublicationContext): PublicationPreferences | null {
+    const connection = this.plutofish.view(), source = connection.identity?.sourceAccount
+    if (connection.status !== 'verified' || !source) return null
+    const binding = JSON.stringify([connection.url, connection.identity!.id, source.id, source.alias])
+    if (!this.seededPreferenceBindings.has(binding)) {
+      // Migrate existing downloads once per account; later user edits always win.
+      for (const rec of [...this.jobs.values()].sort((a, b) => b.view.createdAt - a.view.createdAt)) {
+        const draft = rec.task.publication, task = rec.task
+        if (!draft || !task.sourceWorkId || draft.binding.url !== connection.url || draft.binding.publisherId !== connection.identity!.id
+          || draft.binding.sourceAccount?.id !== source.id || draft.binding.sourceAccount.alias !== source.alias) continue
+        const kind = task.kind === 'movie' ? 'movie' : 'show'
+        const tmdb: PublicationContext['tmdb'] = task.tmdbId ? { id: task.tmdbId, kind, name: task.series || task.title, title: task.series || task.title, year: task.year, overview: task.plot } : null
+        this.publicationPreferenceStore.save(connection, { provider: task.provider, sourceWorkId: task.sourceWorkId, kind, tmdb, naming: task.outputNaming,
+          ...(tmdb && kind === 'show' ? { tmdbSeason: task.season } : {}) },
+          { category: connection.identity?.categories?.some(c => c.value === draft.workTarget.category) ? draft.workTarget.category : '', directoryId: draft.directoryId, directoryPath: draft.directoryPath }, true)
+      }
+      this.seededPreferenceBindings.add(binding)
+    }
+    return this.publicationPreferenceStore.get(connection, context)
+  }
+
+  savePublicationPreferences(context: PublicationContext, input: PublicationPreferences['publication']): void {
+    this.plutofish.assertReady()
+    this.publicationPreferenceStore.save(this.plutofish.view(), context, input)
+  }
+
+  private publicationContext(req: EnqueueRequest): PublicationContext {
+    return { provider: req.detail.provider, sourceWorkId: req.detail.id, kind: req.tmdb?.kind ?? req.detail.kind,
+      tmdb: req.tmdb, tmdbSeason: req.tmdbSeason, naming: req.naming }
+  }
+
   /** runtime.ts taskFromEp + applyOptions + TMDB 选中 */
-  private buildTasks(req: EnqueueRequest): { tasks: DlTask[]; qualityLabel: string } {
+  private buildTasks(req: EnqueueRequest): { tasks: DlTask[]; qualityLabel: string; quality: Quality } {
     const probe = this.probes.get(req.token)
     if (!probe) throw new Error('画质信息已过期，请重新打开画质页')
     const q = probe.qualities[req.quality]
     if (!q) throw new Error('请选择画质')
     const movie = (req.tmdb?.kind ?? req.detail.kind) === 'movie'
-    const season = tmdbSeasonOverride(req.tmdbSeason, req.tmdb)
+    const naming = outputNaming(req.naming)
+    const season = naming.season ?? tmdbSeasonOverride(req.tmdbSeason, req.tmdb)
     // 与 TUI 一致：这一档自带音轨就用它的，否则用探测到的整体音轨（优酷各档都不单独带）
     const pool = q.audios?.length ? q.audios : probe.audios
     const tracks = selectAudioTracks(pool, req.audioIds, req.defaultAudioId)
@@ -1407,6 +1488,11 @@ export class Core {
     const tasks = req.episodes.map((ep, i): DlTask => {
       const t: DlTask = {
         provider: req.detail.provider,
+        sourceWorkId: req.detail.id,
+        namingOrder: 'title-year',
+        outputNaming: { ...naming },
+        filenameTitle: naming.title,
+        posterUrl: req.detail.poster,
         namingVersion: ['youku', 'tencent', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(req.detail.provider) ? 1 : undefined,
         includeEpisodeTitle: this.cfg.includeEpisodeTitle !== false,
         title: ep.title,
@@ -1414,7 +1500,7 @@ export class Core {
         vid: ep.vid,
         tencentPlayParams: ep.tencentPlayParams,
         season: movie ? 0 : season ?? seriesSeason(ep.season, req.detail.title),
-        episode: movie ? 0 : ep.number || i + 1,
+        episode: movie ? 0 : req.publication?.episodeNumbers?.[ep.vid] ?? (ep.number || i + 1),
         collection: ep.collection,
         duration: ep.duration,
         height: 0,
@@ -1427,7 +1513,7 @@ export class Core {
         tmdbId: 0,
         nameDots: '',
         year: req.detail.year,
-        plot: '',
+        plot: req.detail.desc ?? '',
         kind: movie ? 'movie' : 'show',
         edition: movie ? movieEdition(ep.title, req.detail.title) : '',
         languages: ep.languages.filter((l) => l.vid).map((l) => ({ vid: l.vid, lang: l.lang })),
@@ -1446,29 +1532,57 @@ export class Core {
         t.plot = req.tmdb.overview
         if (req.tmdb.name) t.series = req.tmdb.name
       }
+      if (naming.year !== undefined) t.year = naming.year
       return t
     })
-    return { tasks, qualityLabel: qualityChoiceLabel(q) }
+    return { tasks, qualityLabel: qualityChoiceLabel(q), quality: q }
   }
 
-  namingPreview(req: EnqueueRequest): NamingPreview {
-    const { tasks } = this.buildTasks(req)
+  private async resolveFilenameTitle(tasks: DlTask[]): Promise<void> {
+    const first = tasks[0]
+    if (!first?.tmdbId || first.filenameTitle) return
+    const title = await tmdbFilenameTitle(this.cfg.tmdbKey, first.kind === 'movie' ? 'movie' : 'show',
+      first.tmdbId, first.series || first.title, { proxy: this.cfg.tmdbProxy })
+    for (const task of tasks) task.filenameTitle = title
+  }
+
+  async namingPreview(req: EnqueueRequest): Promise<NamingPreview> {
+    const { tasks, quality } = this.buildTasks(req)
+    await this.resolveFilenameTitle(tasks)
     const t = tasks[0]
     if (!t) return { folder: '', file: '' }
     const n = jobNaming(t, this.cfg)
-    const q = this.probes.get(req.token)?.qualities[req.quality]
-    return { folder: folder(n, this.cfg.outDir), file: usesMeasuredNaming(t)
-      ? previewFilename(n, t.provider, q ?? { height: t.height, codec: t.codec }, t.audioTracks) : filename(n),
-      ...(usesMeasuredNaming(t) ? { note: '封装后按实际规格、默认音轨及已确认档位补全文件名。' } : {}) }
+    return { folder: folder(n, this.cfg.outDir), relativeFolders: folderSegments(n), title: n.filenameTitle || n.title, year: n.year, season: n.season, file: usesMeasuredNaming(t)
+      ? namingPreviewFilename(n, t.provider, quality, t.audioTracks) : filename(n),
+      ...(usesMeasuredNaming(t) ? { note: NAMING_PREVIEW_NOTE } : {}) }
   }
 
-  enqueue(req: EnqueueRequest): number {
+  async enqueue(req: EnqueueRequest): Promise<number> {
+    this.plutofish.assertReady()
+    req = structuredClone(req)
+    const cached = this.publicationPreferences(this.publicationContext(req))
+    if (!req.publication && cached) req = { ...req, publication: cached.publication,
+      tmdb: req.tmdb ?? cached.tmdb, tmdbSeason: req.tmdbSeason ?? cached.tmdbSeason, naming: req.naming ?? cached.naming }
     const account = this.gatewayAccountFor(req.detail.provider)
     const cli = this.client().fixedAccount(req.detail.provider, account)
     const { tasks, qualityLabel } = this.buildTasks(req)
+    let connection = this.plutofish.view()
+    const categoryError = publicationCategoryError(connection, req.publication?.category ?? '')
+    if (categoryError) throw new Error(categoryError)
+    const binding = (view: typeof connection) => JSON.stringify([view.url, view.identity?.id, view.identity?.sourceAccount])
+    const expectedBinding = binding(connection)
+    await this.resolveFilenameTitle(tasks)
+    this.plutofish.assertReady()
+    connection = this.plutofish.view()
+    if (expectedBinding !== binding(connection)) throw new Error('发布端或源账号已改变，请重新选择发布信息')
+    // 先完整校验再落盘；IPC 参数不可信，不能仅依赖前端表单。
+    for (const task of tasks) task.publication = preparePublication(task, connection, req.publication?.category, req.publication?.directoryId, req.publication?.directoryPath)
+    for (const task of tasks) savePublication(task.publication!)
+    if (connection.identity?.sourceAccount && req.publication) this.savePublicationPreferences(this.publicationContext(req), req.publication)
     const groupId = `${req.detail.provider}:${req.detail.id}:${Date.now()}`
     const pin = pinOf(this.cfg)
     const now = Date.now()
+    const queued: Array<{ id: number; task: DlTask }> = []
     for (const t of tasks) {
       const id = nextJobID()
       const movie = t.kind === 'movie'
@@ -1496,10 +1610,12 @@ export class Core {
           finishedAt: 0,
         },
       })
-      this.hub.enqueue(runCfg(this.cfg, pin), cli, id, t)
+      queued.push({ id, task: t })
     }
+    try { this.flushJobs(true); for (const task of tasks) this.publications.register(task.publication!) }
+    catch (error) { for (const { id } of queued) this.jobs.delete(id); this.flushJobs(); throw error }
     this.pushJobs()
-    this.persist(true)
+    for (const { id, task } of queued) this.hub.enqueue(runCfg(this.cfg, pin), cli, id, task)
     return tasks.length
   }
 
@@ -1538,8 +1654,17 @@ export class Core {
         v.output = e.log
         v.actualVersion = e.actualVersion
         v.completedMedia = e.completedMedia
+        if (rec.task.publication) {
+          rec.task.publication = completePublication(rec.task.publication, v.output, e.completedMedia ?? (e.actualVersion?.file && e.actualVersion.media ? { file: { size: e.actualVersion.file.size }, media: e.actualVersion.media } : undefined))
+          try { savePublication(rec.task.publication) }
+          catch { v.note = [v.note, '发布清单保存失败，信息仍保留在任务记录中'].filter(Boolean).join('；') }
+        }
       }
       if (!e.err) this.emit.toast(`${v.groupTitle} ${v.label} 下载完成${v.note ? `：${v.note}` : ''}`, v.note ? 'warn' : 'ok')
+    }
+    if (rec.task.publication) {
+      try { this.publications.event(rec.task.publication, e) }
+      catch { v.note = '发布进度保存失败，请检查本机目录权限' }
     }
     try {
       if (!e.done && before === 'queued' && !v.hooks?.some((h) => h.event === 'start')) this.lifecycle?.('start', v, rec.task)
@@ -1594,7 +1719,7 @@ export class Core {
 
   jobList(): JobView[] {
     // 旧 jobs.json 已保存 task.vid；直接补到 IPC 视图，不改写历史任务文件。
-    return [...this.jobs.values()].map((r) => ({ ...r.view, vid: r.task.vid }))
+    return [...this.jobs.values()].map((r) => ({ ...r.view, vid: r.task.vid, publication: r.task.publication }))
   }
 
   /** 排队中的任务没有进程，直接挂起；在跑的让 hub 停进程（保留已下载的分片）。 */
@@ -1608,6 +1733,7 @@ export class Core {
       // 排队中的任务也交给 hub 摘掉：它可能已经排在队列里，光改状态会被泵起来接着跑。
       // 排队中的是静默移除，正在跑的发 stopped:'pause' 并保留分片。
       await this.hub.cancel(id, 'pause')
+      if (rec.task.publication) this.publications.control(rec.task.publication.fileKey, 'pause')
     } finally {
       const cur = this.jobs.get(id)
       if (cur) {
@@ -1639,6 +1765,7 @@ export class Core {
     this.pushJobs()
     this.persist(true)
     try {
+      if (rec.task.publication) this.publications.control(rec.task.publication.fileKey, 'download')
       this.hub.enqueue(this.runCfg(rec), cli, id, rec.task)
     } catch (e) {
       rec.view.state = 'paused'
@@ -1668,6 +1795,7 @@ export class Core {
         runLog(`cancel ${id} failed ${errText(e)}`)
       }
     }
+    if (rec.task.publication) await this.publications.stop(rec.task.publication.fileKey, 'cancel')
     const cfg = this.runCfg(rec)
     // 只从列表移除时文件一律不动；勾了「同时删除」才删成品和工作目录。
     if (deleteFiles) {
@@ -1704,14 +1832,54 @@ export class Core {
     const rec = this.jobs.get(id)
     if (!rec || rec.view.state !== 'failed') return
     const cli = this.jobClient(rec) // 没有连接时保持 failed，别把按钮按成「排队中」
+    if (rec.task.publication) this.publications.control(rec.task.publication.fileKey, 'download')
     Object.assign(rec.view, { status: '排队中', pct: 0, log: '', err: '', note: '', state: 'queued' })
     this.hub.enqueue(this.runCfg(rec), cli, id, rec.task)
     this.pushJobs()
     this.persist(true)
   }
 
+  /** 下载已完成时，独立暂停或恢复上传，不重新下载成品。 */
+  async completePublicationSetup(id: number, category: string): Promise<void> {
+    const rec = this.jobs.get(id), previous = rec?.task.publication
+    if (!rec || rec.view.state !== 'done' || !previous || !rec.view.output) throw new Error('请先完成下载')
+    this.plutofish.assertBinding(previous.binding)
+    if (previous.workTarget.category || previous.progress) throw new Error('此任务已进入上传流程，请使用继续上传')
+    if (typeof category !== 'string' || !category) throw new Error('请选择资源分类')
+    const draft = completePublication(preparePublication({ ...rec.task, season: previous.seasonNumber ?? rec.task.season,
+      episode: previous.episodeNumber ?? rec.task.episode }, this.plutofish.view(), category, previous.directoryId, previous.directoryPath),
+      rec.view.output, previous.measured ?? rec.view.completedMedia)
+    savePublication(draft)
+    rec.task.publication = draft
+    try { this.flushJobs(true) } catch (error) { rec.task.publication = previous; throw error }
+    // 记住已修正分类，订阅的新集也沿用；当前任务仍只上传已有成品。
+    const task = rec.task, kind = task.kind === 'movie' ? 'movie' : 'show'
+    if (task.sourceWorkId) {
+      try {
+        this.savePublicationPreferences({ provider: task.provider, sourceWorkId: task.sourceWorkId, kind, naming: task.outputNaming,
+          tmdb: task.tmdbId ? { id: task.tmdbId, kind, name: task.series || task.title, title: task.series || task.title, year: task.year, overview: task.plot } : null,
+          ...(kind === 'show' ? { tmdbSeason: task.season } : {}) }, { category, directoryId: draft.directoryId, directoryPath: draft.directoryPath })
+      } catch { rec.view.note = '当前任务可上传，但分类偏好保存失败，请检查目录权限' }
+    }
+    this.publications.event(draft, { id, done: true, status: '完成', pct: 1, log: rec.view.output, err: '' })
+    this.pushJobs()
+    this.persist(true)
+  }
+
+  async controlPublication(id: number, action: 'pause' | 'resume'): Promise<void> {
+    if (action === 'resume') this.plutofish.assertReady()
+    if (!['pause', 'resume'].includes(action)) throw new Error('发布操作无效')
+    const draft = this.jobs.get(id)?.task.publication
+    if (!draft) return
+    if (action === 'pause') await this.publications.stop(draft.fileKey, 'pause')
+    else this.publications.control(draft.fileKey, 'resume')
+  }
+
   clearFinished(): void {
-    for (const [id, r] of this.jobs) if (r.view.state === 'done') this.jobs.delete(id)
+    for (const [id, r] of this.jobs) {
+      const progress = r.task.publication?.progress
+      if (r.view.state === 'done' && (!r.task.publication || progress?.stage === 'completed')) this.jobs.delete(id)
+    }
     this.pushJobs()
     this.persist(true)
   }

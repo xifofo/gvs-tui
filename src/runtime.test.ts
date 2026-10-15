@@ -1,6 +1,7 @@
 import { test, expect, afterEach, spyOn } from 'bun:test'
 import { Runtime } from './runtime'
 import * as tunnel from './lib/tunnel'
+import * as tmdb from './lib/tmdb'
 import { detailListRows, viewMetrics } from './lib/ui-layout'
 import { gridWindow } from './lib/grid'
 import { GwClient } from './lib/client'
@@ -12,6 +13,8 @@ import { discoveryRows } from './lib/discovery'
 const runtimes: Runtime[] = []
 const start = async () => {
   const r = new Runtime({ simulate: true })
+  // 上游业务用例使用已认证的发布端夹具；强制连接边界由 integrations/plutofish 单独验证。
+  Object.defineProperty((r as any).plutofish, 'ready', { get: () => true })
   runtimes.push(r)
   await Bun.sleep(110)
   return r
@@ -59,14 +62,14 @@ test('TUI episode-title toggle applies to new IQ tasks and previews while existi
   x.pending = [off]
   x.scene = 'confirm'
   x.emit()
-  expect(r.snapshot.confirmation?.name).toContain('海外节目.S02E03.2026.')
+  expect(r.snapshot.confirmation?.name).toContain('海外节目.2026.S02E03.')
   expect(r.snapshot.confirmation?.name).not.toContain('雨夜重逢')
   r.handleKey('f4')
   x.setIdx = x.settingFields().indexOf('文件名单集标题')
   r.handleKey('space')
   expect(x.cfg.includeEpisodeTitle).toBe(true)
   const on = x.taskFromEp(0)
-  expect(completedFilename(jobNaming(on, x.cfg), { status: 'unavailable' })).toContain('.S02E03.雨夜重逢.2026.')
+  expect(completedFilename(jobNaming(on, x.cfg), { status: 'unavailable' })).toContain('.2026.S02E03.雨夜重逢.')
   const restored = JSON.parse(JSON.stringify(off))
   expect(jobNaming(restored, x.cfg).episodeTitle).toBeUndefined()
 })
@@ -97,6 +100,7 @@ test.each(['iq', 'iqcn'] as const)('%s-only scope exposes TMDB settings and matc
   const hit = { id: 900001, name: '正式片名', title: 'Original Movie', year: 2025, overview: '', kind: 'movie' as const }
   x.cfg.tmdbKey = 'local-test-key'
   x.simulated = false
+  const titleLookup = spyOn(tmdb, 'tmdbFilenameTitle').mockResolvedValue('Matched Movie')
   x.work = async () => [hit]
   x.cli.invoke = () => { throw new Error('TMDB selection must not call gateway play') }
   try {
@@ -106,15 +110,16 @@ test.each(['iq', 'iqcn'] as const)('%s-only scope exposes TMDB settings and matc
     expect(r.snapshot.tmdbState).toBe('ready')
     expect(r.snapshot.tmdbHits).toEqual([hit])
     r.handleKey('enter')
+    await Bun.sleep(1)
     expect(r.snapshot.scene).toBe('confirm')
     expect(x.pending[0]).toMatchObject({ provider, namingVersion: 1, kind: 'movie', series: '正式片名', year: 2025, tmdbId: 900001,
       season: 0, episode: 0 })
-    expect(r.snapshot.confirmation?.name).toStartWith('正式片名.2025.')
+    expect(r.snapshot.confirmation?.name).toStartWith('Matched.Movie.2025.')
     expect(r.snapshot.confirmation?.name).toContain(`.${provider === 'iqcn' ? 'IQIYI' : 'IQ'}.WEB-DL.`)
     expect(r.snapshot.confirmation?.name).not.toContain('S01E01')
     expect(r.snapshot.confirmation?.directory).toEndWith('正式片名 (2025) {tmdb-900001}')
     expect(r.snapshot.jobs).toHaveLength(0)
-  } finally { x.simulated = true }
+  } finally { x.simulated = true; titleLookup.mockRestore() }
 })
 
 test.each(['iq', 'iqcn'] as const)('%s series TMDB matching keeps the platform season and episode numbers across a batch', async (provider) => {
@@ -127,20 +132,44 @@ test.each(['iq', 'iqcn'] as const)('%s series TMDB matching keeps the platform s
   r.handleKey('enter')
   x.cfg.tmdbKey = 'local-test-key'
   x.simulated = false
+  const titleLookup = spyOn(tmdb, 'tmdbFilenameTitle').mockResolvedValue('Matched Series')
   x.work = async () => [{ id: 900002, name: '正式剧名', title: 'Original Series', year: 2023, overview: '', kind: 'show' }]
   try {
     r.handleKey('enter')
     await Bun.sleep(1)
     expect(r.snapshot.scene).toBe('tmdb')
     r.handleKey('enter')
+    await Bun.sleep(1)
     expect(x.pending.map((t: any) => [t.series, t.year, t.tmdbId, t.season, t.episode])).toEqual([
       ['正式剧名', 2023, 900002, 2, 1], ['正式剧名', 2023, 900002, 2, 2],
     ])
-    expect(r.snapshot.confirmation?.name).toContain('正式剧名.S02E01.雨夜重逢.2023.')
+    expect(r.snapshot.confirmation?.name).toContain('Matched.Series.2023.S02E01.雨夜重逢.')
     expect(r.snapshot.confirmation?.directory).toEndWith(join('正式剧名 (2023) {tmdb-900002}', 'Season 02'))
     const restored = JSON.parse(JSON.stringify(x.pending[1]))
-    expect(completedFilename(jobNaming(restored, x.cfg), { status: 'unavailable' })).toContain('正式剧名.S02E02.携手同行.2023.')
-  } finally { x.simulated = true }
+    expect(completedFilename(jobNaming(restored, x.cfg), { status: 'unavailable' })).toContain('Matched.Series.2023.S02E02.携手同行.')
+  } finally { x.simulated = true; titleLookup.mockRestore() }
+})
+
+test('skipping a pending TMDB title lookup cannot change the confirmed task later', async () => {
+  const r = await start(), x = r as any
+  x.cfg.tmdbKey = 'fixture-only'
+  x.detailProv = 'youku'; x.detailTitle = '平台中文名'; x.detailInfo = { kind: 'show', year: 2026 }
+  x.eps = [{ vid: 'ep1', title: '第一集', number: 1, languages: [] }]
+  x.pending = [x.taskFromEp(0)]
+  x.scene = 'tmdb'; x.tmdbHits = [{ id: 123, name: '匹配中文名', title: '', year: 2026, kind: 'show' }]
+  let finish!: (title: string) => void
+  const lookup = spyOn(tmdb, 'tmdbFilenameTitle').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  try {
+    r.handleKey('enter')
+    expect(x.searching).toBe(true)
+    r.handleKey('s')
+    finish('Late English Title')
+    await Bun.sleep(1)
+    expect(r.snapshot.scene).toBe('confirm')
+    expect(x.pending[0].tmdbId).toBe(0)
+    expect(x.pending[0].filenameTitle).toBeUndefined()
+    expect(r.snapshot.confirmation?.name).toStartWith('平台中文名.')
+  } finally { lookup.mockRestore() }
 })
 
 test.each(['tencent', 'iqcn'] as const)('%s matched final season can use TMDB S04 for the batch while retaining all platform episode IDs and numbers', async (provider) => {
@@ -171,7 +200,7 @@ test.each(['tencent', 'iqcn'] as const)('%s matched final season can use TMDB S0
   r.handleKey('end')
   r.handleKey('enter')
   expect(x.pending.map((t: any) => [t.vid, t.season, t.episode])).toEqual([['ep10', 4, 10], ['ep11', 4, 11]])
-  expect(r.snapshot.confirmation?.name).toContain('诛仙.S04E10.诛仙.最终季.第10话.2022.')
+  expect(r.snapshot.confirmation?.name).toContain('诛仙.2022.S04E10.诛仙.最终季.第10话.')
   expect(r.snapshot.confirmation?.directory).toEndWith(join('诛仙 (2022) {tmdb-206484}', 'Season 04'))
   const restored = JSON.parse(JSON.stringify(x.pending[1]))
   expect(completedFilename(jobNaming(restored, x.cfg), { status: 'probed', height: 2160, codec: 'HEVC' })).toContain('.S04E11.')
@@ -1037,10 +1066,10 @@ test('batch episode titles survive TMDB matching and share preview and download 
   r.handleKey('enter')
   const tasks = internal.pending
   const names = tasks.map((task: any) => filename(jobNaming(task, internal.cfg)))
-  expect(names[0]).toContain('现在就出发.S03E01.名场面特辑.狼人有救了.2026.')
-  expect(names[1]).toContain('现在就出发.S03E02.加更篇.一起出发.2026.')
+  expect(names[0]).toContain('现在就出发.2026.S03E01.名场面特辑.狼人有救了.')
+  expect(names[1]).toContain('现在就出发.2026.S03E02.加更篇.一起出发.')
   // Measured naming: the preview uses the post-probe naming function, not the provisional name.
-  expect(r.snapshot.confirmation?.name).toContain('现在就出发.S03E01.名场面特辑.狼人有救了.2026.')
+  expect(r.snapshot.confirmation?.name).toContain('现在就出发.2026.S03E01.名场面特辑.狼人有救了.')
   expect(r.snapshot.confirmation?.name).not.toContain('DVH1')
   expect(r.snapshot.confirmation?.directory).toBe(folder(jobNaming(tasks[0], internal.cfg), internal.cfg.outDir))
   r.handleKey('enter')
@@ -1075,7 +1104,7 @@ test('TUI group season selection keeps parent TMDB binding and platform episode 
     [75787, 'fox-one', 13, 1], [75787, 'fox-two', 13, 2],
   ])
   expect(r.snapshot.confirmation?.directory).toEndWith(join('狐妖小红娘 (2015) {tmdb-75787}', 'Season 13'))
-  expect(r.snapshot.confirmation?.name).toContain('狐妖小红娘.S13E01.')
+  expect(r.snapshot.confirmation?.name).toContain('狐妖小红娘.2015.S13E01.')
   expect(r.snapshot.confirmation?.name).not.toContain('E168')
   const saved = JSON.parse(JSON.stringify(x.pending[1]))
   expect(completedFilename(jobNaming(saved, x.cfg), { status: 'probed', height: 2160, codec: 'HEVC' })).toContain('.S13E02.')

@@ -1,3 +1,4 @@
+import { assertDesktopAccess } from '../../../src/integrations/plutofish/access.ts'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, Tray } from 'electron'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -223,7 +224,7 @@ const updater = new Updater((u) => {
 
 const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } = {
   state: () => core.state(),
-  setup: (host, key, proxy) => core.setup(host, key, proxy),
+  setup: (host, key, proxy, plutofish) => core.setup(host, key, proxy, plutofish),
   saveSettings: (patch) => core.saveSettings(patch),
   catalog: (p, country) => core.catalog(p, country),
   browse: (p, s, c) => core.browse(p, s, c),
@@ -236,11 +237,18 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   detailFromLink: (l, hint) => core.detailFromLink(l, hint),
   probe: (p, eps, accountId) => probeWithAccounts(p, eps, accountId),
   namingPreview: (r) => core.namingPreview(r),
+  publicationPreferences: (context) => core.publicationPreferences(context),
+  refreshPublicationCategories: () => core.refreshPublicationCategories(),
+  savePublicationPreferences: (context, input) => core.savePublicationPreferences(context, input),
   tmdbSearch: (t, tv) => core.tmdbSearch(t, tv),
   tmdbSeasons: (id) => core.tmdbSeasons(id),
   enqueue: (r) => (r.accountId ? accounts.use(r.detail.provider, r.accountId, async () => core.enqueue(r)) : core.enqueue(r)),
   jobs: () => core.jobList(),
   retryJob: (id) => core.retryJob(id),
+  controlPublication: (id, action) => core.controlPublication(id, action),
+  completePublicationSetup: (id, category) => core.completePublicationSetup(id, category),
+  createPublisherDirectories: (sourceAccountId, directoryId, segments) => core.plutofish.createDirectories(sourceAccountId, directoryId, segments),
+  publisherDirectories: (sourceAccountId, directoryId, cursor) => core.plutofish.directories(sourceAccountId, directoryId, cursor),
   pauseJob: (id) => core.pauseJob(id),
   resumeJob: (id) => core.resumeJob(id),
   removeJob: (id, deleteFiles) => core.removeJob(id, deleteFiles),
@@ -322,6 +330,7 @@ ipcMain.handle('gvs:call', async (_e, method: string, args: unknown[]) => {
   const fn = (api as Record<string, (...a: unknown[]) => unknown>)[method]
   if (!fn) return { ok: false, error: '当前客户端暂不支持此操作，请更新后重试。' }
   try {
+    assertDesktopAccess(method, core.state().configured)
     return { ok: true, data: userFacing(await fn(...(args ?? []))) }
   } catch (e) {
     runLog(`ipc ${method} failed: ${e instanceof Error ? e.message : String(e)}`)

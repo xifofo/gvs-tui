@@ -35,6 +35,8 @@ tmp/
 
 # secrets live in the user config dir, never commit copies
 tui.json
+plutofish.json
+plutofish.json.tmp
 .env
 .env.*
 

@@ -148,6 +148,46 @@ export function createTmdbSearch(fetcher: TmdbFetch = fetchTmdb, timeoutMs = 10_
   }
 }
 
+/** Resolve only the selected work. original_name/original_title are not necessarily English. */
+export function createTmdbFilenameTitle(fetcher: TmdbFetch = fetchTmdb, timeoutMs = 10_000) {
+  const request = createTmdbRequest(fetcher, timeoutMs)
+  const cache = new Map<string, { expires: number; promise: Promise<string> }>()
+  return async (apiKey: string, kind: 'movie' | 'show', id: number, fallback: string, options: TmdbOptions = {}): Promise<string> => {
+    if (!apiKey.trim() || !Number.isSafeInteger(id) || id <= 0) return fallback
+    const key = JSON.stringify([apiKey.trim(), kind, id, options.proxy || ''])
+    let entry = cache.get(key)
+    if (!entry || entry.expires <= Date.now()) {
+      const current = { expires: Infinity, promise: Promise.resolve('') }
+      current.promise = request(apiKey, `${kind === 'movie' ? 'movie' : 'tv'}/${id}/translations`, {}, out => {
+        if (!isObj(out) || out.id !== id || !Array.isArray(out.translations)) throw new Error('invalid TMDB translations')
+        const titles = out.translations.filter(isObj).flatMap(row => {
+          if (!isObj(row.data)) return []
+          const value = kind === 'movie' ? row.data.title : row.data.name
+          if (typeof value !== 'string' || !/[\p{L}\p{N}]/u.test(value)) return []
+          const language = row.iso_639_1, region = row.iso_3166_1
+          const rank = language === 'en' ? (region === 'US' ? 0 : region === 'GB' ? 1 : 2)
+            : language === 'zh' ? (region === 'CN' ? 3 : region === 'SG' ? 4 : 5) : 6
+          return rank < 6 ? [{ title: value.trim(), rank }] : []
+        })
+        return titles.sort((a, b) => a.rank - b.rank)[0]?.title || ''
+      }, options).then(title => {
+        current.expires = Date.now() + 60 * 60_000
+        return title
+      }, () => {
+        // Optional metadata must not block a download or trigger a request for every episode.
+        current.expires = Date.now() + 30_000
+        runLog('tmdb filename title unavailable; keeping matched title')
+        return ''
+      })
+      entry = current
+      cache.delete(key)
+      cache.set(key, entry)
+      if (cache.size > 128) cache.delete(cache.keys().next().value!)
+    }
+    return await entry.promise || fallback
+  }
+}
+
 /** Season zero is a real TMDB season. Never infer "final" from the last row. */
 export function createTmdbSeasons(fetcher: TmdbFetch = fetchTmdb, timeoutMs = 10_000) {
   const request = createTmdbRequest(fetcher, timeoutMs)
@@ -279,5 +319,6 @@ export function createTmdbDetails(fetcher: TmdbFetch = fetchTmdb, timeoutMs = 10
 }
 
 export const tmdbSearch = createTmdbSearch()
+export const tmdbFilenameTitle = createTmdbFilenameTitle()
 export const tmdbDetails = createTmdbDetails()
 export const tmdbSeasons = createTmdbSeasons()
