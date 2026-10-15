@@ -21,11 +21,16 @@ test('Apple TV recognizes exact URLs/IDs and retains the selected codec/HDR rend
   expect(usesMeasuredNaming({provider:'appletvplus'})).toBe(true)
 })
 
-test('Apple TV never starts an encrypted download without PlayReady keys', async () => {
-  for(const drm of [{system:'playready',clear:false},{system:'widevine',clear:false,contentKeys:keys}]){
+test('Apple TV never starts an encrypted download without PlayReady/Widevine keys', async () => {
+  for(const drm of [{system:'playready',clear:false},{system:'widevine',clear:false},{system:'fairplay',clear:false,contentKeys:keys}]){
     const cli={invoke:async()=>({...response,media:[{...response.media[0],drm}]})} as unknown as GwClient
     await expect(resolveManifestDownload(cli,{},'appletvplus',id)).rejects.toThrow('DRM_CLIENT_UNAVAILABLE')
   }
+})
+
+test('Apple TV accepts content keys from the user Widevine (.wvd) route', async () => {
+  const cli={invoke:async()=>({...response,media:[{...response.media[0],drm:{system:'widevine',clear:false,contentKeys:keys}}]})} as unknown as GwClient
+  expect((await resolveManifestDownload(cli,{},'appletvplus',id))[0]?.contentKeys).toEqual([`${'1'.repeat(32)}:${'2'.repeat(32)}`])
 })
 
 test('Apple TV probes without decrypt requests and preserves all official quality IDs', async () => {
