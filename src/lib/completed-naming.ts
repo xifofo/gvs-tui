@@ -120,3 +120,67 @@ export async function finalizeCompletedName(path: string, n: Naming, evidence: N
       ? '目标文件名已存在，保留本次下载的原文件名' : '自动命名未完成，保留原文件名' }
   }
 }
+
+// ---------------------------------------------------------------- preview
+
+type PreviewQuality = {
+  id?: string; stream?: string; label?: string; title?: string; width?: number; height?: number
+  codec?: string; hdr?: string; fps?: number; iqcnQuality?: { dynamicRangeCode?: number }
+}
+type PreviewAudio = { codec?: string; label?: string; isDefault?: boolean }
+
+/** Raw codec tags (DVH1, hvc1, avc1…) → the probe's codec names, plus the DV they imply. */
+export function previewCodec(raw: string): { codec?: string; dv: boolean } {
+  const tag = raw.trim().toLowerCase()
+  if (/^(?:dvh1|dvhe)$/.test(tag)) return { codec: 'hevc', dv: true }
+  if (/^(?:dva1|dvav)$/.test(tag)) return { codec: 'h264', dv: true }
+  if (/^dav1$/.test(tag)) return { codec: 'av1', dv: true }
+  if (/^(?:hevc|h\.?265|hvc1|hev1|x265)$/.test(tag)) return { codec: 'hevc', dv: false }
+  if (/^(?:avc1?|h\.?264|x264)$/.test(tag)) return { codec: 'h264', dv: false }
+  if (/^(?:av1|av01)$/.test(tag)) return { codec: 'av1', dv: false }
+  if (/^(?:vp9|vp09)$/.test(tag)) return { codec: 'vp9', dv: false }
+  // Unknown tags are omitted, exactly as an unknown probed codec is.
+  return { dv: false }
+}
+
+/** Default audio in the same codec/channel vocabulary the probe reports; unknown → omitted. */
+export function previewAudio(audios: PreviewAudio[] | undefined): MediaSpecs['audio'] {
+  const a = audios?.find(x => x.isDefault) ?? audios?.[0]
+  if (!a) return undefined
+  const text = `${a.codec || ''} ${a.label || ''}`
+  const codec = /e-?ac-?3|ddp|dolby\s*digital\s*plus|杜比全景声|atmos/i.test(text) ? 'eac3'
+    : /(?:^|[^e])ac-?3|dolby\s*digital/i.test(text) ? 'ac3'
+      : /aac/i.test(text) ? 'aac' : /flac/i.test(text) ? 'flac' : /truehd/i.test(text) ? 'truehd' : /dts/i.test(text) ? 'dts' : ''
+  const m = /([1-9])\.([01])/.exec(text)
+  const channels = m ? Number(m[1]) + Number(m[2]) : /立体声|stereo/i.test(text) ? 2 : /单声道|mono/i.test(text) ? 1 : 0
+  if (!codec || !channels) return { status: 'ambiguous' }
+  return { status: 'confirmed', codec, channels, atmos: /atmos|全景声/i.test(text) }
+}
+
+/** The marker completedFilename receives, derived from the chosen stream the same way the evidence is. */
+export function previewMarker(provider: string, q: PreviewQuality): NamingEvidence['marker'] {
+  const stream = q.stream || q.id || ''
+  if (provider === 'youku' && /(?:^|_)hq(?:_|$)/i.test(stream)) return 'HQ'
+  if (provider === 'tencent' && stream.toLowerCase() === 'maxplus') return 'MAXPLUS'
+  if (provider === 'iqcn' && [4, 8].includes(Number(q.iqcnQuality?.dynamicRangeCode))) return 'EDR'
+  return undefined
+}
+
+/** Everything the chosen quality already tells us, in MediaSpecs form. */
+export function previewSpecs(provider: string, q: PreviewQuality, audios?: PreviewAudio[]): MediaSpecs {
+  const { codec, dv } = previewCodec(q.codec || '')
+  const hay = `${q.hdr || ''} ${q.label || ''} ${q.title || ''} ${q.stream || q.id || ''}`
+  const dr = Number(q.iqcnQuality?.dynamicRangeCode)
+  const dynamicRange = dv || [1, 3].includes(dr) || /杜比视界|dolby\s*vision|dolbyvision|(?:^|[^a-z])dv(?:[^a-z]|$)/i.test(hay) ? 'DV'
+    : dr === 2 || /hdr10|(?:^|[^a-z])hdr(?:[^a-z]|$)|hlg/i.test(hay) ? 'HDR' : undefined
+  return { status: 'unavailable', width: q.width || 0, height: q.height || 0, codec, fps: q.fps || 0, dynamicRange, audio: previewAudio(audios) }
+}
+
+/**
+ * Preview with the same naming function as the post-probe rename. When the
+ * stream metadata is complete the two are identical; the rename after probing
+ * stays the authority and corrects anything the catalog got wrong.
+ */
+export function previewFilename(n: Naming, provider: string, q: PreviewQuality, audios?: PreviewAudio[]): string {
+  return completedFilename(n, previewSpecs(provider, q, audios), previewMarker(provider, q))
+}

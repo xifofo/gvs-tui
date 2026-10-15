@@ -30,7 +30,7 @@ import {
 import { GwClient, ReloginRequired, type KeyInfo } from './lib/client.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from './lib/vault-migrate.ts'
 import { selectAudioTracks } from './lib/audio-selection.ts'
-import { usesMeasuredNaming } from './lib/completed-naming.ts'
+import { previewFilename, usesMeasuredNaming } from './lib/completed-naming.ts'
 import { normalizeHttpProxy } from './lib/proxy.ts'
 import {
   JobHub,
@@ -1227,7 +1227,7 @@ export class Runtime {
         .map(a => [a.lang !== '—' ? a.lang : '', a.label].filter(Boolean).join(' ')).join(' / ') || '平台默认',
       directory: naming && first?.provider !== 'douyin' ? folder(naming, this.cfg.outDir) : this.cfg.outDir,
       name: naming && first ? usesMeasuredNaming(first)
-        ? completedFilename(naming, { status: 'unavailable', height: first.height, codec: first.codec }) : filename(naming) : '',
+        ? previewFilename(naming, first.provider, this.qualities[this.qIdx] ?? { height: first.height, codec: first.codec }, first.audioTracks ?? this.audios.filter(a => a.selected)) : filename(naming) : '',
       note: first && usesMeasuredNaming(first) ? '封装后按实际规格、默认音轨及已确认档位补全文件名。' : '',
     }
   }

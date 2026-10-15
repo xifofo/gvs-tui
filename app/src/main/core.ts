@@ -36,7 +36,7 @@ import {
 import { extractTencentLinks, extractYoukuVideoId, extractIQLink, extractIQCNLink } from '@tui/link.ts'
 import { youkuSpokenLangKey } from '@tui/media.ts'
 import { completedFilename, filename, folder, tierHeight, dots } from '@tui/name.ts'
-import { usesMeasuredNaming } from '@tui/completed-naming.ts'
+import { previewFilename, usesMeasuredNaming } from '@tui/completed-naming.ts'
 import { moviePlayables, probeOptions, qualityChoiceLabel, youkuEditionsFromDetail, youkuMoviePick } from '@tui/quality.ts'
 import { selectedTencentQuality } from '@tui/tencent-quality-selection.ts'
 import { selectedIQCNQuality, restoreIQCNSourceHints } from '@tui/iqcn-quality-selection.ts'
@@ -1456,8 +1456,9 @@ export class Core {
     const t = tasks[0]
     if (!t) return { folder: '', file: '' }
     const n = jobNaming(t, this.cfg)
+    const q = this.probes.get(req.token)?.qualities[req.quality]
     return { folder: folder(n, this.cfg.outDir), file: usesMeasuredNaming(t)
-      ? completedFilename(n, { status: 'unavailable', height: t.height, codec: t.codec }) : filename(n),
+      ? previewFilename(n, t.provider, q ?? { height: t.height, codec: t.codec }, t.audioTracks) : filename(n),
       ...(usesMeasuredNaming(t) ? { note: '封装后按实际规格、默认音轨及已确认档位补全文件名。' } : {}) }
   }
 

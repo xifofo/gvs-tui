@@ -1039,7 +1039,9 @@ test('batch episode titles survive TMDB matching and share preview and download 
   const names = tasks.map((task: any) => filename(jobNaming(task, internal.cfg)))
   expect(names[0]).toContain('现在就出发.S03E01.名场面特辑.狼人有救了.2026.')
   expect(names[1]).toContain('现在就出发.S03E02.加更篇.一起出发.2026.')
-  expect(r.snapshot.confirmation?.name).toBe(names[0])
+  // Measured naming: the preview uses the post-probe naming function, not the provisional name.
+  expect(r.snapshot.confirmation?.name).toContain('现在就出发.S03E01.名场面特辑.狼人有救了.2026.')
+  expect(r.snapshot.confirmation?.name).not.toContain('DVH1')
   expect(r.snapshot.confirmation?.directory).toBe(folder(jobNaming(tasks[0], internal.cfg), internal.cfg.outDir))
   r.handleKey('enter')
   expect(r.snapshot.jobs![0]!.title).toContain(subtitles[0]!)
