@@ -7,7 +7,7 @@ import type { TencentDiagnostic } from './diagnostic-types.ts'
 export type { TencentDiagnostic } from './diagnostic-types.ts'
 type Stored = TencentDiagnostic & { scope: string }
 const token = (v: unknown) => typeof v === 'string' && /^[A-Za-z0-9_.:-]{0,128}$/.test(v) ? v : ''
-const statuses = new Set(['request_completed','request_error','risk_rejected','binding_invalid','rate_limited','rejected','stopped_locally','observed_locally','local_only_gateway_source_unsupported','unverified_response','delivery_unknown','preview','disabled','incomplete','transport_error','http_rejected','invalid_response','observation_error','unknown'])
+const statuses = new Set(['request_completed','request_error','risk_rejected','binding_invalid','rate_limited','rejected','stopped_locally','observed_locally','local_only_gateway_source_unsupported','unverified_response','delivery_unknown','preview','disabled','incomplete','transport_error','http_rejected','invalid_response','observation_error','qimei_decrypted_unverified','qimei_decryption_failed','qimei_response_unavailable','tunnel_unavailable','duplicate','session_stopped','unknown'])
 const decisions = new Set(['stop_flow','reauth_required','no_automatic_resend','inspect_error','local_observation','local_only','not_acceptance_proof','continue'])
 const safeStatus = (v: unknown) => typeof v === 'string' && statuses.has(v) ? v : 'unknown'
 const safeDecision = (v: unknown) => typeof v === 'string' && decisions.has(v) ? v : 'inspect_error'

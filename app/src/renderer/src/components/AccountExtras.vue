@@ -52,6 +52,14 @@ async function renew() {
       <button type="button" class="btn sm" title="向支持的网关记录真实进程指标；不代表已向腾讯发送事件" @click="save({ tencentObservations: !s.tencentObservations }, 'tx-observe')">操作观测：{{ s.tencentObservations ? '开' : '关' }}</button>
     </div>
     <details>
+      <summary>真实原生事件接入</summary>
+      <p>读取实际采集器追加的 JSONL，跟随当前 TV 账号的操作流程处理。手机已发送的镜像只预览；下载进度不会作为观看进度上报。</p>
+      <input class="input" :value="s.tencentNativeEventFile" placeholder="实际事件 JSONL 的本机绝对路径" @change="save({ tencentNativeEventFile: ($event.target as HTMLInputElement).value }, 'tx-native-file')" />
+      <select class="input" :value="s.tencentNativeEventMode" @change="save({ tencentNativeEventMode: ($event.target as HTMLSelectElement).value as 'off' | 'preview' | 'send' }, 'tx-native-mode')">
+        <option value="off">关闭</option><option value="preview">仅预览</option><option value="send">发送生产者标记为尚未投递的事件</option>
+      </select>
+    </details>
+    <details>
       <summary>粘贴网页 Cookie</summary>
       <textarea v-model="form.tencentCookie" class="input" spellcheck="false" placeholder="粘贴腾讯视频网页 Cookie" />
       <button type="button" class="btn sm" :disabled="!form.tencentCookie.trim() || saving === 'tx'" @click="save({ tencentCookie: form.tencentCookie }, 'tx')">保存 Cookie</button>

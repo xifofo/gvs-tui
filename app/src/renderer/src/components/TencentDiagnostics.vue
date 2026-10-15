@@ -11,6 +11,7 @@ const labels: Record<string,string> = {
   observed_locally:'网关已记录本地观测', local_only_gateway_source_unsupported:'Electron 本地观测（网关尚未支持该来源）',
   unverified_response:'收到响应，尚未证实接受', delivery_unknown:'送达情况不确定', preview:'仅预览，未发送', disabled:'上报关闭', incomplete:'字段不足，未发送',
   stop_flow:'停止当前流程', reauth_required:'检查登录后重新操作', no_automatic_resend:'不自动重发',
+  qimei_decrypted_unverified:'响应已解密，业务结果未确认', native_crypto_only:'已验证密码处理',
   inspect_error:'检查错误', local_observation:'仅观测记录', local_only:'仅本地记录', not_acceptance_proof:'不能据此认定接受', continue:'继续当前流程',
 }
 let generation = 0
@@ -27,7 +28,7 @@ watch(() => String(props.jobId ?? '') + ':' + (store.state?.accountScope || ((st
   <section class="diagnostics card" aria-label="腾讯风控处理日志">
     <div class="heading"><h3>腾讯诊断{{ jobId === undefined ? ' · 当前账号' : ' · 任务 ' + jobId }}</h3><button class="btn sm" :disabled="loading" @click="refresh">刷新</button><button class="btn sm" @click="$emit('close')">关闭</button></div>
     <p>本地观测 ≠ 已向腾讯发送；HTTP 200 ≠ 风控接受。不包含 Cookie、绑定令牌、设备凭据、媒体地址或内容密钥。</p>
-    <p>操作观测：{{ store.state?.settings.tencentObservations ? '已开启，支持此来源的网关会接收真实桌面进程指标' : '未开启，可在账号设置中开启' }}。腾讯事件自动发送尚未接入。</p>
+    <p>操作观测：{{ store.state?.settings.tencentObservations ? '已开启，支持此来源的网关会接收真实桌面进程指标' : '未开启，可在账号设置中开启' }}。原生事件：{{ store.state?.settings.tencentNativeEventFile ? ({ off: '关闭', preview: '跟随业务操作预览', send: '发送尚未投递事件；镜像仅预览' })[store.state.settings.tencentNativeEventMode || 'preview'] : '未配置实际生产者' }}。</p>
     <p v-if="error" class="error-box">{{ error }}</p>
     <p v-else-if="loading" aria-live="polite">正在读取当前账号诊断…</p>
     <p v-else-if="!rows.length">暂无诊断记录。不会为了生成日志自动发送取流或上报请求。</p>

@@ -50,6 +50,8 @@ export type SettingsView = {
   tmdbLang: string
   threads: number
   tencentObservations: boolean
+  tencentNativeEventFile: string
+  tencentNativeEventMode: 'off' | 'preview' | 'send'
   hamiClient: 'tv' | 'web'
   tencentCookie: string
   douyinCookie: string

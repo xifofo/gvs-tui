@@ -737,6 +737,8 @@ export class Core {
       tmdbLang: c.tmdbLang,
       threads: c.threads,
       tencentObservations: !!c.tencentObservations,
+      tencentNativeEventFile: c.tencentNativeEventFile || '',
+      tencentNativeEventMode: c.tencentNativeEventMode || 'preview',
       hamiClient: c.hamiClient || 'tv',
       tencentCookie: c.tencentCookie,
       douyinCookie: c.douyinCookie ?? '',
@@ -857,6 +859,11 @@ export class Core {
     if (patch.tmdbLang !== undefined) c.tmdbLang = patch.tmdbLang.trim() || 'zh-CN'
     if (patch.threads !== undefined) c.threads = clampThreads(patch.threads)
     if (patch.tencentObservations !== undefined) c.tencentObservations = patch.tencentObservations === true
+    if (patch.tencentNativeEventFile !== undefined) c.tencentNativeEventFile = patch.tencentNativeEventFile.trim()
+    if (patch.tencentNativeEventMode !== undefined) {
+      if (!['off', 'preview', 'send'].includes(patch.tencentNativeEventMode)) throw new Error('无效腾讯事件模式')
+      c.tencentNativeEventMode = patch.tencentNativeEventMode
+    }
     if (patch.hamiClient !== undefined) { if (!['tv','web'].includes(patch.hamiClient)) throw new Error('无效 Hami 会话类型'); c.hamiClient = patch.hamiClient }
     if (patch.iqProfile !== undefined) c.iqProfile = patch.iqProfile.trim()
     // 瘦客户端：Cookie 粘贴即推给网关托管，tui.json 不再保存副本。

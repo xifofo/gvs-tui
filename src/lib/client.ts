@@ -4,6 +4,7 @@ import type { FileConfig } from './config.ts'
 import { fetchGateway } from './proxy.ts'
 import { runLog, summarizeInput, summarizeResult } from './runlog.ts'
 import { TencentOperations, type TencentOperation } from './tencent-operations.ts'
+import { TencentNativeEvents } from './tencent-native-events.ts'
 import { randomUUID } from 'node:crypto'
 import { normalizeIQCookie } from './iq.ts'
 import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
@@ -67,6 +68,8 @@ export class GwClient {
   private proxyOf: () => string | undefined = () => undefined
   private operations?: TencentOperations
   private operationScope = ''
+  private nativeEvents?: TencentNativeEvents
+  private nativeEventFileOverride?: string
   private diagnosticJobID = ''
   private readonly source: 'tui_process' | 'electron_process'
   /**
@@ -95,14 +98,39 @@ export class GwClient {
     }
   }
 
+  private nativeEventSettings() {
+    const cfg = this.cfgOf?.()
+    return {
+      path: this.nativeEventFileOverride ?? (cfg?.tencentNativeEventFile?.trim() || ''),
+      mode: cfg?.tencentNativeEventMode ?? 'preview' as const,
+      gateway: this.host,
+      account: this.accountFor?.('tencent') || GW_DEFAULT_ACCOUNT,
+    }
+  }
+
+  private tencentReportsEnabled(): boolean {
+    const cfg = this.cfgOf?.()
+    return !!(cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1' || this.nativeEventSettings().path && this.nativeEventSettings().mode !== 'off')
+  }
+
+  private async tencentReport(input: Record<string, unknown>, account = this.accountFor?.('tencent')): Promise<Record<string, unknown>> {
+    const extra = account && account !== GW_DEFAULT_ACCOUNT ? { [GW_ACCOUNT_HEADER]: account } : undefined
+    const envelope = await this.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, extra, 10_000)
+    return (envelope.data ?? {}) as Record<string, unknown>
+  }
+
   private operationTracker(): TencentOperations {
-    const scope = `${this.host}\0${this.key}`
+    const scope = `${this.host}\0${this.key}\0${this.accountFor?.('tencent') || GW_DEFAULT_ACCOUNT}\0${this.nativeEventSettings().path}`
     if (!this.operations || this.operationScope !== scope) {
       this.operationScope = scope
-      this.operations = new TencentOperations(async input => {
-        const envelope = await this.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, undefined, 5000)
-        return (envelope.data ?? {}) as Record<string, unknown>
-      }, runLog, this.diagnosticJobID, undefined, scope, this.source)
+      const owner = this.nativeEventSettings()
+      const diagnosticScope = `${this.host}\0${this.key}`
+      this.nativeEvents = new TencentNativeEvents(() => ({ ...this.nativeEventSettings(), gateway: owner.gateway, account: owner.account, path: owner.path }), runLog,
+        (kind, id, reply) => writeTencentDiagnostic(diagnosticScope, { flow: '', operation: id, job: this.diagnosticJobID, action: kind, phase: 'native',
+          status: String(reply.status || 'unknown'), decision: reply.stop === true || reply.delivery_unknown === true ? 'no_automatic_resend' : 'not_acceptance_proof' }))
+      const native = this.nativeEvents
+      this.operations = new TencentOperations(input => this.tencentReport(input, owner.account), runLog, this.diagnosticJobID, undefined, `${this.host}\0${this.key}`, this.source,
+        (binding, call) => native.drain(binding, call))
     }
     return this.operations
   }
@@ -111,13 +139,14 @@ export class GwClient {
     const child = new GwClient(this.host, this.key, this.cfgOf, this.source)
     child.proxyOf = this.proxyOf
     child.diagnosticJobID = String(jobID)
-    child.accountFor = this.accountFor
-    if (!this.cfgOf?.()?.tencentObservations && process.env.GVS_TENCENT_OBSERVE !== '1') return child
-    child.operations = this.operationTracker().fork(String(jobID), vid, async input => {
-      const envelope = await child.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, undefined, 5000)
-      return (envelope.data ?? {}) as Record<string, unknown>
-    })
-    child.operationScope = `${child.host}\0${child.key}`
+    const accountFor = this.accountFor
+    const tencentAccount = accountFor?.('tencent')
+    child.accountFor = provider => provider === 'tencent' ? tencentAccount : accountFor?.(provider)
+    if (!this.tencentReportsEnabled()) return child
+    child.nativeEventFileOverride = this.nativeEventSettings().path
+    child.operations = this.operationTracker().fork(String(jobID), vid, input => child.tencentReport(input, tencentAccount || GW_DEFAULT_ACCOUNT))
+    child.nativeEvents = this.nativeEvents
+    child.operationScope = `${child.host}\0${child.key}\0${tencentAccount || GW_DEFAULT_ACCOUNT}\0${child.nativeEventSettings().path}`
     return child
   }
 
@@ -200,7 +229,8 @@ export class GwClient {
     let operation: TencentOperation | undefined
     let tracker: TencentOperations | undefined
     const cfg = this.cfgOf?.()
-    if (provider === 'tencent' && action !== 'report' && (cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1') && (input.session_type === 'tv' || cfg?.tencentMode === 'tv')) {
+    const account = this.accountFor?.(provider)
+    if (provider === 'tencent' && action !== 'report' && this.tencentReportsEnabled() && (input.session_type === 'tv' || cfg?.tencentMode === 'tv')) {
       tracker = this.operationTracker()
       try { operation = await tracker.begin(action, input) } catch (error) {
         const risk = tencentRisk(undefined, error)
@@ -212,7 +242,6 @@ export class GwClient {
     const timeoutMs =
       opts?.timeoutMs ??
       (provider === 'tencent' && action === 'play' ? TENCENT_PLAY_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
-    const account = this.accountFor?.(provider)
     if (account && account !== GW_DEFAULT_ACCOUNT) {
       // 账号的凭证已经托管在网关该账号下；别再用全局配置里的 Cookie 头覆盖它
       const { 'Iq-Cookie': _iq, 'Tx-Cookie': _tx, 'Dy-Cookie': _dy, ...rest } = extra ?? {}

@@ -585,7 +585,7 @@ export class Runtime {
     if (this.has('mgtv')) f.push('芒果扫码','芒果状态','芒果退出')
     if (this.has('bilibili')) f.push('B 站扫码','B 站 Cookie','B 站状态','B 站退出')
     if (this.has('migu')) f.push('咪咕 App 扫码','咪咕 App 状态','咪咕 App 退出','咪咕 TV 扫码','咪咕 TV 状态','咪咕 TV 退出')
-    if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯诊断日志')
+    if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯原生事件文件', '腾讯原生事件模式', '腾讯诊断日志')
     f.push('运行日志')
     return f
   }
@@ -599,6 +599,8 @@ export class Runtime {
     if (f.startsWith('芒果')) return '芒果 TV App 扫码 · 会话由网关保存'
     if (f.startsWith('B 站')) return '匿名可用 · 导入本人 Web Cookie · 网关重启需重新导入'
     if (f === '腾讯观测绑定') return this.cfg.tencentObservations ? '开 · 本地观测不等于腾讯已接收' : '关 · 风险诊断仍本地记录'
+    if (f === '腾讯原生事件文件') return this.cfg.tencentNativeEventFile || '未配置实际生产者文件'
+    if (f === '腾讯原生事件模式') return ({ off: '关闭', preview: '仅预览', send: '发送未投递事件；镜像仅预览' })[this.cfg.tencentNativeEventMode || 'preview']
     if (f === '腾讯诊断日志') return tencentDiagnosticPath()
     if (f.startsWith('Hami ') || f.startsWith('mewatch ')) return '回车操作 · 账号材料不保存到本机配置'
     if ((Object.values(tencentLabels) as string[]).includes(f)) return '独立扫码 · 不覆盖其他 Cookie'
@@ -685,6 +687,7 @@ export class Runtime {
   }
 
   private editSeed(f: string): string {
+    if (f === '腾讯原生事件文件') return this.cfg.tencentNativeEventFile || ''
     if (f === '腾讯 TV 设备 ID') return this.cfg.tencentTVDevice || ''
     if (f === '腾讯 TV QUA') return this.cfg.tencentTVQUA || ''
     if (f === '腾讯 TV 版本') return this.cfg.tencentTVVersion || ''
@@ -1827,6 +1830,7 @@ export class Runtime {
       this.say('输入本人 IQ 邮箱或手机号，下一步输入密码'); this.emit(); return
     }
     if (f === '腾讯诊断日志') { this.say(tencentDiagnosticPath() + ' · 任务详情可看该任务诊断'); this.emit(); return }
+    if (f === '腾讯原生事件模式') { const modes = ['off', 'preview', 'send'] as const; this.cfg.tencentNativeEventMode = modes[(modes.indexOf(this.cfg.tencentNativeEventMode || 'preview') + 1) % modes.length]; this.persistConfig(); this.emit(); return }
     if (f === '腾讯观测绑定') { this.cfg.tencentObservations = !this.cfg.tencentObservations; this.persistConfig(); this.emit(); return }
     if (f === 'Hami 会话类型') { this.cfg.hamiClient = this.cfg.hamiClient === 'web' ? 'tv' : 'web'; this.persistConfig(); this.emit(); return }
     const loginCommands: Record<string, SessionCommand> = {
@@ -2130,6 +2134,9 @@ export class Runtime {
       return
     }
     switch (this.editField) {
+      case '腾讯原生事件文件':
+        this.cfg.tencentNativeEventFile = v.trim()
+        break
       case '网关代理':
         try { this.cfg.gatewayProxy = normalizeHttpProxy(v) }
         catch (e) {

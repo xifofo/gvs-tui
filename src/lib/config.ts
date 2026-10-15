@@ -24,6 +24,10 @@ export type FileConfig = {
   tencentMode?: "cookie" | "web" | "app" | "tv"
   /** Bind TV operations and record real client metrics locally on the gateway. */
   tencentObservations?: boolean
+  /** Actual native producer JSONL; read only in the TUI/Electron main process. */
+  tencentNativeEventFile?: string
+  /** Mirrored App events remain preview-only even when this is send. */
+  tencentNativeEventMode?: 'off' | 'preview' | 'send'
   /** Hami Web and TV are separate gateway sessions. */
   hamiClient?: 'tv' | 'web'
   tencentTVDevice?: string

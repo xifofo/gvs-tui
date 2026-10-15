@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { TencentNativeEventStop } from './tencent-native-events.ts'
 import { errorCode } from './user-message.ts'
 import { tencentRisk } from './tencent-risk.ts'
 import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
@@ -31,11 +32,11 @@ export class TencentOperations {
   /** `false` after this gateway rejects `tencent/report`; later calls stay local. */
   private reportSupported?: boolean
 
-  constructor(private readonly call: ReportCall, private readonly log: (s: string) => void, private readonly jobID = '', root?: Root, private readonly scope = '', private readonly source: 'tui_process' | 'electron_process' = 'tui_process') { this.root = root }
+  constructor(private readonly call: ReportCall, private readonly log: (s: string) => void, private readonly jobID = '', root?: Root, private readonly scope = '', private readonly source: 'tui_process' | 'electron_process' = 'tui_process', private readonly native?: (binding: string, call: ReportCall) => Promise<void>) { this.root = root }
 
   fork(jobID: string, vid?: string, call: ReportCall = this.call): TencentOperations {
     const root = (vid && this.byContent.get(vid)) || this.root || { flow: randomUUID() }
-    return new TencentOperations(call, this.log, jobID, root, this.scope, this.source)
+    return new TencentOperations(call, this.log, jobID, root, this.scope, this.source, this.native)
   }
 
   async begin(action: string, input: Record<string, unknown>): Promise<TencentOperation | undefined> {
@@ -132,6 +133,13 @@ export class TencentOperations {
       this.log(`tencent_event action=${op.action} phase=${phase} flow=${op.root.flow} status=observation_error`)
       if (errorCode(error) === 'ACCOUNT_BINDING_INVALID' || error instanceof Error && /report_binding_/.test(error.message)) { op.root.rejected = true; throw error }
       // Logging failures do not change playback; the main request validates its binding.
+    }
+    if (this.native && op.root.binding && !op.root.rejected) {
+      try { await this.native(op.root.binding, this.call) }
+      catch (error) {
+        if (error instanceof TencentNativeEventStop) op.root.rejected = true
+        throw error
+      }
     }
   }
 }
