@@ -164,6 +164,8 @@ export type AudioView = {
   embedded: boolean
 }
 
+export type SubtitleView = { id: string; label: string; lang: string; forced: boolean; sdh: boolean; selected: boolean; isDefault: boolean }
+
 export type QualityView = {
   index: number
   label: string
@@ -184,6 +186,8 @@ export type ProbeResult = {
   token: number
   qualities: QualityView[]
   audios: AudioView[]
+  /** Separately downloadable subtitles (Disney+); absent = subtitles follow the video. */
+  subtitles?: SubtitleView[]
   vip: { canPlay: boolean; isVip: boolean; hasTrial: boolean; note: string } | null
   warning: string
 }
@@ -198,6 +202,8 @@ export type EnqueueRequest = {
   episodes: EpisodeView[]
   quality: number
   audioIds: string[]
+  /** Selected subtitle ids when the probe returned subtitles. */
+  subtitleIds?: string[]
   /** 默认播放的已选音轨；省略时按 DTS、杜比 / 全景声、AAC 顺序自动选择。 */
   defaultAudioId?: string
   tmdb: TmdbHit | null

@@ -1063,6 +1063,14 @@ export async function hlsSegmentsEncrypted(src: string, ref: string, signal?: Ab
   return !(b[0] === 0x47 && b[188] === 0x47)
 }
 
+/** RE subtitle selection: all, none, or exact rendition files (regex-escaped, OR-ed). */
+function subtitleSelect(uris?: string[]): string[] {
+  if (!uris) return ['--select-subtitle', 'all']
+  const ok = uris.filter(u => /^[\w.-]+$/.test(u))
+  if (!ok.length) return ['--drop-subtitle', 'all']
+  return ['--select-subtitle', `url=(${ok.map(u => u.replace(/[.-]/g, m => `\\${m}`)).join('|')}):for=all`]
+}
+
 export async function downloadPlaylist(opts: {
   src: string
   dest: string
@@ -1073,6 +1081,8 @@ export async function downloadPlaylist(opts: {
   contentKeys?: string[]
   /** Keep selected provider subtitle groups when muxing a complete HLS master. */
   keepSubtitles?: boolean
+  /** Exact subtitle renditions to keep (playlist file names); [] drops all; undefined keeps all when keepSubtitles. */
+  subtitleUris?: string[]
   /** Already fetched by the gateway before a short-lived MPD signature expires. */
   manifestText?: string
   /** Select an exact pixel height while keeping the best audio. */
@@ -1189,7 +1199,7 @@ export async function downloadPlaylist(opts: {
       ...(opts.select === 'video' ? ['--select-video'] : opts.contentKeys?.length && opts.select === 'muxed' ? [] : ['--auto-select']),
       ...(opts.select === 'video' ? ['best'] : []),
       ...(opts.select === 'video' ? ['--drop-audio', 'all', '--drop-subtitle', 'all'] : []),
-      ...(opts.select === 'muxed' ? opts.keepSubtitles ? ['--select-subtitle','all'] : ['--drop-subtitle', 'all'] : []),
+      ...(opts.select === 'muxed' ? opts.keepSubtitles ? subtitleSelect(opts.subtitleUris) : ['--drop-subtitle', 'all'] : []),
       '--binary-merge',
       '--del-after-done', 'true',
       // Keep RE's redirected-output detection. Its forced ANSI/NonAnsiWriter

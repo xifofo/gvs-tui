@@ -30,6 +30,13 @@ const d = computed(() => store.detail)
 const probe = computed(() => store.probe)
 const qIndex = ref(0)
 const audioIds = ref<string[]>([])
+/** Separately downloadable subtitles (Disney+); empty = subtitles follow the video. */
+const subtitles = computed(() => probe.value?.subtitles ?? [])
+const subtitleIds = ref<string[]>([])
+watch(subtitles, (list) => { subtitleIds.value = list.filter((s) => s.selected).map((s) => s.id) }, { immediate: true })
+function toggleSubtitle(id: string) {
+  subtitleIds.value = subtitleIds.value.includes(id) ? subtitleIds.value.filter((x) => x !== id) : [...subtitleIds.value, id]
+}
 const preferredAudioId = ref('')
 const tmdb = ref<TmdbHit | null>(null)
 const tmdbHits = ref<TmdbHit[]>([])
@@ -248,6 +255,7 @@ const request = computed<EnqueueRequest | null>(() => {
     episodes: store.probeEpisodes.map((e) => ({ ...e, languages: e.languages.map((l) => ({ ...l })) })),
     quality: qIndex.value,
     audioIds: [...audioIds.value],
+    ...(subtitles.value.length ? { subtitleIds: [...subtitleIds.value] } : {}),
     defaultAudioId: defaultAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
     tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
@@ -517,12 +525,23 @@ async function applyRule() {
 
             <section class="qsec">
               <div class="qsec-h"><Icon name="cc" :size="16" /><span>字幕</span></div>
-              <div class="agrid">
+              <div v-if="subtitles.length" class="agrid">
+                <div v-for="s in subtitles" :key="s.id" class="acard" :class="{ on: subtitleIds.includes(s.id), def: s.isDefault }">
+                  <label class="achip" :title="s.forced ? '强制字幕：只翻译外语对白 / 画面文字' : s.sdh ? 'SDH：含音效描述，供听障观众' : s.lang">
+                    <input type="checkbox" class="sr-only" :checked="subtitleIds.includes(s.id)" @change="toggleSubtitle(s.id)" />
+                    <span class="cbox"><Icon v-if="subtitleIds.includes(s.id)" name="check" :size="12" :stroke="3" /></span>
+                    <span class="alang">{{ s.label }}</span>
+                    <span class="alabel">{{ [s.lang, s.forced ? '强制' : '', s.sdh ? 'SDH' : '', s.isDefault ? '默认显示' : ''].filter(Boolean).join(' · ') }}</span>
+                  </label>
+                </div>
+              </div>
+              <span v-if="subtitles.length" class="muted small">已选 {{ subtitleIds.length }} / {{ subtitles.length }} 条字幕；转 SRT 封装进 MKV，默认显示与强制标记写入文件。</span>
+              <div v-else class="agrid">
                 <div class="acard on sub-card">
                   <span class="achip dis"><span class="cbox"><Icon name="check" :size="12" :stroke="3" /></span><span class="alang">跟随视频</span><span class="alabel">平台内嵌 / 硬字幕</span></span>
                 </div>
               </div>
-              <span class="muted small">该平台没有返回可单独下载的字幕轨，字幕随视频画面保留。</span>
+              <span v-if="!subtitles.length" class="muted small">该平台没有返回可单独下载的字幕轨，字幕随视频画面保留。</span>
             </section>
           </template>
         </div>

@@ -16,7 +16,7 @@ import { runLog } from './runlog.ts'
 import { tencentSelectedPlayInput, tencentPersonaKey } from './tencent-quality-selection.ts'
 export { tencentPersonaKey } from './tencent-quality-selection.ts'
 
-export type StreamOptions = { qualities: Quality[]; audios: Audio[]; vip?: VipProbe }
+export type StreamOptions = { qualities: Quality[]; audios: Audio[]; subtitles?: import('../types.ts').Subtitle[]; vip?: VipProbe }
 
 /** Map Youku play payload → TUI audio rows. Gateway catalog is `audios[]`. */
 export function youkuAudiosFromPlay(data: Record<string, unknown>, sourceVid = '', editionLang = ''): Audio[] {

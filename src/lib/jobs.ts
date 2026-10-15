@@ -72,6 +72,8 @@ export type DlTask = {
   includeEpisodeTitle?: boolean
   /** Audio tracks to mux in (空格勾选的那些）；空 = 只封平台默认音轨。 */
   audioTracks?: Array<{ id: string; label: string; lang: string; vid?: string; codec?: string; isDefault?: boolean }>
+  /** Selected separate subtitle renditions (Disney+); undefined = platform default (all). */
+  subtitleTracks?: Array<{ id: string; label: string; lang: string; forced: boolean; sdh: boolean; isDefault: boolean }>
   group: string
   codec: string
   tmdbId: number
@@ -1321,6 +1323,33 @@ export function youkuAudioFetchPlan(
   }))
 }
 
+/**
+ * Sets MKV default / forced-display flags on the muxed subtitle tracks (mkvmerge remux; no mkvpropedit is bundled).
+ * RE muxes the selected renditions in playlist order, which is the order of `subs`; a count mismatch leaves the file untouched.
+ */
+async function markSubtitleFlags(dest: string, subs: NonNullable<DlTask['subtitleTracks']>, signal?: AbortSignal): Promise<void> {
+  const { execFile } = await import('node:child_process')
+  const { rename, rm } = await import('node:fs/promises')
+  const run = (bin: string, args: string[]) => new Promise<string>((ok, fail) => execFile(bin, args, { maxBuffer: 64 << 20, signal, windowsHide: true }, (e, out) => e ? fail(e) : ok(String(out))))
+  const mkvmerge = await ensureMkvmerge()
+  const info = JSON.parse(await run(mkvmerge, ['-J', dest])) as { tracks?: Array<{ id: number; type: string; properties?: { track_name?: string } }> }
+  const tracks = (info.tracks || []).filter(x => x.type === 'subtitles')
+  if (tracks.length !== subs.length) { runLog(`dsnp subtitle flags skipped: ${tracks.length} muxed vs ${subs.length} selected`); return }
+  const args = ['-o', `${dest}.flags.mkv`]
+  tracks.forEach((x, i) => {
+    const s = subs[i]!
+    args.push('--default-track-flag', `${x.id}:${s.isDefault ? 1 : 0}`, '--forced-display-flag', `${x.id}:${s.forced ? 1 : 0}`, '--track-name', `${x.id}:${s.label}`)
+  })
+  args.push(dest)
+  try {
+    await run(mkvmerge, args)
+    await rename(`${dest}.flags.mkv`, dest)
+  } catch (e) {
+    await rm(`${dest}.flags.mkv`, { force: true })
+    runLog(`dsnp subtitle flags failed: ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 /** Media is fetched on this client; gateway traffic is limited to resolve calls. */
 async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, work: string, signal?: AbortSignal): Promise<void> {
   const sources = await resolveManifestDownload(cli, cfg, t.provider, t.vid, t.quality || 'auto')
@@ -1339,6 +1368,7 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
   await writeFinal(out, async dest => {
     await downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, contentKeys: source.contentKeys,
       keepSubtitles: t.provider === 'appletvplus' || t.provider === 'dsnp',
+      subtitleUris: t.provider === 'dsnp' && t.subtitleTracks ? t.subtitleTracks.map(s => s.id) : undefined,
       manifestText: source.manifest, videoHeight: source.height || undefined, videoCodecs, audioUris, threads: cfg.threads,
       select: 'muxed', muxTracks: true, transport: 're', workDir: work, workTag: 'manifest', signal,
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
@@ -1364,6 +1394,10 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
       if (errors.length) throw new Error(`解密后音视频校验失败：${errors.join('；')}`)
       const specs = await probeFinishedMedia(dest, signal)
       if (specs.status !== 'probed' || (source.height && specs.height !== source.height)) throw new Error(`成品分辨率校验失败（预期 ${source.height || '所选'}p，实际 ${specs.height ?? specs.status}），未发布下载文件`)
+    }
+    if (t.provider === 'dsnp' && t.subtitleTracks?.some(s => s.forced || s.isDefault) && /\.mkv$/i.test(dest)) {
+      emit('封装', 0.995, '写入字幕默认 / 强制标记')
+      await markSubtitleFlags(dest, t.subtitleTracks, signal)
     }
   })
 }

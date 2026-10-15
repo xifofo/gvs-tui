@@ -1,4 +1,4 @@
-import type { Audio, Quality } from '../types.ts'
+import type { Audio, Quality, Subtitle } from '../types.ts'
 import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
 import { isObj } from './util.ts'
@@ -36,7 +36,7 @@ export async function resolveManifest(cli: Pick<GwClient, 'invoke'>, cfg: Pick<F
   if (!sources.length) throw new Error('网关没有返回可用媒体清单')
   return sources
 }
-export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: string, id: string): Promise<{ qualities: Quality[]; audios: Audio[] }> {
+export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: string, id: string): Promise<{ qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[] }> {
   if (provider === 'appletvplus') {
     const data = await cli.invoke(provider, 'probe', manifestInput(provider, cfg, id))
     const rows = Array.isArray(data.qualities) ? data.qualities.filter(isObj) : []
@@ -151,6 +151,44 @@ export function hlsMasterAudios(text: string): Audio[] {
     .map(({ kbps: _k, primary: _p, ...r }) => r)
 }
 
+const SUB_LANG: Record<string, string> = { 'zh-Hans': '简体中文', 'zh-CN': '简体中文', 'zh-Hant': '繁体中文', 'zh-TW': '繁体中文（台湾）', 'zh-HK': '繁体中文（香港）', cmn: '国语', yue: '粤语', zh: '中文', en: '英语', ja: '日语', ko: '韩语' }
+const isChineseLang = (l: string) => /^(zh|cmn|yue)(-|$)/i.test(l)
+/**
+ * Disney+ master EXT-X-MEDIA subtitles → selectable tracks (deduped by rendition file).
+ * Default: 简体/繁体中文 + the original language (full), plus forced tracks for every selected audio language.
+ */
+export function hlsMasterSubtitles(text: string, audioLangs: string[] = [], originalLang = ''): Subtitle[] {
+  const seen = new Map<string, Subtitle>()
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith('#EXT-X-MEDIA:') || !/TYPE=SUBTITLES/.test(line)) continue
+    const a = hlsAttrs(line)
+    const id = uriKey(a.URI || '')
+    if (!id || seen.has(id)) continue
+    const lang = a.LANGUAGE || ''
+    const forced = a.FORCED === 'YES' || /--forced--/i.test(a.NAME || '')
+    const sdh = /describes-music-and-sound/.test(a.CHARACTERISTICS || '') || /\[(CC|SDH)\]/i.test(a.NAME || '')
+    const base = lang.split('-')[0]!
+    const name = SUB_LANG[lang] || SUB_LANG[base] || (a.NAME || lang).replace(/--forced--/i, '').trim()
+    seen.set(id, { id, lang, forced, sdh, selected: false, isDefault: false, label: `${name}${forced ? '（强制）' : ''}${sdh ? '（SDH 听障）' : ''}` })
+  }
+  const rows = [...seen.values()]
+  const same = (a: string, b: string) => !!a && !!b && (a === b || a.split('-')[0] === b.split('-')[0] || (isChineseLang(a) && isChineseLang(b)))
+  // Full Chinese: simplified first, then traditional (one each); then original language (prefer non-SDH).
+  for (const want of [[/^zh-(Hans|CN)$/i], [/^zh-Hant$/i, /^zh-TW$/i, /^zh-HK$/i]]) {
+    const pick = want.map(re => rows.find(r => !r.forced && re.test(r.lang))).find(Boolean)
+    if (pick) pick.selected = true
+  }
+  if (originalLang && !isChineseLang(originalLang)) {
+    const pick = rows.filter(r => !r.forced && same(r.lang, originalLang)).sort((a, b) => Number(a.sdh) - Number(b.sdh))[0]
+    if (pick) pick.selected = true
+  }
+  for (const r of rows) if (r.forced && audioLangs.some(l => same(r.lang, l))) r.selected = true
+  const def = rows.find(r => r.selected && !r.forced && /^zh-(Hans|CN)$/i.test(r.lang)) ?? rows.find(r => r.selected && !r.forced && isChineseLang(r.lang))
+  if (def) def.isDefault = true
+  // Playlist order on purpose: RE muxes in this order and the MKV flags are matched by position.
+  return rows
+}
+
 async function hlsDurationSec(master: string, base: string, headers: Record<string, string>): Promise<number> {
   // The smallest video playlist lists the same timeline as every rendition.
   const lines = master.split(/\r?\n/)
@@ -163,7 +201,7 @@ async function hlsDurationSec(master: string, base: string, headers: Record<stri
   return total
 }
 
-async function probeDsnp(cli: GwClient, cfg: FileConfig, id: string): Promise<{ qualities: Quality[]; audios: Audio[] }> {
+async function probeDsnp(cli: GwClient, cfg: FileConfig, id: string): Promise<{ qualities: Quality[]; audios: Audio[]; subtitles: Subtitle[] }> {
   // One billed resolve per title (and version) per 6h; the download in the same window is not charged again.
   // The version travels in the id (mediaId|imax), so each version is probed from its own playlist.
   const data = await cli.invoke('dsnp', 'resolve', manifestInput('dsnp', cfg, id))
@@ -172,12 +210,15 @@ async function probeDsnp(cli: GwClient, cfg: FileConfig, id: string): Promise<{ 
   const source = sources[0]!
   const raw = isObj(data.raw) ? data.raw : {}
   const aspectRatio = Number(data.imageAspectRatio ?? raw.imageAspectRatio) || 0
-  let qualities: Quality[] = [], audios: Audio[] = []
+  let qualities: Quality[] = [], audios: Audio[] = [], subtitles: Subtitle[] = []
   try {
     const res = await fetch(source.url, { headers: source.headers, signal: AbortSignal.timeout(20_000) })
     if (res.ok) {
       const text = await res.text()
       audios = hlsMasterAudios(text)
+      // The richest selected track is the original mix (see hlsMasterAudios); Chinese is chosen on top of it.
+      const original = audios.find(a => a.selected && !isChineseLang(a.lang))?.lang || ''
+      subtitles = hlsMasterSubtitles(text, audios.filter(a => a.selected).map(a => a.lang), original)
       let durationSec = 0
       try { durationSec = await hlsDurationSec(text, source.url, source.headers) } catch {}
       const audioBitrate = audios.filter(a => a.selected).reduce((n, a) => n + (Number(/· (\d+)k$/.exec(a.label)?.[1]) || 0) * 1000, 0)
@@ -185,7 +226,7 @@ async function probeDsnp(cli: GwClient, cfg: FileConfig, id: string): Promise<{ 
     }
   } catch {}
   if (!qualities.length) qualities = [{ id: 'auto', label: '最高画质', title: '网关授权取内容密钥 · 本机下载解密', size: 0, width: 0, height: 0, codec: '', drm: 'widevine', stream: 'auto', tier: tierHeight(0, 0) }]
-  return { qualities, audios }
+  return { qualities, audios, subtitles }
 }
 
 export function parseContentKeys(value: unknown): string[] {

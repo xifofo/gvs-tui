@@ -60,7 +60,7 @@ import {
   type YkAccount,
   type YkLogin,
 } from '@tui/youku-session.ts'
-import type { Audio, Episode, Quality, VipProbe } from '../../../src/types.ts'
+import type { Audio, Episode, Quality, Subtitle, VipProbe } from '../../../src/types.ts'
 import {
   PROVIDERS,
   type AccountView,
@@ -316,7 +316,7 @@ export class Core {
   private readonly jobs = new Map<number, JobRecord>()
   private readonly hub: JobHub
   private probeToken = 0
-  private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[] }>()
+  private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[] }>()
   private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | { kind: 'bilibili' } | null = null
 
   constructor(private readonly emit: Emit) {
@@ -1349,7 +1349,7 @@ export class Core {
     if (opts.vip?.canPlay === false) throw new Error(opts.vip.note || '当前账号不能播放这部片')
     this.vipProbe = opts.vip ?? this.vipProbe
     const token = ++this.probeToken
-    this.probes.set(token, { provider, qualities: opts.qualities, audios: opts.audios })
+    this.probes.set(token, { provider, qualities: opts.qualities, audios: opts.audios, subtitles: opts.subtitles })
     if (this.probes.size > 20) this.probes.delete(Math.min(...this.probes.keys()))
     const qualities: QualityView[] = opts.qualities.map((q, index) => ({
       index,
@@ -1371,6 +1371,7 @@ export class Core {
       token,
       qualities,
       audios: opts.audios.map(audioView),
+      ...(opts.subtitles?.length ? { subtitles: opts.subtitles.map((s) => ({ ...s })) } : {}),
       vip: opts.vip ? { canPlay: opts.vip.canPlay, isVip: opts.vip.isVip, hasTrial: opts.vip.hasTrial, note: opts.vip.note } : null,
       warning,
     }
@@ -1476,6 +1477,11 @@ export class Core {
             ? tierHeight(q.height, q.width)
             : tierHeight(q.width, q.height))
       t.audioTracks = t.provider === 'youku' ? bindYoukuAudioTracksToTask(tracks, t) : tracks.map((a) => ({ ...a }))
+      if (probe.subtitles?.length) {
+        const want = new Set(req.subtitleIds ?? probe.subtitles.filter((s) => s.selected).map((s) => s.id))
+        // Playlist order (what RE muxes) is kept so flags can be matched by position.
+        t.subtitleTracks = probe.subtitles.filter((s) => want.has(s.id)).map(({ id, label, lang, forced, sdh, isDefault }) => ({ id, label, lang, forced, sdh, isDefault }))
+      }
       if (req.tmdb) {
         t.tmdbId = req.tmdb.id
         t.year = req.tmdb.year || t.year
