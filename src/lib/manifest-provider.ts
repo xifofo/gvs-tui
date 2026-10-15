@@ -66,7 +66,7 @@ export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg
   for (const source of sources) {
     if (source.live) throw new Error('直播录制尚未接入；不会启动无限下载')
     if (source.clear) continue
-    const supported = provider === 'appletvplus' ? source.drm === 'playready' && source.format.toLowerCase() === 'hls' : ['hamivideo', 'friday'].includes(provider) && source.drm === 'widevine' && source.format.toLowerCase() === 'dash'
+    const supported = provider === 'appletvplus' ? ['playready', 'widevine'].includes(source.drm) && source.format.toLowerCase() === 'hls' : ['hamivideo', 'friday'].includes(provider) && source.drm === 'widevine' && source.format.toLowerCase() === 'dash'
     if (!supported || !source.contentKeys.length) {
       requireClearDownload(source)
     }
