@@ -7,6 +7,8 @@ export function useDialogFocus(root: Ref<HTMLElement | null>, close: () => void,
     .filter(el => el.getClientRects().length > 0)
   function key(event: KeyboardEvent) {
     if (!active()) return
+    // An open popup (UiSelect) owns Escape; it closes itself, not the dialog.
+    if (event.key === 'Escape' && document.activeElement?.getAttribute('aria-expanded') === 'true') return
     if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); close(); return }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); event.stopImmediatePropagation(); return }
     if (event.key !== 'Tab') return

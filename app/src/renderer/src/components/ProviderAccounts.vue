@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type { SessionCommand, ProviderSessionView } from '@shared/api'
 import { gvs, store, toast, errText } from '../store'
+import UiSelect from './UiSelect.vue'
 const props = defineProps<{ only?: string }>()
 const allowed = (p: string) => (store.state?.providers || []).some(v => v === p) && (!props.only || props.only === p)
 const busy = ref(false)
@@ -11,6 +12,9 @@ const iqUsername = ref(''), iqPassword = ref(''), iqAreaCode = ref('')
 const iqStatusError = ref('')
 const appleVerifyID = ref('')
 const appleCountry = ref('hk')
+const APPLE_COUNTRIES = [['hk', '香港'], ['tw', '台湾'], ['jp', '日本'], ['us', '美国'], ['gb', '英国'], ['au', '澳大利亚'], ['ca', '加拿大']].map(([value, label]) => ({ value, label }))
+const HAMI_MODES = [{ value: 'tv' as const, label: 'TV' }, { value: 'web' as const, label: 'Web' }]
+const mewatchProfiles = computed(() => [{ value: '', label: '选择 profile', disabled: true }, ...(views.mewatch?.profiles ?? []).map((p: { id: string; name?: string }) => ({ value: p.id, label: p.name || p.id }))])
 const accountScope = computed(() => store.state?.accountScope || ((store.state?.settings.host || '') + ':' + (store.state?.settings.keyMasked || '')))
 const iqSummary = computed(() => iqStatusError.value || views.iq?.summary || store.state?.accounts.find(a => a.provider === 'iq')?.summary)
 let revision = 0
@@ -46,8 +50,7 @@ async function checkIQStatus() {
     if (current === revision) iqStatusError.value = '未能检查 IQ 会话：' + errText(e)
   } finally { if (current === revision) busy.value = false }
 }
-async function setMode(event: Event) {
-  const hamiClient = (event.target as HTMLSelectElement).value as 'tv' | 'web'
+async function setMode(hamiClient: 'tv' | 'web') {
   try { await gvs('saveSettings', { hamiClient }) } catch (e) { toast(errText(e), 'err') }
 }
 watch(accountScope, () => {
@@ -68,7 +71,7 @@ onBeforeUnmount(() => { revision++ })
   <div v-if="allowed('appletvplus')" class="provider-account">
     <h3>Apple TV · 账号登录</h3>
     <p>粘贴官网的媒体令牌或完整 Cookie，选择你的 Apple 账号地区。</p>
-    <div class="controls"><label class="grow"><span>账号地区</span><select v-model="appleCountry" class="input" aria-label="Apple 账号地区"><option value="hk">香港</option><option value="tw">台湾</option><option value="jp">日本</option><option value="us">美国</option><option value="gb">英国</option><option value="au">澳大利亚</option><option value="ca">加拿大</option></select></label><a class="btn sm" :href="`https://tv.apple.com/${appleCountry}`" target="_blank" rel="noopener noreferrer">打开 Apple TV 官网</a></div>
+    <div class="controls"><label class="grow"><span>账号地区</span><UiSelect v-model="appleCountry" :options="APPLE_COUNTRIES" aria-label="Apple 账号地区" /></label><a class="btn sm" :href="`https://tv.apple.com/${appleCountry}`" target="_blank" rel="noopener noreferrer">打开 Apple TV 官网</a></div>
     <textarea v-model="cookie" class="input" aria-label="本人 Apple TV 媒体令牌或 Cookie，仅本次提交" autocomplete="off" spellcheck="false" placeholder="媒体令牌（0. 开头）或完整 Cookie" />
     <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'appletvplus',op:'import',cookie,country:appleCountry})">导入登录态</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'logout'})">退出</button></div>
     <div class="controls"><input v-model="appleVerifyID" class="input" autocomplete="off" aria-label="单集或电影 ID" placeholder="单集或电影 ID：umc.cmc.…" /><button class="btn sm" :disabled="busy || !appleVerifyID.trim()" @click="command({provider:'appletvplus',op:'verify',id:appleVerifyID.trim()})">验证播放权益</button></div>
@@ -146,7 +149,7 @@ onBeforeUnmount(() => { revision++ })
       <strong v-if="views.mewatch.userCode">激活码：{{ views.mewatch.userCode }}</strong>
       <input v-if="views.mewatch.url" class="input" :value="views.mewatch.url" readonly aria-label="复制到浏览器打开的官方激活地址" />
       <div v-if="views.mewatch.profiles?.length" class="controls">
-        <select v-model="profile" class="input" aria-label="选择 profile"><option value="">选择 profile</option><option v-for="p in views.mewatch.profiles" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select>
+        <UiSelect v-model="profile" :options="mewatchProfiles" placeholder="选择 profile" aria-label="选择 profile" />
         <input v-model="pin" class="input" type="password" autocomplete="off" placeholder="PIN（若需要）" />
         <button class="btn sm" :disabled="busy || !profile" @click="command({provider:'mewatch',op:'profile',profileId:profile,pin})">切换 profile</button>
       </div>
@@ -155,7 +158,7 @@ onBeforeUnmount(() => { revision++ })
   <div v-if="allowed('hamivideo')" class="provider-account">
     <h3>HamiVideo · 独立 Web / TV 会话</h3>
     <p>通过产品链接打开详情。短信登录不等于 TV 登录；当前网关尚未开放二维码配对。</p>
-    <label><span>取流会话</span> <select class="input" :value="mode" :disabled="busy" @change="setMode"><option value="tv">TV</option><option value="web">Web</option></select></label>
+    <div class="controls"><label class="grow"><span>取流会话</span><UiSelect :model-value="mode" :options="HAMI_MODES" :disabled="busy" aria-label="取流会话" @change="setMode" /></label></div>
     <template v-if="mode === 'tv'">
       <textarea v-model="cookie" class="input" spellcheck="false" autocomplete="off" aria-label="本人 Hami TV Cookie，仅本次提交" placeholder="本人 TV Cookie Header 或 Netscape 文件文本；不会保存到客户端配置" />
       <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'hamivideo',op:'import',cookie})">导入 TV Cookie</button><button class="btn sm" :disabled="busy" @click="command({provider:'hamivideo',op:'refresh'})">续期 TV 会话</button></div>
@@ -194,5 +197,5 @@ onBeforeUnmount(() => { revision++ })
 .provider-account{padding:4px 0 14px}
 h3{font-size:14px;margin:0 0 10px} p{font-size:12px;line-height:1.65;opacity:.8;overflow-wrap:anywhere}
 .controls{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.controls .input{width:auto;min-width:150px;flex:1}
-textarea{min-height:80px;margin:10px 0} strong{display:block;margin:10px 0}label{display:flex;align-items:center;gap:12px}.controls label.grow{flex:1;min-width:200px}label span{white-space:nowrap;flex-shrink:0}label select{min-width:0;flex:1}
+textarea{min-height:80px;margin:10px 0} strong{display:block;margin:10px 0}label{display:flex;align-items:center;gap:12px}.controls label.grow{flex:1;min-width:200px}label span{white-space:nowrap;flex-shrink:0}label .ui-select{min-width:0;flex:1}
 </style>

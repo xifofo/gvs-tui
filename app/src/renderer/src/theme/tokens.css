@@ -65,6 +65,8 @@ html.light {
   --amb-2: .25;
 }
 :root {
+  /* One height for inputs, selects and buttons that share a form row. */
+  --ui-control-h: 36px;
   --ui-radius-sm: 7px;
   --ui-radius-md: 11px;
   --ui-radius-lg: 16px;

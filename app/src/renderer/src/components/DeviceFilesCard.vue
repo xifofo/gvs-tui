@@ -1,23 +1,28 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import type { DRMStatus, DRMSystem } from '@shared/api'
+import { DRM_REQUIREMENTS } from '@shared/drm-requirements'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { errText, gvs, toast } from '../store'
 
 type Row = { system: DRMSystem; title: string; ext: string; desc: string }
+
+const names = (system: DRMSystem) => DRM_REQUIREMENTS.filter((r) => (system === 'widevine' ? r.widevine : r.playready)).map((r) => r.name).join('、')
+/** Platforms whose Widevine download needs an L1 file, with the qualities. */
+const L1 = DRM_REQUIREMENTS.filter((r) => r.widevine && r.l1)
 
 const ROWS: Row[] = [
   {
     system: 'widevine',
     title: 'Widevine 设备文件',
     ext: '.wvd',
-    desc: 'friDay影音、HamiVideo、LINE TV、Disney+、Apple TV 获取内容密钥时使用。支持 L1 / L3；Disney+ 高画质与 Apple TV 4K / HDR 需要 L1。',
+    desc: `${names('widevine')} 获取内容密钥时使用。支持 L1 / L3；以下画质需要 L1，L3 文件会直接提示等级不足（不降级、不计费）。`,
   },
   {
     system: 'playready',
     title: 'PlayReady 设备文件',
     ext: '.prd',
-    desc: 'Apple TV 下载时使用（同时上传 .wvd 时优先使用 .prd）。支持 SL150 / SL2000 / SL3000，等级由网关读取文件得出。',
+    desc: `${names('playready')} 下载时使用（同时上传 .wvd 时优先使用 .prd）。支持 SL150 / SL2000 / SL3000，等级由网关读取文件得出。`,
   },
 ]
 
@@ -84,6 +89,7 @@ async function remove(): Promise<void> {
       <div class="sl">
         <span class="st">{{ row.title }} <span class="mono dim">{{ row.ext }}</span></span>
         <span class="sd">{{ row.desc }}</span>
+        <span v-if="row.system === 'widevine'" class="chips l1s"><span v-for="r in L1" :key="r.provider" class="chip l1">{{ r.name }} · {{ r.l1 }} 需 L1</span></span>
       </div>
       <div class="sc">
         <template v-if="status?.[row.system].configured">
@@ -122,4 +128,5 @@ async function remove(): Promise<void> {
 .sc { flex-wrap: wrap; justify-content: flex-end; }
 .name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink-3); }
 .dim { color: var(--ink-3); font-weight: 500; font-size: 12px; }
+.l1s { margin-top: 4px; }
 </style>

@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { PROVIDER_NAME, type Provider } from '@shared/api'
 import { accountBucket, METHOD_LABEL, moveProvider, orderProviders, providerMeta } from '@shared/provider-registry'
+import { drmSummary, l1Badge } from '@shared/drm-requirements'
 import AccountDrawer from '../components/AccountDrawer.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
@@ -77,6 +78,7 @@ const open = (p: Provider) => { store.accountDrawer = p }
         <div class="chips">
           <span class="chip" :class="toneClass[account(p)?.tone ?? 'muted']">● {{ account(p)?.short ?? (providerMeta(p).methods.includes('none') ? '无需登录' : '未登录') }}</span>
           <span v-for="m in providerMeta(p).methods.filter((m) => m !== 'none')" :key="m" class="chip">{{ METHOD_LABEL[m] }}</span>
+          <span v-if="l1Badge(p)" class="chip l1" :title="drmSummary(p)">{{ l1Badge(p) }}</span>
         </div>
         <span class="sum clamp2">{{ account(p)?.summary || providerMeta(p).benefit }}</span>
         <span v-if="providerMeta(p).region" class="region"><Icon name="globe" :size="13" />{{ providerMeta(p).region }}</span>

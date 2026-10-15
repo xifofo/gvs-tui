@@ -198,3 +198,29 @@ html.no-motion *, html.no-motion *::before, html.no-motion *::after { animation-
 .srow .sc { flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
 .mid { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 html.vt-detail .hero-target { view-transition-name: hero-poster; }
+
+/* ---------- 表单行：同一行的输入框 / 下拉 / 按钮等高 ---------- */
+.controls > .btn:not(.icon), .controls > .input:not(textarea), .controls > label > .input:not(textarea),
+.controls > .ui-select, .controls > label > .ui-select { height: var(--ui-control-h); }
+.controls > .btn:not(.icon) { padding: 0 12px; border-radius: 10px; }
+.controls > .input:not(textarea), .controls > label > .input:not(textarea) { border-radius: 10px; font-size: 13px; }
+
+/* ---------- UiSelect ---------- */
+.ui-select { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer; }
+.ui-select .val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-select .val.ph { color: var(--ink-3); }
+.ui-select .caret { flex-shrink: 0; color: var(--ink-3); transition: transform var(--ui-duration-fast) var(--ui-ease-out); }
+.ui-select.open { border-color: var(--orange); box-shadow: 0 0 0 3px rgb(var(--ui-accent-channel) / 18%); }
+.ui-select.open .caret { transform: rotate(180deg); color: var(--ink); }
+.ui-select:disabled { opacity: .5; cursor: not-allowed; }
+.ui-select-pop { position: fixed; z-index: 80; margin: 0; padding: 5px; list-style: none; overflow-y: auto; background: var(--card); border: 1px solid var(--line-2); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-float); font-size: 13px; }
+.ui-select-pop.up { transform: translateY(-100%); }
+.ui-select-pop li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; height: 32px; border-radius: var(--ui-radius-sm); color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.ui-select-pop li.active { background: var(--paper-2); color: var(--ink); }
+.ui-select-pop li.sel { color: var(--orange-text); font-weight: 700; }
+.ui-select-pop li.sel.active { background: var(--orange-soft); }
+.ui-select-pop li.dis { opacity: .4; cursor: not-allowed; }
+.ui-select-pop .tick { color: var(--orange-text); }
+
+/* ---------- DRM 等级标记 ---------- */
+.chip.l1 { --t: var(--orange-text); color: var(--t); border-color: color-mix(in srgb, var(--t) 32%, var(--line)); background: color-mix(in srgb, var(--t) 11%, var(--card)); }

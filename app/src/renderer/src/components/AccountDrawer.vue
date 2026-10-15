@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { PROVIDER_NAME, type Provider } from '@shared/api'
 import { METHOD_LABEL, providerMeta } from '@shared/provider-registry'
+import { drmSummary, l1Badge } from '@shared/drm-requirements'
 import AccountExtras from './AccountExtras.vue'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
@@ -42,6 +43,7 @@ function hide() {
           <span>登录方式</span><span>{{ meta.methods.map((m) => METHOD_LABEL[m]).join(' · ') }}</span>
           <template v-if="meta.region"><span>网络</span><span class="region"><Icon name="globe" :size="13" />{{ meta.region }}</span></template>
           <span>说明</span><span>{{ meta.benefit }}</span>
+          <template v-if="drmSummary(provider)"><span>设备文件</span><span class="drm"><span v-if="l1Badge(provider)" class="chip l1">{{ l1Badge(provider) }}</span>{{ drmSummary(provider) }}；在 设置 › 设备文件 上传</span></template>
         </div>
 
         <section class="sec">
@@ -83,4 +85,6 @@ function hide() {
 .sec > .btn { align-self: flex-start; }
 .df { padding: 12px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 12px; background: var(--paper); }
 .small { font-size: 12px; }
+.drm { line-height: 1.6; }
+.drm .chip { margin-right: 6px; vertical-align: 1px; }
 </style>
