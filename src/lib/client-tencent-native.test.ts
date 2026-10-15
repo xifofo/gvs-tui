@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GwClient } from './client.ts'
@@ -136,3 +136,48 @@ describe('Tencent business flow through the shared app/TUI GwClient', () => {
     expect(f.calls.some(c => c.input.report_type === 'observe')).toBe(true)
   })
 })
+
+
+test('fixture collect feeds phone-free templates before drain without adb', async () => {
+  setRunLogDisabled(true)
+  const dir = mkdtempSync(join(tmpdir(), 'tx-fixture-collect-'))
+  const path = join(dir, 'producer.jsonl')
+  writeFileSync(path, '')
+  const calls: Record<string, unknown>[] = []
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', async fetch(req) {
+    const body = await req.json() as { action: string; input: Record<string, unknown> }
+    calls.push(body.input)
+    const input = body.input
+    const data = body.action !== 'report' ? { em: 0, has_url: true }
+      : input.report_type === 'bind' ? { binding: 'fixture-binding', observation_sources: ['tui_process'] }
+      : input.report_type === 'event' ? { status: 'preview', sent: false }
+      : { status: 'observed_locally' }
+    return Response.json({ code: 0, msg: 'SUCCESS', data })
+  } })
+  try {
+    const cfg = {
+      host: server.url.href.replace(/\/$/, ''),
+      key: 'fixture-key',
+      tencentMode: 'tv',
+      tencentObservations: true,
+      tencentNativeEventCollect: 'fixture',
+      tencentNativeEventFile: path,
+      tencentNativeEventMode: 'preview',
+      tencentTVDevice: 'D0F1A2B3C4D511F191697C8C09268FCA',
+    } as FileConfig
+    const client = new GwClient(cfg.host, cfg.key, () => cfg, 'tui_process')
+    await client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    const events = calls.filter(c => c.report_type === 'event')
+    expect(events.length).toBeGreaterThan(0)
+    expect(events.every(c => c.send === '0')).toBe(true)
+    const kinds = events.map(c => JSON.parse(String(c.payload)).kind)
+    expect(kinds).toContain('watch')
+    expect(kinds).toContain('qimei')
+    expect(readFileSync(path, 'utf8').trim().split('\n').length).toBeGreaterThanOrEqual(3)
+  } finally {
+    server.stop(true)
+    rmSync(dir, { recursive: true, force: true })
+    setRunLogDisabled(false)
+  }
+})
+
