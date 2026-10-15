@@ -162,7 +162,8 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
           : await iqcnSegmentDescriptor(cli, { planId, index, ...(refresh ? { refresh: '1' } : {}) }, signal)
         if(!(refresh===0&&initial)&&descriptor.clientDescriptorCacheHit===true)timing.descriptorRequests--
       } catch (error) {
-        if (firstError) throw new Error(`${firstError}；刷新分片地址失败`)
+        // Keep the gateway code (e.g. PLAN_EXPIRED) so the caller can renew the plan.
+        if (firstError) throw Object.assign(new Error(`${firstError}；刷新分片地址失败`), { errorCode: (error as { errorCode?: unknown })?.errorCode, cause: error })
         throw error
       } finally {timing.descriptorMs+=performance.now()-descriptorStart}
       signal?.throwIfAborted()

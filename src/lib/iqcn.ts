@@ -54,6 +54,9 @@ export function assertIQCNCoverage(tracks: TrackTiming[], expectedSeconds = 0): 
   }
 }
 
+/** The gateway lost or expired the download plan (restart, 6h limit). */
+export const isPlanExpired = (error: unknown): boolean => (error as { errorCode?: unknown } | null)?.errorCode === 'PLAN_EXPIRED'
+
 export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal,
   runtime?: IQCNLocalRuntime, threads = 1, options: { reservedOutput?: boolean } = {}): Promise<string> {
   signal?.throwIfAborted()
@@ -65,18 +68,51 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
   emit('匹配画质', 0.01, '按本集匹配所选码率、帧率、编码和动态范围')
   const selection = await resolveIQCNSelection(cli, task, signal)
   signal?.throwIfAborted()
-  const plan = await cli.invoke('iqcn', 'streams', { tvid: task.vid, ...selection, transport: 'local-v1' }, {}, { timeoutMs: 150000 })
+  const requestPlan = () => cli.invoke('iqcn', 'streams', { tvid: task.vid, ...selection, transport: 'local-v1' }, {}, { timeoutMs: 150000 })
+  let plan = await requestPlan()
   const video = isObj(plan.video) ? plan.video : {}
-  const segments = Array.isArray(video.segments) ? video.segments.filter(isObj) : []
-  const planId = asString(plan.planId)
+  let segments = Array.isArray(video.segments) ? video.segments.filter(isObj) : []
+  let planId = asString(plan.planId)
   if (!planId || !segments.length) throw new Error('爱奇艺国内版未返回完整下载计划')
+  const firstPlanId = planId
+  let material: ReturnType<typeof iqcnProcessing> | undefined
+  // On PLAN_EXPIRED re-call streams once (single flight) and continue from the
+  // checkpoint: written segments stay, only the remaining ones use the new plan.
+  // The new plan must describe the identical segment layout, otherwise resuming
+  // would splice two different renditions.
+  let renewing: Promise<void> | undefined
+  const renew = (stale: string) => {
+    if (planId !== stale) return Promise.resolve()
+    renewing ??= (async () => {
+      runLog(`iqcn plan expired tvid=${task.vid}; renewing and resuming`)
+      const next = await requestPlan()
+      const nextVideo = isObj(next.video) ? next.video : {}
+      const nextSegments = Array.isArray(nextVideo.segments) ? nextVideo.segments.filter(isObj) : []
+      const nextId = asString(next.planId)
+      if (!nextId || nextSegments.length !== segments.length || nextSegments.some((s, i) => Number(s.contentlength) !== Number(segments[i]!.contentlength)))
+        throw new Error('爱奇艺国内版下载计划已过期，重新取流后分片布局不同，无法断点续传，请重新下载')
+      clearIQCNDescriptors(cli, planId)
+      plan = next; segments = nextSegments; planId = nextId; material = iqcnProcessing(next)
+    })().finally(() => { renewing = undefined })
+    return renewing
+  }
+  const withPlan = async <T>(run: (id: string, fresh: boolean) => Promise<T>): Promise<T> => {
+    const id = planId
+    try { return await run(id, id === firstPlanId) }
+    catch (error) {
+      signal?.throwIfAborted()
+      if (!isPlanExpired(error)) throw error
+      await renew(id)
+      return run(planId, false)
+    }
+  }
   const transport = join(work, 'iqcn-video.ts'), staged = join(dirname(dest), `.gvs-iqcn-${randomUUID()}${extname(dest)}`)
   try {
     const selected = orderedMuxAudios(selectIQCNAudios(plan, task.audioTracks))
     const audioPlans: IQCNAudioPlan[] = []
     emit('检查音轨', 0.01, '确认所选音轨可用')
     for (const audio of selected) {
-      try { audioPlans.push(await prepareIQCNAudio(cli, planId, audio.vid!, signal)) }
+      try { audioPlans.push(await withPlan(id => prepareIQCNAudio(cli, id, audio.vid!, signal))) }
       catch (error) {
         signal?.throwIfAborted()
         runLog(`iqcn audio preflight failed tvid=${task.vid} choice=${audio.id}: ${error instanceof Error ? error.message : String(error)}`)
@@ -85,7 +121,7 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     }
     mkdirSync(work, { recursive: true })
     writeFileSync(transport, '')
-    const material = iqcnProcessing(plan)
+    material = iqcnProcessing(plan)
     const process = processingQueue(2)
     const metrics={count:0,bytes:0,descriptorMs:0,networkMs:0,restoreMs:0,readMs:0,descriptorRequests:0,fetchAttempts:0}
     const reportMetrics=()=>runLog(`iqcn performance ${JSON.stringify({...metrics,threads,processingWorkers:2,wallMs:Date.now()-started})}`)
@@ -105,12 +141,12 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
     const started = Date.now()
     emit('本地下载与处理', 0.02, `分片 0/${segments.length}`)
     await orderedDownload({ sizes, threads, signal,
-      pull: (index, abort) => {
+      pull: (index, abort) => withPlan(id => {
         const segment = segments[index]!
         const initial = Array.isArray(segment.urls) && segment.urls.length
           ? { transport: 'local-v1', index, bytes: sizes[index]!, urls: segment.urls } : undefined
-        return downloadIQCNLocalSegment(cli, planId, index, sizes[index]!, material, work, abort, local, initial)
-      },
+        return downloadIQCNLocalSegment(cli, id, index, sizes[index]!, material!, work, abort, local, initial)
+      }),
       write: (bytes, index) => {
         appendFileSync(transport, bytes)
         completedBytes += bytes.length
@@ -131,14 +167,15 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
       signal?.throwIfAborted()
       emit('下载独立音轨', 0.90 + 0.03 * index / selected.length, audio.label)
       const path = join(work, `iqcn-audio-${index}.m4a`)
-      const info = await downloadIQCNAudio(cli, planId, audio.vid!, path, threads, signal, runtime?.fetch,
-        () => runIQFFmpeg(ffmpeg, ['-i', transport, '-map', '0:a:0', '-c', 'copy', '-y', path], '标准音轨提取失败', signal, copyOptions), audioPlans[index])
+      // A renewed plan invalidates the audio descriptors prepared for the old one.
+      const info = await withPlan((id, fresh) => downloadIQCNAudio(cli, id, audio.vid!, path, threads, signal, runtime?.fetch,
+        () => runIQFFmpeg(ffmpeg, ['-i', transport, '-map', '0:a:0', '-c', 'copy', '-y', path], '标准音轨提取失败', signal, copyOptions), fresh ? audioPlans[index] : undefined))
       audioFiles.push({ path, ...info, isDefault: !!audio.isDefault })
     }
     const defaultIndex = Math.max(0, audioFiles.findIndex(audio => audio.isDefault))
     audioFiles.forEach((audio, index) => { audio.isDefault = index === defaultIndex })
     emit('下载字幕', 0.93, '优先原生简繁字幕，缺失时用 OpenCC 补齐')
-    const prepared = await prepareIQCNSubtitles(cli, plan, planId, work, signal)
+    const prepared = await withPlan(id => prepareIQCNSubtitles(cli, plan, id, work, signal))
     const subtitles = prepared.subtitles
     const subtitleDefault = defaultIQSubtitleIndex(subtitles)
     if (prepared.note) emit('字幕处理', 0.94, prepared.note)

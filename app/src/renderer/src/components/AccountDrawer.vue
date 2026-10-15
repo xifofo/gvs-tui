@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { PROVIDER_NAME, type Provider } from '@shared/api'
 import { METHOD_LABEL, providerMeta } from '@shared/provider-registry'
-import { drmSummary, l1Badge } from '@shared/drm-requirements'
+import { drmSummary, l1Badge } from '../drm-reqs'
 import AccountExtras from './AccountExtras.vue'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'

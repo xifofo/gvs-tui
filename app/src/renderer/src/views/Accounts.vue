@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { PROVIDER_NAME, type Provider } from '@shared/api'
 import { accountBucket, METHOD_LABEL, moveProvider, orderProviders, providerMeta } from '@shared/provider-registry'
-import { drmSummary, l1Badge } from '@shared/drm-requirements'
+import { drmSummary, l1Badge, loadDRMRequirements } from '../drm-reqs'
 import AccountDrawer from '../components/AccountDrawer.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
@@ -43,6 +43,8 @@ function move(p: Provider, d: -1 | 1) {
   void savePrefs({ providerOrder: moveProvider(available.value, prefs().providerOrder, p, d) })
 }
 const open = (p: Provider) => { store.accountDrawer = p }
+// Gateway-provided L1 table (falls back to the static one on older gateways).
+onMounted(() => { void loadDRMRequirements() })
 </script>
 
 <template>

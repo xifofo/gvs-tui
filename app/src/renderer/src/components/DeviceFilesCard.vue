@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { DRMStatus, DRMSystem } from '@shared/api'
-import { DRM_REQUIREMENTS } from '@shared/drm-requirements'
+import { activeRequirements, applyDRMStatus } from '../drm-reqs'
 import ConfirmDialog from './ConfirmDialog.vue'
 import { errText, gvs, toast } from '../store'
 
 type Row = { system: DRMSystem; title: string; ext: string; desc: string }
 
-const names = (system: DRMSystem) => DRM_REQUIREMENTS.filter((r) => (system === 'widevine' ? r.widevine : r.playready)).map((r) => r.name).join('、')
+const names = (system: DRMSystem) => activeRequirements().filter((r) => (system === 'widevine' ? r.widevine : r.playready)).map((r) => r.name).join('、')
 /** Platforms whose Widevine download needs an L1 file, with the qualities. */
-const L1 = DRM_REQUIREMENTS.filter((r) => r.widevine && r.l1)
+const L1 = computed(() => activeRequirements().filter((r) => r.widevine && r.l1))
 
-const ROWS: Row[] = [
+const ROWS = computed<Row[]>(() => [
   {
     system: 'widevine',
     title: 'Widevine 设备文件',
@@ -24,7 +24,7 @@ const ROWS: Row[] = [
     ext: '.prd',
     desc: `${names('playready')} 下载时使用（同时上传 .wvd 时优先使用 .prd）。支持 SL150 / SL2000 / SL3000，等级由网关读取文件得出。`,
   },
-]
+])
 
 const status = ref<DRMStatus | null>(null)
 const loadError = ref('')
@@ -34,6 +34,7 @@ const confirmDelete = ref<Row | null>(null)
 async function load(): Promise<void> {
   try {
     status.value = await gvs('drmStatus')
+    applyDRMStatus(status.value)
     loadError.value = ''
   } catch (e) {
     loadError.value = errText(e)
