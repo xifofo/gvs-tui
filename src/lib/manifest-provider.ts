@@ -23,7 +23,11 @@ export function manifestSources(data: Record<string, unknown>): ManifestSource[]
 }
 export function manifestInput(provider: string, cfg: Pick<FileConfig, 'hamiClient'>, id: string, quality = 'auto'): Record<string, unknown> {
   // Disney+: a title page is entity-…; an episode/movie plays by its mediaId (resourceId). The default tier is L1 (ctr-high); no level is sent, so no downgrade.
-  if (provider === 'dsnp') return id.startsWith('entity-') ? { id } : { mediaId: id }
+  if (provider === 'dsnp') {
+    if (id.startsWith('entity-')) return { id }
+    const m = id.match(/^(.+)\|(imax|widescreen)$/)
+    return m ? { mediaId: m[1], version: m[2] } : { mediaId: id }
+  }
   return { ...(provider === 'appletvplus' && id.startsWith('https://') ? {url:id} : {id}), ...(provider === 'hamivideo' ? { client: cfg.hamiClient || 'tv', quality } : provider === 'friday' || provider === 'appletvplus' ? { quality } : {}) }
 }
 export async function resolveManifest(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient'>, provider: string, id: string, quality = 'auto'): Promise<ManifestSource[]> {

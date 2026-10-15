@@ -23,6 +23,18 @@ export function dsnpDetail(data: Record<string, unknown>): Record<string, unknow
     const play = isObj(data.playback) ? data.playback : {}
     const vid = String(play.resourceId || '')
     out.type = 'movie'
+    const versions = Array.isArray(data.versions) ? data.versions.filter(isObj) : []
+    if (vid && versions.length > 1) {
+      // Disney+ IMAX Enhanced / 原版: one playbackId, the version travels as `mediaId|version`
+      // (the gateway switches the profile preference for that one request and verifies the cut).
+      out.episodes = versions.map((v, i) => {
+        const kind = String(v.kind || '')
+        const label = String(v.label || (kind === 'imax' ? 'IMAX Enhanced' : '原版'))
+        return { vid: `${String(v.mediaId || vid)}|${kind}`, id: data.id, title: v.default === true ? `${label}（当前默认）` : label, edition: kind === 'imax' ? 'IMAX' : '', group: 'edition', number: i + 1, duration: Number(v.durationMs) > 0 ? Math.round(Number(v.durationMs) / 1000) : undefined }
+      })
+      if (!out.year && data.year) out.year = data.year
+      return out
+    }
     out.episodes = vid ? [{ vid, id: data.id, title: data.title, number: 1, duration: Number(data.runtimeMs) > 0 ? Math.round(Number(data.runtimeMs) / 1000) : undefined }] : []
   }
   if (!out.year && data.year) out.year = data.year

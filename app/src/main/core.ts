@@ -191,7 +191,7 @@ function toEpisodeView(e: Episode): EpisodeView {
     group: e.group ?? '',
     collection: e.collection,
     duration: e.duration ?? 0,
-    languages: e.languages ?? [],
+    languages: e.languages ?? [], ...(e.edition !== undefined ? { edition: e.edition } : {}),
   }
 }
 
@@ -1466,7 +1466,7 @@ export class Core {
         year: req.detail.year,
         plot: '',
         kind: movie ? 'movie' : 'show',
-        edition: movie ? movieEdition(ep.title, req.detail.title) : '',
+        edition: movie ? ep.edition ?? movieEdition(ep.title, req.detail.title) : '',
         languages: ep.languages.filter((l) => l.vid).map((l) => ({ vid: l.vid, lang: l.lang })),
       }
       if (q.height > 0)

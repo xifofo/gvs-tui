@@ -30,6 +30,8 @@ export type Episode = {
   group?: string
   /** Official Tencent collection, preserved in selection and download paths. */
   collection?: string
+  /** Explicit movie edition for file names (Disney+ 'IMAX' / '' for 原版); overrides the title-derived one. */
+  edition?: string
   /** Other dvd.audiolang vids (国语/英语) to probe with this title. */
   languages?: Array<{ vid: string; lang: string; langcode?: string }>
 }

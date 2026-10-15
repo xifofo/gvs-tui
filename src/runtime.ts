@@ -2242,7 +2242,7 @@ export class Runtime {
       if (kind === 'movie') {
         task.season = 0
         task.episode = 0
-        task.edition = movieEdition(task.title, this.detailTitle)
+        task.edition = this.eps.find(ep => ep.vid === task.vid)?.edition ?? movieEdition(task.title, this.detailTitle)
       } else {
         // A movie task's synthetic zero is not an explicit special-season number.
         task.season = seriesSeason(this.eps.find(ep => ep.vid === task.vid)?.season
@@ -2281,7 +2281,7 @@ export class Runtime {
       year: this.detailInfo?.year ?? 0,
       plot: '',
       kind: movie ? 'movie' : 'show',
-      edition: movie ? movieEdition(ep.title, this.detailTitle) : '',
+      edition: movie ? ep.edition ?? movieEdition(ep.title, this.detailTitle) : '',
       languages: ep.languages
         ?.filter((l) => l.vid)
         .map((l) => ({ vid: l.vid, lang: l.lang })),

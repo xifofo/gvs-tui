@@ -128,6 +128,8 @@ export type EpisodeView = {
   number: number
   group: string
   collection?: string
+  /** Explicit movie edition for file names (Disney+ IMAX); overrides the title-derived one. */
+  edition?: string
   duration: number
   languages: Array<{ vid: string; lang: string; langcode?: string }>
 }
