@@ -11,9 +11,9 @@ export const PROVIDER_LABELS: Record<string, string> = {
   dsnp: 'Disney+',
 }
 /** Disney+ is account-only in the desktop app for now: no browse / search / download wiring yet. */
-export const accountOnly = (provider: string): boolean => provider === 'dsnp'
+export const accountOnly = (_provider: string): boolean => false
 export const supportsSearch = (provider: string): boolean => provider !== 'hamivideo' && provider !== 'appletvplus' && !accountOnly(provider)
 export const supportsBrowse = (provider: string): boolean => provider !== 'hamivideo' && !accountOnly(provider)
-export const isManifestProvider = (provider: string): boolean => provider === 'mewatch' || provider === 'hamivideo' || provider === 'friday' || provider === 'linetv' || provider === 'appletvplus'
+export const isManifestProvider = (provider: string): boolean => provider === 'mewatch' || provider === 'hamivideo' || provider === 'friday' || provider === 'linetv' || provider === 'appletvplus' || provider === 'dsnp'
 /** Providers with the shared movie/series type and optional TMDB naming workflow. */
 export const supportsTmdb = (provider: string | undefined): boolean => ['youku','tencent','iq','iqcn','mgtv','bilibili','migu'].includes(provider || '')

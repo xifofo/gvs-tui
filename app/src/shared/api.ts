@@ -117,7 +117,7 @@ export type SearchResult = { query: string; groups: SearchGroup[]; ms: number }
 export type LinkTarget =
   | { kind: 'youku'; vid: string }
   | { kind: 'tencent'; cid: string; vid: string; url: string }
-  | { kind: 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus'; url: string }
+  | { kind: 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus' | 'dsnp'; url: string }
   | { kind: 'none' }
 
 export type EpisodeView = {

@@ -329,7 +329,7 @@ export async function probeOptions(
     case 'mgtv': case 'bilibili': case 'migu': return probeWebVideo((p,a,input) => cli.invoke(p,a,input),provider,vid)
     case 'iqcn': return iqcnOptions(await cli.invoke('iqcn', 'probe', { tvid: vid }, {}, { timeoutMs: 150000 }), vid)
     case 'iq': return iqOptions(await cli.invoke('iq','probe',{vid},cli.extra(cfg,'iq'),{timeoutMs:150000}))
-    case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': return probeManifest(cli, cfg, provider, vid)
+    case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp': return probeManifest(cli, cfg, provider, vid)
     case 'hongguo': return probeHongguo(cli, vid)
     case 'huangguo': return probeHuangguo(cli, vid)
     case 'youku': return probeYouku(cli, cfg, vid, opts)

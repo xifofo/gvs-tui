@@ -1097,7 +1097,7 @@ export class Core {
   }
 
   async catalog(provider: Provider, country = ''): Promise<Section[]> {
-    if (provider === 'dsnp') return [{ id: 'dsnp-account', title: 'Disney+', mode: 'link', available: false, reason: '桌面端目前只接入 Disney+ 账号管理；浏览与下载尚未接入' }]
+    if (provider === 'dsnp') return this.dsnpCatalog()
     if (!supportsBrowse(provider)) return [{ id: 'hami-link', title: '粘贴 Hami 产品链接', mode: 'link', available: false, reason: '当前网关仅支持产品链接/ID，尚无搜索或榜单接口' }]
     let sections: Array<Record<string, unknown>>
     let catalogCountry = ''
@@ -1121,8 +1121,38 @@ export class Core {
     }))
   }
 
+  /** Disney+ 浏览：网关 recommend 的货架即栏目（setId + 原样透传的 params），排行榜单独一栏。 */
+  private async dsnpCatalog(): Promise<Section[]> {
+    const data = await this.invoke('dsnp', 'recommend', { containers: 0, limit: 1 })
+    const shelves = Array.isArray(data.shelves) ? data.shelves.filter(isObj) : []
+    const out: Section[] = [{ id: 'dsnp-rank', title: '排行榜', mode: 'rank', available: true }]
+    for (const s of shelves) {
+      const setId = str(s.setId), title = str(s.title)
+      if (!setId || !title || title === 'hero') continue
+      const params = isObj(s.params) ? Object.fromEntries(Object.entries(s.params).filter(([, v]) => typeof v === 'string')) : {}
+      out.push({ id: 'dsnp-set:' + JSON.stringify({ setId, params }), title, mode: 'set', available: true })
+    }
+    return out
+  }
+
+  private async dsnpBrowse(section: Section): Promise<BrowseResult> {
+    if (section.id === 'dsnp-rank') {
+      const data = await this.invoke('dsnp', 'rank', { limit: 30 })
+      const charts = Array.isArray(data.charts) ? data.charts.filter(isObj) : []
+      const chart = charts.find(c => Array.isArray(c.items) && c.items.length)
+      const items = chart && Array.isArray(chart.items) ? chart.items.filter(isObj) : []
+      return { cards: toCards('dsnp', { items, contentType: 'rank' }), channels: [], more: false, next: '', notice: '' }
+    }
+    let ref: { setId?: string; params?: Record<string, string> } = {}
+    try { ref = JSON.parse(section.id.slice('dsnp-set:'.length)) } catch {}
+    if (!ref.setId) return { cards: [], channels: [], more: false, next: '', notice: '此栏目暂不可用' }
+    const data = await this.invoke('dsnp', 'set', { ...(ref.params ?? {}), setId: ref.setId, limit: 60 })
+    return { cards: toCards('dsnp', data), channels: [], more: false, next: '', notice: '' }
+  }
+
   async browse(provider: Provider, section: Section, cursor = ''): Promise<BrowseResult> {
     if (!section.available) return { cards: [], channels: [], more: false, next: '', notice: section.reason || '此栏目暂不可用' }
+    if (provider === 'dsnp') return this.dsnpBrowse(section)
     const input: Record<string, unknown> = { mode: section.mode }
     if (provider === 'appletvplus' && section.country) input.country = section.country
     if (provider === 'migu' && section.sourceTerminal) input.terminal = section.sourceTerminal
@@ -1204,7 +1234,7 @@ export class Core {
     if (link.kind === 'mgtv' || link.kind === 'bilibili' || link.kind === 'migu') return this.detail(link.kind,link.url,hint)
     if (link.kind === 'iqcn') return this.detail('iqcn', link.url, hint)
     if (link.kind === 'iq') return this.detail('iq', link.url, hint)
-    if (link.kind === 'mewatch' || link.kind === 'hamivideo' || link.kind === 'friday' || link.kind === 'linetv' || link.kind === 'appletvplus') return this.detail(link.kind, link.url, hint)
+    if (link.kind === 'mewatch' || link.kind === 'hamivideo' || link.kind === 'friday' || link.kind === 'linetv' || link.kind === 'appletvplus' || link.kind === 'dsnp') return this.detail(link.kind, link.url, hint)
     if (link.kind === 'youku') {
       let data: Record<string, unknown> = {}
       try {

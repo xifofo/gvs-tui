@@ -16,7 +16,7 @@ export type NamingEvidence = {
 export function usesMeasuredNaming(task: { provider: string; namingVersion?: number }): boolean {
   // These providers had no completed DRM downloads before this integration.
   // Measure every new or retried job rather than using the old H.264 default.
-  if (task.provider === 'hamivideo' || task.provider === 'friday' || task.provider === 'appletvplus') return true
+  if (task.provider === 'hamivideo' || task.provider === 'friday' || task.provider === 'appletvplus' || task.provider === 'dsnp') return true
   return task.namingVersion === 1 && ['youku', 'tencent', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(task.provider)
 }
 

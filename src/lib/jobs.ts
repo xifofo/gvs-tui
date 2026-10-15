@@ -381,7 +381,7 @@ export async function runTask(
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
         break
-      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus':
+      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp':
         await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
         break
       case 'hongguo':
@@ -1326,6 +1326,8 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
   const sources = await resolveManifestDownload(cli, cfg, t.provider, t.vid, t.quality || 'auto')
   signal?.throwIfAborted()
   const source = sources[0]!
+  // Disney+ serves one HLS master; the chosen quality is a height inside it.
+  if (t.provider === 'dsnp' && /^\d{3,4}$/.test(t.quality || '')) source.height = Number(t.quality)
   const ref = source.headers.Referer || source.headers.referer || ''
   if (!['dash','hls'].includes(source.format.toLowerCase()) && !new URL(source.url).pathname.match(/[.](mpd|m3u8)$/i)) {
     throw new Error('该源不是已接入的 DASH/HLS 清单；拒绝伪装封装格式')
@@ -1333,7 +1335,7 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
   emit('下载', 0.05, '源站 CDN → 本机；网关不转发视频')
   await writeFinal(out, async dest => {
     await downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, contentKeys: source.contentKeys,
-      keepSubtitles: t.provider === 'appletvplus',
+      keepSubtitles: t.provider === 'appletvplus' || t.provider === 'dsnp',
       manifestText: source.manifest, videoHeight: source.height || undefined, threads: cfg.threads,
       select: 'muxed', muxTracks: true, transport: 're', workDir: work, workTag: 'manifest', signal,
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
