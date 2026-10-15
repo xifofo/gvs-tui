@@ -1077,6 +1077,10 @@ export async function downloadPlaylist(opts: {
   manifestText?: string
   /** Select an exact pixel height while keeping the best audio. */
   videoHeight?: number
+  /** Extra RE video filter, e.g. codecs (Disney+ DV / HDR10 / SDR share a height). */
+  videoCodecs?: string
+  /** Exact audio renditions to keep (playlist file names); default: RE's best single audio. */
+  audioUris?: string[]
   /** Explicit bounded validation/download range, in segment indices. */
   segmentRange?: string
   /** HLS 密钥算法。默认 CENC（优酷）；黄果是 AES_128。 */
@@ -1205,7 +1209,11 @@ export async function downloadPlaylist(opts: {
     }
     if ((opts.videoHeight || opts.contentKeys?.length) && opts.select === 'muxed') {
       if (opts.videoHeight && (!Number.isInteger(opts.videoHeight) || opts.videoHeight < 1 || opts.videoHeight > 8640)) throw new Error('视频分辨率选择无效')
-      args.push('--select-video', opts.videoHeight ? `res=^[0-9]+x${opts.videoHeight}$:for=best` : 'best', '--select-audio', 'best')
+      if (opts.videoCodecs && !/^[a-z0-9|]+$/i.test(opts.videoCodecs)) throw new Error('视频编码选择无效')
+      const video = opts.videoHeight ? `res=^[0-9]+x${opts.videoHeight}$${opts.videoCodecs ? `:codecs=^(${opts.videoCodecs})`: ''}:for=best` : 'best'
+      const uris = (opts.audioUris || []).filter(u => /^[\w.-]+$/.test(u))
+      const audio = uris.length ? `url=(${uris.map(u => u.replace(/[.-]/g, m => `\\${m}`)).join('|')}):for=all` : 'best'
+      args.push('--select-video', video, '--select-audio', audio)
     }
     if (opts.muxTracks) {
       const mkvmerge = await ensureMkvmerge()
