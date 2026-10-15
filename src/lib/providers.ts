@@ -1,5 +1,5 @@
 /** Shared, transport-free provider metadata for terminal and desktop clients. */
-export const PROVIDER_IDS = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'mewatch', 'hamivideo', 'friday', 'linetv', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu', 'appletvplus'] as const
+export const PROVIDER_IDS = ['youku', 'tencent', 'hongguo', 'huangguo', 'douyin', 'mewatch', 'hamivideo', 'friday', 'linetv', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu', 'appletvplus', 'dsnp'] as const
 export type ProviderID = (typeof PROVIDER_IDS)[number]
 export const PROVIDER_LABELS: Record<string, string> = {
   youku: '优酷', tencent: '腾讯', hongguo: '红果', huangguo: '黄果', douyin: '抖音',
@@ -8,9 +8,12 @@ export const PROVIDER_LABELS: Record<string, string> = {
   iqcn: '爱奇艺国内版',
   mgtv: '芒果 TV', bilibili: '哔哩哔哩', migu: '咪咕视频',
   appletvplus: 'Apple TV',
+  dsnp: 'Disney+',
 }
-export const supportsSearch = (provider: string): boolean => provider !== 'hamivideo' && provider !== 'appletvplus'
-export const supportsBrowse = (provider: string): boolean => provider !== 'hamivideo'
+/** Disney+ is account-only in the desktop app for now: no browse / search / download wiring yet. */
+export const accountOnly = (provider: string): boolean => provider === 'dsnp'
+export const supportsSearch = (provider: string): boolean => provider !== 'hamivideo' && provider !== 'appletvplus' && !accountOnly(provider)
+export const supportsBrowse = (provider: string): boolean => provider !== 'hamivideo' && !accountOnly(provider)
 export const isManifestProvider = (provider: string): boolean => provider === 'mewatch' || provider === 'hamivideo' || provider === 'friday' || provider === 'linetv' || provider === 'appletvplus'
 /** Providers with the shared movie/series type and optional TMDB naming workflow. */
 export const supportsTmdb = (provider: string | undefined): boolean => ['youku','tencent','iq','iqcn','mgtv','bilibili','migu'].includes(provider || '')

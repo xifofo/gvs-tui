@@ -85,6 +85,7 @@ async function remove(): Promise<void> {
       获取受保护内容的密钥需要你本人的设备文件，网关不提供共享设备。文件只上传到当前 API Key 名下并加密保存，
       不会出现在任何接口返回里，本机也不保留副本。没有上传时，相关平台下载会提示先上传。
     </p>
+    <p v-if="status && !activeRequirements().length" class="load-error">当前网关未提供各平台的设备等级要求，请更新网关。</p>
     <p v-if="loadError" class="load-error">{{ loadError }} <button type="button" class="btn sm outline" @click="load">重试</button></p>
     <div v-for="row in ROWS" :key="row.system" class="srow">
       <div class="sl">

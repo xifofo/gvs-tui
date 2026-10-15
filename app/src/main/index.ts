@@ -262,6 +262,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
     return r.canceled ? '' : (r.filePaths[0] ?? '')
   },
   drmStatus: () => core.drmStatus(),
+  platformMeta: () => core.platformMeta(),
   uploadDRM: async (system) => {
     const widevine = system === 'widevine'
     const r = await dialog.showOpenDialog(win!, {

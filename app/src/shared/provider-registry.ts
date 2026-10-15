@@ -33,6 +33,7 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
   douyin: { id: 'douyin', methods: ['cookie'], loginOptional: true, benefit: '网页 Cookie（需含 sessionid）', multiAccount: false },
   hongguo: { id: 'hongguo', methods: ['none'], loginOptional: true, benefit: '公开接口，无需账号', multiAccount: false },
   huangguo: { id: 'huangguo', methods: ['none'], loginOptional: true, benefit: '公开接口，无需账号', multiAccount: false },
+  dsnp: { id: 'dsnp', methods: ['password', 'cookie'], loginOptional: false, benefit: '', multiAccount: false },
   appletvplus: { id: 'appletvplus', methods: ['cookie'], loginOptional: true, region: '目录跟随账号地区，未登录默认美国', benefit: '导入官网登录态后查看可用画质并下载', multiAccount: false },
 }
 

@@ -1,6 +1,6 @@
 import type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
-import type { DRMStatus, DRMSystem } from '../../../src/lib/drm-types'
-export type { DRMFileStatus, DRMStatus, DRMSystem } from '../../../src/lib/drm-types'
+import type { DRMStatus, DRMSystem, PlatformMetaResponse } from '../../../src/lib/drm-types'
+export type { DRMFileStatus, DRMStatus, DRMSystem, PlatformMeta, PlatformMethod, PlatformMetaResponse } from '../../../src/lib/drm-types'
 import type { ActualVersion, CompletedMedia } from '../../../src/lib/actual-version'
 export type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
 import { PROVIDER_IDS, PROVIDER_LABELS } from '../../../src/lib/providers'
@@ -333,6 +333,8 @@ export interface GvsApi {
   chooseDir(start?: string): Promise<string>
   /** 本 Key 的设备文件状态（不含文件内容） */
   drmStatus(): Promise<DRMStatus>
+  /** 网关下发的平台账号说明；旧网关返回 null */
+  platformMeta(): Promise<PlatformMetaResponse | null>
   /** 选文件并上传设备文件；取消返回 null */
   uploadDRM(system: DRMSystem): Promise<DRMStatus | null>
   deleteDRM(system: DRMSystem): Promise<DRMStatus>

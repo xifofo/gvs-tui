@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { basename, dirname, join, resolve } from 'node:path'
 import QRCode from 'qrcode'
 import { DRM_MAX_BYTES, GwClient, ReloginRequired, GW_DEFAULT_ACCOUNT, type DRMStatus, type DRMSystem, type KeyInfo } from '@tui/client.ts'
+import type { PlatformMetaResponse } from '@tui/drm-types.ts'
 import { selectAudioTracks } from '@tui/audio-selection.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from '@tui/vault-migrate.ts'
@@ -578,6 +579,7 @@ export class Core {
     if (this.has('friday')) void this.providerSession({ provider: 'friday', op: 'status' }).catch(() => {})
     if (this.has('linetv')) void this.providerSession({ provider: 'linetv', op: 'status' }).catch(() => {})
     if (this.has('appletvplus')) void this.providerSession({ provider: 'appletvplus', op: 'status' }).catch(() => {})
+    if (this.has('dsnp')) void this.providerSession({ provider: 'dsnp', op: 'status' }).catch(() => {})
     for (const p of ['mgtv','bilibili','migu'] as const) if (this.has(p)) void this.providerSession({provider:p,op:'status'}).catch(()=>{})
     if (this.has('migu')) void this.providerSession({provider:'migu',op:'status',terminal:'tv'}).catch(()=>{})
   }
@@ -794,6 +796,10 @@ export class Core {
       if (p === 'iqcn') {
         const account = this.providerAccounts.get(p)
         return { provider:p, short:account?.authenticated?'已登录':'待登录', summary:account?.summary || '到平台账号设置扫码登录爱奇艺国内版', tone:account?.authenticated?'ok':'muted' }
+      }
+      if (p === 'dsnp') {
+        const account = this.providerAccounts.get(p)
+        return { provider: p, short: account?.authenticated ? '已登录' : '待登录', summary: account?.summary || '邮箱密码、邮箱验证码或导入 refresh token；下载需本人 Widevine .wvd', tone: account?.authenticated ? 'ok' : 'muted' }
       }
       if (isManifestProvider(p)) {
         const account = this.providerAccounts.get(p + (p === 'hamivideo' ? ':' + (this.cfg.hamiClient || 'tv') : ''))
@@ -1091,6 +1097,7 @@ export class Core {
   }
 
   async catalog(provider: Provider, country = ''): Promise<Section[]> {
+    if (provider === 'dsnp') return [{ id: 'dsnp-account', title: 'Disney+', mode: 'link', available: false, reason: '桌面端目前只接入 Disney+ 账号管理；浏览与下载尚未接入' }]
     if (!supportsBrowse(provider)) return [{ id: 'hami-link', title: '粘贴 Hami 产品链接', mode: 'link', available: false, reason: '当前网关仅支持产品链接/ID，尚无搜索或榜单接口' }]
     let sections: Array<Record<string, unknown>>
     let catalogCountry = ''
@@ -1774,6 +1781,10 @@ export class Core {
   /** 设备文件：只在用户打开「设置 → 设备文件」时查询，下载前不预检，由网关返回错误。 */
   async drmStatus(): Promise<DRMStatus> {
     return this.client().drmStatus()
+  }
+
+  async platformMeta(): Promise<PlatformMetaResponse | null> {
+    return this.client().platformMeta()
   }
 
   async uploadDRM(system: DRMSystem, filePath: string): Promise<DRMStatus> {

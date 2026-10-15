@@ -1,4 +1,4 @@
-import type { DRMFileStatus, DRMStatus, DRMSystem } from './drm-types.ts'
+import type { DRMFileStatus, DRMStatus, DRMSystem, PlatformMetaResponse } from './drm-types.ts'
 import { truncate } from './util.ts'
 import type { FileConfig } from './config.ts'
 import { fetchGateway } from './proxy.ts'
@@ -277,6 +277,17 @@ export class GwClient {
   async drmStatus(): Promise<DRMStatus> {
     const env = await this.request('GET', '/v1/drm/devices', undefined, undefined, 15_000)
     return env.data as DRMStatus
+  }
+
+  /** 平台账号说明（只读，按 Key 权限过滤）；旧网关没有该接口时返回 null */
+  async platformMeta(): Promise<PlatformMetaResponse | null> {
+    try {
+      const env = await this.request('GET', '/v1/meta/platforms', undefined, undefined, 15_000)
+      return (env.data ?? null) as PlatformMetaResponse | null
+    } catch (e) {
+      if (/\b404\b|not\s*found|NOT_FOUND/i.test(e instanceof Error ? e.message : String(e))) return null
+      throw e
+    }
   }
 
   /** 上传或替换本 Key 的设备文件；网关校验格式并加密保存 */
