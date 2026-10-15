@@ -1,4 +1,4 @@
-import { test, expect, afterEach, spyOn } from 'bun:test'
+﻿import { test, expect, afterEach, spyOn } from 'bun:test'
 import { Runtime } from './runtime'
 import * as tunnel from './lib/tunnel'
 import { detailListRows, viewMetrics } from './lib/ui-layout'
@@ -631,7 +631,7 @@ test('Ctrl+1/2/3 switches platform like Alt (Windows Terminal friendly)', async 
 test('settings expose dual QR + cookie + account; Youku QR-only',async()=>{
  const r=await start();const x=r as any
  x.keyInfo={all:true,scope:[]};x.emit()
- expect(x.settingFields().filter((f:string)=>f.startsWith('腾讯'))).toEqual(['腾讯双扫码','腾讯 Cookie','腾讯登录','腾讯 caption=all','腾讯探测原画','腾讯 encode=all','腾讯观测绑定','腾讯原生事件文件','腾讯原生事件模式','腾讯诊断日志'])
+ expect(x.settingFields().filter((f:string)=>f.startsWith('腾讯'))).toEqual(['腾讯双扫码','腾讯 Cookie','腾讯登录','腾讯 caption=all','腾讯探测原画','腾讯 encode=all','腾讯观测绑定','腾讯原生事件采集','腾讯原生事件文件','腾讯原生事件模式','腾讯诊断日志'])
  expect(x.settingValue('腾讯双扫码')).toContain('App')
  expect(x.settingValue('腾讯登录')).toMatch(/未登录|回车刷新/)
  expect(x.settingFields().filter((f:string)=>f.startsWith('优酷'))).toEqual(['优酷扫码','优酷登录'])
@@ -656,6 +656,28 @@ test('Tencent native source settings preserve the path and keep preview as the d
  await x.commitEdit('C:/fixtures/next-events.jsonl')
  expect(x.cfg.tencentNativeEventFile).toBe('C:/fixtures/next-events.jsonl')
 })
+
+test('tencent native collect cycles off/fixture/file without requiring a phone', async () => {
+  const r = await start(); const x = r as any
+  x.keyInfo = { all: true, scope: [] }
+  r.handleKey('f4')
+  x.cfg.tencentTVDevice = 'D0F1A2B3C4D511F191697C8C09268FCA'
+  x.cfg.host = 'http://127.0.0.1:8080'
+
+  expect(x.settingFields()).toContain('腾讯原生事件采集')
+  expect(x.settingValue('腾讯原生事件采集')).toContain('关')
+  x.setIdx = x.settingFields().indexOf('腾讯原生事件采集')
+  r.handleKey('enter')
+  expect(x.cfg.tencentNativeEventCollect).toBe('fixture')
+  expect(x.cfg.tencentObservations).toBe(true)
+  expect(x.cfg.tencentNativeEventMode).toBe('preview')
+  expect(String(x.cfg.tencentNativeEventFile || '')).toContain('tencent-native-events.jsonl')
+  r.handleKey('enter')
+  expect(x.cfg.tencentNativeEventCollect).toBe('file')
+  r.handleKey('enter')
+  expect(x.cfg.tencentNativeEventCollect).toBe('off')
+})
+
 
 test('workspace arrows change columns; bare digits switch platform', async () => {
   const r = await start()

@@ -28,6 +28,8 @@ export type FileConfig = {
   tencentNativeEventFile?: string
   /** Mirrored App events remain preview-only even when this is send. */
   tencentNativeEventMode?: 'off' | 'preview' | 'send'
+  /** off=disabled; fixture=phone-free local templates; file=external JSONL producer (research/phone). */
+  tencentNativeEventCollect?: 'off' | 'fixture' | 'file'
   /** Hami Web and TV are separate gateway sessions. */
   hamiClient?: 'tv' | 'web'
   tencentTVDevice?: string
@@ -227,6 +229,9 @@ export function loadConfig(): FileConfig {
   if (process.env.GVS_HOST) cfg.host = process.env.GVS_HOST
   if (process.env.GVS_KEY) cfg.key = process.env.GVS_KEY
   if (process.env.GVS_TENCENT_OBSERVE) cfg.tencentObservations = process.env.GVS_TENCENT_OBSERVE === '1'
+  if (process.env.GVS_TENCENT_NATIVE_COLLECT === 'off' || process.env.GVS_TENCENT_NATIVE_COLLECT === 'fixture' || process.env.GVS_TENCENT_NATIVE_COLLECT === 'file') {
+    cfg.tencentNativeEventCollect = process.env.GVS_TENCENT_NATIVE_COLLECT
+  }
   cfg.host = (cfg.host || 'http://127.0.0.1:8080').replace(/\/+$/, '')
   const outChanged = ensureOutDir(cfg)
   if (!cfg.releaseGroup) cfg.releaseGroup = 'ADWeb'

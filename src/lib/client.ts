@@ -5,6 +5,7 @@ import { fetchGateway } from './proxy.ts'
 import { runLog, summarizeInput, summarizeResult } from './runlog.ts'
 import { TencentOperations, type TencentOperation } from './tencent-operations.ts'
 import { TencentNativeEvents } from './tencent-native-events.ts'
+import { defaultTencentNativeEventPath, feedTencentNativeFixtures, resolveNativeCollectMode } from './tencent-native-fixture-feed.ts'
 import { randomUUID } from 'node:crypto'
 import { normalizeIQCookie } from './iq.ts'
 import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
@@ -100,17 +101,44 @@ export class GwClient {
 
   private nativeEventSettings() {
     const cfg = this.cfgOf?.()
+    const collect = resolveNativeCollectMode(cfg || {})
+    const configured = this.nativeEventFileOverride ?? (cfg?.tencentNativeEventFile?.trim() || '')
+    const path = collect === 'off' ? '' : collect === 'fixture' ? (configured || defaultTencentNativeEventPath()) : configured
     return {
-      path: this.nativeEventFileOverride ?? (cfg?.tencentNativeEventFile?.trim() || ''),
-      mode: cfg?.tencentNativeEventMode ?? 'preview' as const,
+      path,
+      mode: (collect === 'off' ? 'off' : (cfg?.tencentNativeEventMode ?? 'preview')) as 'off' | 'preview' | 'send',
+      collect,
       gateway: this.host,
       account: this.accountFor?.('tencent') || GW_DEFAULT_ACCOUNT,
+      deviceGuid: cfg?.tencentTVDevice?.trim() || '',
+    }
+  }
+
+  private feedFixtureProducer(): void {
+    const settings = this.nativeEventSettings()
+    if (settings.collect !== 'fixture' || settings.mode === 'off' || !settings.path) return
+    if (!settings.deviceGuid) {
+      runLog('tencent_native_event status=fixture_device_missing')
+      return
+    }
+    try {
+      const result = feedTencentNativeFixtures({
+        gateway: settings.gateway,
+        account: settings.account,
+        deviceGuid: settings.deviceGuid,
+        outPath: settings.path,
+        delivery: 'pending',
+      })
+      runLog(`tencent_native_event status=fixture_fed written=${result.written} kinds=${result.kinds.join(',')}`)
+    } catch {
+      runLog('tencent_native_event status=fixture_feed_failed')
     }
   }
 
   private tencentReportsEnabled(): boolean {
     const cfg = this.cfgOf?.()
-    return !!(cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1' || this.nativeEventSettings().path && this.nativeEventSettings().mode !== 'off')
+    const settings = this.nativeEventSettings()
+    return !!(cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1' || settings.path && settings.mode !== 'off')
   }
 
   private async tencentReport(input: Record<string, unknown>, account = this.accountFor?.('tencent')): Promise<Record<string, unknown>> {
@@ -130,7 +158,7 @@ export class GwClient {
           status: String(reply.status || 'unknown'), decision: reply.stop === true || reply.delivery_unknown === true ? 'no_automatic_resend' : 'not_acceptance_proof' }))
       const native = this.nativeEvents
       this.operations = new TencentOperations(input => this.tencentReport(input, owner.account), runLog, this.diagnosticJobID, undefined, `${this.host}\0${this.key}`, this.source,
-        (binding, call) => native.drain(binding, call))
+        (binding, call) => { this.feedFixtureProducer(); return native.drain(binding, call) })
     }
     return this.operations
   }
