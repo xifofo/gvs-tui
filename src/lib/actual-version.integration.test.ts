@@ -18,7 +18,8 @@ mediaTest('Tencent runner centrally records final rendition and creates no JSON 
   try {
     const fixture = join(root, 'fixture.mp4')
     const made = spawnSync('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=64x64:r=25:d=0.2',
-      '-f', 'lavfi', '-i', 'sine=sample_rate=48000:duration=0.2', '-c:v', 'libx264', '-c:a', 'aac', '-shortest', fixture])
+      '-f', 'lavfi', '-i', 'sine=sample_rate=48000:duration=0.2', '-c:v', 'libx264',
+      '-x264-params', 'colorprim=bt709:transfer=bt709:colormatrix=bt709', '-c:a', 'aac', '-shortest', fixture])
     expect(made.status).toBe(0)
     const bytes = readFileSync(fixture)
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
@@ -69,7 +70,7 @@ mediaTest('Tencent runner centrally records final rendition and creates no JSON 
         }
         expect(final.err).toBe('')
         if (task.namingVersion) {
-          expect(basename(final.log)).toBe(`${scenario.replace(/-/g, '.')}.2026.360p.TX.WEB-DL.AVC.AAC.1.0-TEST.mkv`)
+          expect(basename(final.log)).toBe(`${scenario.replace(/-/g, '.')}.2026.360p.TX.WEB-DL.SDR.AVC.AAC.1.0-TEST.mkv`)
           expect(readdirSync(dirname(final.log))).toEqual([basename(final.log)])
           expect(task.namingEvidence?.stream).toBe(scenario === 'measured' ? 'suhd' : undefined)
         }
@@ -79,7 +80,7 @@ mediaTest('Tencent runner centrally records final rendition and creates no JSON 
         expect(existsSync(`${final.log}.gvs.json`)).toBe(false)
         expect(record).toEqual(final.actualVersion)
         expect(record.file).toEqual(fileFingerprint(final.log))
-        expect(record.media).toMatchObject({ status: 'probed', width: 64, height: 64, codec: 'h264' })
+        expect(record.media).toMatchObject({ status: 'probed', width: 64, height: 64, codec: 'h264', dynamicRange: 'SDR' })
         expect(JSON.stringify(record)).not.toContain('SIGNED_SECRET')
         expect(JSON.stringify(record)).not.toContain(String(server.port))
         const partial = scenario === 'unknown' || scenario.startsWith('numeric-')

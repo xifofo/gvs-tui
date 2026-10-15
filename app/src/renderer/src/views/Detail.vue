@@ -187,6 +187,7 @@ async function subscribe() {
   subBusy.value = true
   try {
     const card = store.detailCard
+    if (qualityLoaded.value) await qualityPanel.value?.rememberPublication()
     await gvs('subscribe', { provider: v.provider, showId: v.id, title: v.title, poster: v.poster, kind: v.kind, updateText: card && card.provider === v.provider ? [card.meta, card.desc].join(' ') : '' })
     toast(`已订阅《${v.title}》：之后的新集会按规则自动下载`, 'ok')
   } catch (e) {

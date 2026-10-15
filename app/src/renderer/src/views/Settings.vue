@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import HookSettingsCard from '../components/HookSettingsCard.vue'
 import DeviceFilesCard from '../components/DeviceFilesCard.vue'
+import IdentityInfo from '../integrations/plutofish/IdentityInfo.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { PROVIDER_NAME, type Provider, type SettingsPatch } from '@shared/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -19,6 +20,7 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: 'appearance', label: '外观与动效' },
   { key: 'gateway', label: '网关' },
   { key: 'devices', label: '设备文件' },
+  { key: 'plutofish', label: 'PlutoFish' },
   { key: 'naming', label: '命名与刮削' },
   { key: 'about', label: '关于' },
 ]
@@ -360,6 +362,8 @@ const plat = (p: Provider) => hasProvider(p)
 
         <!-- 设备文件 -->
         <DeviceFilesCard v-else-if="store.settingsTab === 'devices'" />
+
+        <IdentityInfo v-else-if="store.settingsTab === 'plutofish'" :connection="store.state?.plutofish" />
 
         <!-- 关于 -->
         <section v-else-if="store.settingsTab !== 'download'" class="card">

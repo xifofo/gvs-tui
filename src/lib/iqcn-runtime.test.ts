@@ -36,12 +36,12 @@ test('domestic terminal tasks opt into measured naming and preview with IQIYI', 
     state.scene = 'confirm'
     state.emit()
     const preview = runtime.snapshot.confirmation
-    expect(preview?.name).toBe('国内节目.S00E298.特别篇.2026.2160p.IQIYI.WEB-DL.HEVC-WF.mkv')
+    expect(preview?.name).toBe('国内节目.2026.S00E298.特别篇.2160p.IQIYI.WEB-DL.HEVC-WF.mkv')
     expect(preview?.note).toContain('封装后按实际规格')
     state.cfg.includeEpisodeTitle = false
     const withoutTitle = state.taskFromEp(0)
     expect(completedFilename(jobNaming(withoutTitle, state.cfg), { status: 'unavailable' }))
-      .toBe('国内节目.S00E298.2026.IQIYI.WEB-DL-WF.mkv')
+      .toBe('国内节目.2026.S00E298.IQIYI.WEB-DL-WF.mkv')
   } finally { runtime.close() }
 })
 
@@ -49,6 +49,8 @@ test('terminal domestic login opens a QR scene and completes through its polling
   const runtime = new Runtime({ simulate: true })
   const state = runtime as any
   const calls: string[] = []
+  // 平台扫码用例以发布端已认证为前提；强制连接边界由 PlutoFish 集成测试覆盖。
+  Object.defineProperty(state.plutofish, 'ready', { get: () => true })
   state.simulated = false
   state.cfg.host = 'http://127.0.0.1:1'
   state.cfg.key = 'fixture-key'

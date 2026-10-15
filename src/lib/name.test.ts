@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { filename, folder, sourceTag, tierHeight, type Naming } from './name.ts'
+import { filename, folder, folderSegments, sourceTag, tierHeight, type Naming } from './name.ts'
 
 function movie(partial: Partial<Naming> = {}): Naming {
   return {
@@ -106,4 +106,17 @@ test('movies and unnumbered short videos keep their existing names', () => {
   const naming = movie({ kind: 'short', season: 0, episode: 0 })
   expect(filename({ ...naming, episodeTitle: '单条视频简介' })).toBe(filename(naming))
   expect(filename({ ...naming, season: 1, episode: 2, episodeTitle: '雨夜重逢' })).toContain('.S01E02.雨夜重逢.')
+})
+
+test('云端相对层级与本地输出一致，包括手动年份、特别篇及平台子目录', () => {
+  const samples: Array<[Naming, string[]]> = [
+    [movie({ kind: 'show', title: '此处通往繁星', year: 2024, season: 0, tmdbId: 296203 }), ['此处通往繁星 (2024) {tmdb-296203}', 'Season 00']],
+    [movie({ source: 'TX', collection: '国语版' }), ['第九区 (2009)', '国语版']],
+    [movie({ kind: 'short', title: '短剧/名字' }), ['短剧_名字']],
+    [movie({ kind: 'short', source: 'HG', season: 2 }), ['第九区', 'season 2']],
+  ]
+  for (const [naming, segments] of samples) {
+    expect(folderSegments(naming)).toEqual(segments)
+    expect(folder(naming, '/Downloads/gvs')).toBe(join('/Downloads/gvs', ...segments))
+  }
 })

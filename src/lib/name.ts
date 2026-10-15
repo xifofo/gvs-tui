@@ -7,6 +7,10 @@ export type Naming = {
   kind: MediaKind
   title: string
   nameDots: string
+  /** Filename-only TMDB English/Chinese title pinned when the task is created. */
+  filenameTitle?: string
+  /** Absent on saved legacy queues, which retain their previous filename order. */
+  namingOrder?: 'title-year'
   year: number
   season: number
   episode: number
@@ -92,18 +96,21 @@ function fitUtf8(text: string, bytes: number): string {
   return result.replace(/\.+$/, '')
 }
 
-export function folder(n: Naming, outDir: string): string {
-  if (n.source === 'HG' || n.source === 'HGO') {
-    return join(outDir, sanitizePath(n.title), `season ${Math.max(n.season, 1)}`)
-  }
-  if (n.kind === 'short') return join(outDir, sanitizePath(n.title))
+/** 本地保存与云端目录创建共用相同的相对目录层级。 */
+export function folderSegments(n: Naming): string[] {
+  if (n.source === 'HG' || n.source === 'HGO') return [sanitizePath(n.title), `season ${Math.max(n.season, 1)}`]
+  if (n.kind === 'short') return [sanitizePath(n.title)]
   let base = n.title.trim() || n.nameDots || 'Untitled'
   if (n.year > 0) base = `${base} (${n.year})`
   if (n.tmdbId > 0) base = `${base} {tmdb-${n.tmdbId}}`
-  let dir = join(outDir, sanitizePath(base))
-  if (n.kind === 'show' && n.season >= 0) dir = join(dir, `Season ${String(n.season).padStart(2, '0')}`)
-  if (n.source === 'TX' && n.collection && n.collection !== '正片') dir = join(dir, sanitizePath(n.collection))
-  return dir
+  const parts = [sanitizePath(base)]
+  if (n.kind === 'show' && n.season >= 0) parts.push(`Season ${String(n.season).padStart(2, '0')}`)
+  if (n.source === 'TX' && n.collection && n.collection !== '正片') parts.push(sanitizePath(n.collection))
+  return parts
+}
+
+export function folder(n: Naming, outDir: string): string {
+  return join(outDir, ...folderSegments(n))
 }
 
 /**
@@ -134,7 +141,7 @@ export function tierHeight(width: number, height: number): number {
 
 export function filename(n: Naming): string {
   const parts: string[] = []
-  const subtitle = episodeTitle(n.episodeTitle || '', n.title, n.nameDots)
+  const subtitle = episodeTitle(n.episodeTitle || '', n.title, n.nameDots, n.filenameTitle || '')
   let subtitleIndex = -1
   const addSubtitle = () => {
     if (!subtitle) return
@@ -142,18 +149,20 @@ export function filename(n: Naming): string {
     parts.push(dots(subtitle))
   }
   if (n.kind === 'short') {
-    parts.push(n.title.trim() || 'episode')
+    parts.push(n.filenameTitle ? dots(n.filenameTitle) : n.title.trim() || 'episode')
     if (n.season > 0 || n.episode > 0) {
       parts.push(`S${String(Math.max(n.season, 1)).padStart(2, '0')}E${String(Math.max(n.episode, 1)).padStart(2, '0')}`)
       addSubtitle()
     }
   } else {
-    parts.push(n.nameDots || dots(n.title))
+    parts.push(n.filenameTitle ? dots(n.filenameTitle) : n.nameDots || dots(n.title))
+    if (n.namingOrder === 'title-year' && n.year > 0) parts.push(String(n.year))
     if (n.kind === 'show') {
-      parts.push(`S${String(Math.max(n.season, 1)).padStart(2, '0')}E${String(Math.max(n.episode, 1)).padStart(2, '0')}`)
+      const season = n.namingOrder === 'title-year' ? Math.max(n.season, 0) : Math.max(n.season, 1)
+      parts.push(`S${String(season).padStart(2, '0')}E${String(Math.max(n.episode, 1)).padStart(2, '0')}`)
       addSubtitle()
     }
-    if (n.year > 0) parts.push(String(n.year))
+    if (n.namingOrder !== 'title-year' && n.year > 0) parts.push(String(n.year))
     if (n.kind === 'movie' && n.edition) parts.push(dots(n.edition))
   }
   const tier = tierHeight(0, n.height)
@@ -175,20 +184,28 @@ export function filename(n: Naming): string {
     if (fitted) parts[subtitleIndex] = fitted
     else parts.splice(subtitleIndex, 1)
   }
-  return sanitizePath(parts.join('.')) + suffix
+  if (n.namingOrder === 'title-year') {
+    const rest = sanitizePath(parts.slice(1).join('.')) + suffix
+    parts[0] = fitUtf8(parts[0]!, Math.max(4, 240 - Buffer.byteLength(rest, 'utf8') - 1))
+  }
+  const result = sanitizePath(parts.join('.')) + suffix
+  if (n.namingOrder === 'title-year' && Buffer.byteLength(result, 'utf8') > 240) throw new Error('文件名过长')
+  return result
 }
 
 /** New measured outputs use finished specs; the legacy filename remains the failure fallback. */
-export function completedFilename(n: Naming, media: MediaSpecs, marker?: 'HQ' | 'MAXPLUS' | 'EDR'): string {
-  const parts = [dots(n.title || n.nameDots)]
-  const subtitle = episodeTitle(n.episodeTitle || '', n.title, n.nameDots)
+export function completedFilename(n: Naming, media: MediaSpecs, marker?: 'HQ' | 'MAXPLUS' | 'EDR',
+  options: { preview?: boolean } = {}): string {
+  const parts = [dots(n.filenameTitle || n.title || n.nameDots)]
+  if (n.namingOrder === 'title-year' && n.year > 0) parts.push(String(n.year))
+  const subtitle = episodeTitle(n.episodeTitle || '', n.title, n.nameDots, n.filenameTitle || '')
   let subtitleIndex = -1
   if (n.kind === 'show') {
     const season = Number.isSafeInteger(n.season) && n.season >= 0 ? n.season : 1
     parts.push(`S${String(season).padStart(2, '0')}E${String(Math.max(n.episode, 1)).padStart(2, '0')}`)
     if (subtitle) { subtitleIndex = parts.length; parts.push(dots(subtitle)) }
   }
-  if (n.year > 0) parts.push(String(n.year))
+  if (n.namingOrder !== 'title-year' && n.year > 0) parts.push(String(n.year))
   if (n.kind === 'movie' && n.edition) parts.push(dots(n.edition))
   const height = tierHeight(media.width || 0, media.height || 0)
   if (height) parts.push(`${height}p`)
@@ -197,17 +214,18 @@ export function completedFilename(n: Naming, media: MediaSpecs, marker?: 'HQ' | 
   if (marker) parts.push(marker)
   if (media.dynamicRange === 'DV') parts.push('DV')
   else if (media.dynamicRange === 'HDR' || media.dynamicRange === 'HLG') parts.push('HDR')
+  else if (media.dynamicRange === 'SDR') parts.push('SDR')
   const fps = Math.round(media.fps || 0)
   if (fps === 50 || fps === 60) parts.push(`${fps}fps`)
   const codec = (media.codec || '').toLowerCase()
   const videoCodec = ({ h264: 'AVC', h265: 'HEVC', hevc: 'HEVC', av1: 'AV1', vp9: 'VP9' } as Record<string, string>)[codec]
     || (codec && codec !== 'unknown' ? codec.toUpperCase() : '')
   if (videoCodec) parts.push(videoCodec)
-  if (media.audio?.status === 'confirmed' && media.audio.codec && media.audio.channels) {
+  if (media.audio?.codec && (options.preview || (media.audio.status === 'confirmed' && media.audio.channels))) {
     const a = media.audio
     const audioCodec = ({ aac: 'AAC', ac3: 'AC3', eac3: 'DDP', dts: 'DTS', dca: 'DTS', truehd: 'TrueHD', mlp: 'TrueHD', flac: 'FLAC' } as Record<string, string>)[a.codec!.toLowerCase()] || a.codec!.toUpperCase()
-    const channels = ({ 1: '1.0', 2: '2.0', 6: '5.1', 8: '7.1' } as Record<number, string>)[a.channels!] || `${a.channels}.0`
-    parts.push(`${audioCodec}.${channels}${a.atmos ? '.Atmos' : ''}`)
+    const channels = a.channels ? ({ 1: '1.0', 2: '2.0', 6: '5.1', 8: '7.1' } as Record<number, string>)[a.channels] || `${a.channels}.0` : ''
+    parts.push([audioCodec, channels, a.atmos ? 'Atmos' : ''].filter(Boolean).join('.'))
   }
   const suffix = `${n.group.trim() ? `-${sanitizePath(n.group.trim())}` : ''}.${n.container || 'mkv'}`
   // Reserve space for sidecars and retain the season/episode and technical suffix.

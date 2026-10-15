@@ -90,8 +90,8 @@ test('episode-title switch is pinned to the task and controls both legacy and me
     const on = { ...base, includeEpisodeTitle: true }
     const off = JSON.parse(JSON.stringify({ ...base, includeEpisodeTitle: false })) as DlTask
     const onNaming = jobNaming(on, cfg), offNaming = jobNaming(off, { ...cfg, includeEpisodeTitle: true })
-    expect(completedFilename(onNaming, specs)).toBe(`一瓯春.S01E29.朱门盛景.终究一场梦.2026.2160p.${platform}.WEB-DL.HEVC.DDP.2.0-WF.mkv`)
-    expect(completedFilename(offNaming, specs)).toBe(`一瓯春.S01E29.2026.2160p.${platform}.WEB-DL.HEVC.DDP.2.0-WF.mkv`)
+    expect(completedFilename(onNaming, specs)).toBe(`一瓯春.S01E29.朱门盛景.终究一场梦.2026.2160p.${platform}.WEB-DL.SDR.HEVC.DDP.2.0-WF.mkv`)
+    expect(completedFilename(offNaming, specs)).toBe(`一瓯春.S01E29.2026.2160p.${platform}.WEB-DL.SDR.HEVC.DDP.2.0-WF.mkv`)
     expect(filename(onNaming)).toContain('.S01E29.朱门盛景.终究一场梦.')
     expect(filename(offNaming)).toContain('.S01E29.2026.')
     expect(jobTitle(off)).toBe(jobTitle(on))

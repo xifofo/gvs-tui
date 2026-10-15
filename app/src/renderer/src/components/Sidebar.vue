@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { transferState } from '@shared/job-transfer'
 import { PROVIDER_NAME } from '@shared/api'
 import { accountBucket } from '@shared/provider-registry'
 import mark from '../assets/gvs-mark.svg'
 import { go, gvs, openSettings, prefs, savePrefs, section, shownProviders, store, type View } from '../store'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
+import IdentityInfo from '../integrations/plutofish/IdentityInfo.vue'
 
 type NavItem = { view: View; label: string; icon: string }
 const groups: NavItem[][] = [
@@ -18,7 +20,7 @@ const collapsed = computed(() => prefs().sidebarCollapsed)
 const toggle = () => void savePrefs({ sidebarCollapsed: !collapsed.value })
 
 const active = (n: NavItem) => section() === n.view
-const activeJobs = computed(() => store.jobs.filter((j) => j.state === 'running' || j.state === 'queued').length)
+const activeJobs = computed(() => store.jobs.filter((j) => transferState(j) === 'active').length)
 const accounts = computed(() => {
   const all = store.state?.accounts ?? []
   return shownProviders().map((p) => all.find((a) => a.provider === p)).filter((a): a is NonNullable<typeof a> => !!a)
@@ -76,6 +78,8 @@ const host = computed(() => {
       <Icon name="download" :size="16" /><span v-if="!collapsed">{{ store.update.status === 'downloading' ? `下载新版本 ${store.update.percent}%` : `有新版本 ${store.update.version}` }}</span>
     </button>
 
+    <IdentityInfo class="pluto-account" :connection="store.state?.plutofish" compact :collapsed="collapsed" :active="store.view === 'settings' && store.settingsTab === 'plutofish'" @open="openSettings('plutofish')" />
+
     <button type="button" class="pst" :title="`平台：${readyCount}/${accounts.length} 已登录 · ${tunnel.text}`" @click="go('accounts')">
       <span v-if="!collapsed" class="pst-h"><span>平台</span><span class="muted-s">{{ readyCount }}/{{ accounts.length }} 已登录</span></span>
       <span class="dots">
@@ -131,11 +135,12 @@ const host = computed(() => {
 }
 .side.c .upd { justify-content: center; padding: 10px 0; }
 .upd.ready { background: var(--orange); color: var(--on-orange); box-shadow: var(--ui-glow); }
+.pluto-account { margin-top: auto; flex-shrink: 0; }
+.upd + .pluto-account { margin-top: 0; }
 .pst {
-  margin-top: auto; padding: 10px; border-radius: var(--ui-radius-md); border: 1px solid var(--line); background: var(--card); color: var(--ink-2);
+  padding: 10px; border-radius: var(--ui-radius-md); border: 1px solid var(--line); background: var(--card); color: var(--ink-2); flex-shrink: 0;
   display: flex; flex-direction: column; gap: 8px; font-size: 11.5px; text-align: left; cursor: pointer; transition: border-color var(--ui-duration-fast);
 }
-.upd + .pst { margin-top: 0; }
 .pst:hover { border-color: var(--line-2); }
 .pst-h { display: flex; justify-content: space-between; color: var(--ink); font-weight: 700; }
 .muted-s { color: var(--ink-2); font-weight: 500; }

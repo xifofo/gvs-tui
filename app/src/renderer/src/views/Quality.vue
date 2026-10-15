@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import type { AudioView, EnqueueRequest, NamingPreview, TmdbHit, TmdbSeason } from '@shared/api'
+import type { AudioView, EnqueueRequest, NamingPreview, PublicationInput, PublicationPreferences, TmdbHit, TmdbSeason } from '@shared/api'
+import PublicationFields from '../integrations/plutofish/PublicationFields.vue'
 import { supportsTmdb } from '@shared/api'
 import { resolveDefaultAudioId } from '@shared/audio-selection'
+import { outputNaming, type OutputNaming } from '@shared/output-naming'
 import { defaultTmdbHit } from '@shared/tmdb-selection'
 import { audioChannels, audioCodec, hdrKind, resolutionTier, videoCodec } from '@shared/media-specs'
 import { DEFAULT_RULES, parseRules, pickBest, type RuleCandidate } from '@shared/rule-groups'
@@ -10,7 +12,7 @@ import Icon from '../components/Icon.vue'
 import Skeleton from '../components/Skeleton.vue'
 import IQCNAudioPicker from '../components/IQCNAudioPicker.vue'
 import { preferredQualityIndex } from '@shared/ui-prefs'
-import { accountsOf, back, errText, go, gvs, human, openQuality, openSettings, prefs, store, subscriptionOf, toast } from '../store'
+import { accountsOf, back, copyText, errText, go, gvs, human, openQuality, openSettings, prefs, store, subscriptionOf, toast } from '../store'
 import AccountPicker from '../components/AccountPicker.vue'
 import { reducedMotion } from '../motion'
 
@@ -32,12 +34,19 @@ const qIndex = ref(0)
 const audioIds = ref<string[]>([])
 const preferredAudioId = ref('')
 const tmdb = ref<TmdbHit | null>(null)
+const publication = ref<PublicationInput>({ category: '' })
+const publicationFields = ref<InstanceType<typeof PublicationFields> | null>(null)
 const tmdbHits = ref<TmdbHit[]>([])
 const tmdbLoading = ref(false)
 const tmdbError = ref('')
 const tmdbOpen = ref(false)
 const seasons = ref<TmdbSeason[]>([])
 const selectedSeason = ref('')
+const manualSeason = ref('')
+const manualTitle = ref<string | null>(null)
+const manualYear = ref<string | null>(null)
+const namingLoading = ref(false)
+const namingError = ref('')
 const seasonsLoading = ref(false)
 const seasonsError = ref('')
 const seasonsWarning = ref('')
@@ -82,6 +91,8 @@ watch(
     qIndex.value = p ? preferredQualityIndex(p.qualities, prefs().defaultQuality) : 0
     preferredAudioId.value = ''
     tmdb.value = null
+    resetNaming()
+    publication.value = { category: '' }
     tmdbHits.value = []
     tmdbError.value = ''
     tmdbOpen.value = false
@@ -144,11 +155,15 @@ function toggleAudio(a: AudioView) {
 
 async function loadTmdb() {
   const v = d.value
-  if (!v || !store.state?.settings.tmdbKey || !canMatchTmdb.value) return
+  if (!v) return
   const seq = ++tmdbSeq
   tmdbLoading.value = true
   tmdbError.value = ''
   try {
+    const saved = await gvs('publicationPreferences', { provider: v.provider, sourceWorkId: v.id, kind: v.kind })
+    if (seq !== tmdbSeq || d.value !== v) return
+    if (saved?.tmdb) { restorePublication(saved); return }
+    if (!store.state?.settings.tmdbKey || !canMatchTmdb.value) return
     const hits = await gvs('tmdbSearch', v.title, v.kind !== 'movie')
     if (seq !== tmdbSeq || d.value !== v) return
     tmdbHits.value = hits
@@ -166,6 +181,7 @@ watch(tmdb, () => {
   ++seasonsSeq
   seasons.value = []
   selectedSeason.value = ''
+  manualSeason.value = ''
   seasonsLoading.value = false
   seasonsError.value = ''
   seasonsWarning.value = ''
@@ -227,9 +243,27 @@ function setKind(kind: 'movie' | 'show') {
 }
 
 function selectTmdb(hit: TmdbHit | null) {
+  if (hit?.id !== tmdb.value?.id || hit?.kind !== tmdb.value?.kind) resetNaming()
   if (hit) setKind(hit.kind)
   tmdb.value = hit
   tmdbOpen.value = false
+}
+
+function selectManualTmdb(hit: TmdbHit) {
+  // 用户手动指定后，迟到的自动匹配不能覆盖其选择。
+  ++tmdbSeq
+  tmdbLoading.value = false
+  tmdbError.value = ''
+  manualKind.value = true
+  selectTmdb(hit)
+}
+
+function restorePublication(saved: PublicationPreferences) {
+  if (saved.tmdb && !tmdb.value) selectManualTmdb(saved.tmdb)
+  if (saved.tmdbSeason !== undefined) { manualSeason.value = String(saved.tmdbSeason); selectedSeason.value = '' }
+  if (saved.naming?.title !== undefined && manualTitle.value === null) manualTitle.value = saved.naming.title
+  if (saved.naming?.year !== undefined && manualYear.value === null) manualYear.value = String(saved.naming.year)
+  if (saved.naming?.season !== undefined && manualSeason.value === '') manualSeason.value = String(saved.naming.season)
 }
 
 function changeKind(kind: 'movie' | 'show') {
@@ -238,18 +272,38 @@ function changeKind(kind: 'movie' | 'show') {
   setKind(kind)
 }
 
+function resetNaming() {
+  manualTitle.value = null
+  manualYear.value = null
+  manualSeason.value = ''
+  selectedSeason.value = ''
+}
+const namingOverrides = computed<OutputNaming>(() => ({
+  ...(manualTitle.value?.trim() ? { title: manualTitle.value.trim() } : {}),
+  ...(manualYear.value != null && manualYear.value !== '' ? { year: Number(manualYear.value) } : {}),
+  ...(!isMovie.value && manualSeason.value !== '' ? { season: Number(manualSeason.value) } : {}),
+}))
+const namingInputError = computed(() => {
+  try { outputNaming(namingOverrides.value); return '' } catch (error) { return errText(error) }
+})
+const namingChanged = computed(() => Object.keys(namingOverrides.value).length > 0 || !!selectedSeason.value)
+const folderParts = computed(() => (naming.value?.folder || '').replace(/\\/g, '/').split('/'))
+const filenameParts = computed(() => (naming.value?.file || '').split('.'))
+
 const request = computed<EnqueueRequest | null>(() => {
   const v = d.value
   const p = probe.value
   if (!v || !p) return null
   return {
     token: p.token,
-    detail: { provider: v.provider, id: v.id, title: v.title, year: v.year, kind: v.kind, poster: v.poster },
+    naming: { ...namingOverrides.value },
+    detail: { provider: v.provider, id: v.id, title: v.title, year: v.year, kind: v.kind, poster: v.poster, desc: v.desc },
     episodes: store.probeEpisodes.map((e) => ({ ...e, languages: e.languages.map((l) => ({ ...l })) })),
     quality: qIndex.value,
     audioIds: [...audioIds.value],
     defaultAudioId: defaultAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
+    publication: { category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, episodeNumbers: { ...publication.value.episodeNumbers } },
     tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
     accountId: store.accountPick[v.provider] || undefined,
   }
@@ -260,13 +314,15 @@ watch(
   [request, () => store.state?.settings.includeEpisodeTitle],
   async ([r]) => {
     const seq = ++namingSeq
-    if (!r) return (naming.value = null)
+    namingError.value = ''
+    if (!r || namingInputError.value) { namingLoading.value = false; return }
+    namingLoading.value = true
     try {
       const n = await gvs('namingPreview', r)
       if (seq === namingSeq) naming.value = n // 丢弃先发后到的旧结果
-    } catch {
-      if (seq === namingSeq) naming.value = null
-    }
+    } catch (error) {
+      if (seq === namingSeq) namingError.value = errText(error)
+    } finally { if (seq === namingSeq) namingLoading.value = false }
   },
   { immediate: true },
 )
@@ -275,13 +331,16 @@ const totalSize = computed(() => (quality.value?.size ?? 0) * store.probeEpisode
 const hasDts = computed(() => audios.value.some((a) => audioIds.value.includes(a.id) && /dts/i.test(a.codec + a.label + a.id)))
 const count = computed(() => store.probeEpisodes.length)
 const noun = computed(() => isMovie.value ? '个版本' : '集')
-const canStart = computed(() => !starting.value && !store.probing && !store.probeError && !!request.value?.episodes.length && !!quality.value && !tmdbLoading.value)
+const publicationRequired = computed(() => !publicationFields.value?.categoryValid)
+const canStart = computed(() => !publicationRequired.value && !starting.value && !namingLoading.value && !namingInputError.value && !namingError.value && !store.probing && !store.probeError && !!request.value?.episodes.length && !!quality.value && !tmdbLoading.value && !publicationFields.value?.loading)
 
 async function start() {
-  const r = request.value
-  if (!canStart.value || !r) return
+  if (!canStart.value || !request.value) return
   starting.value = true
   try {
+    await publicationFields.value?.ready()
+    const r = request.value
+    if (!r) return
     const n = await gvs('enqueue', r)
     toast(`已加入 ${n} 个下载任务`, 'ok')
     go('downloads')
@@ -292,7 +351,10 @@ async function start() {
   }
 }
 
-defineExpose({ start, canStart, starting })
+async function rememberPublication() {
+  await publicationFields.value?.save()
+}
+defineExpose({ start, canStart, starting, rememberPublication })
 
 const spec = (q: { width: number; height: number; size: number; fps: number }) =>
   [q.width && q.height ? `${q.width}×${q.height}` : '', q.fps ? `${q.fps}帧` : '', q.size ? `${isMovie.value ? '' : '每集'}约 ${human(q.size)}` : '']
@@ -326,8 +388,8 @@ function qname(q: { stream: string; hdr: string; label: string }): string {
   const r = range(q)
   return r && !q.label.includes(r) ? `${r} · ${q.label}` : q.label
 }
-const sep = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).slice(-2).join('/')
 const tmpFull = computed(() => store.state?.settings.tmpDir || '')
+const sep = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).slice(-2).join('/')
 const tmpText = computed(() => (tmpFull.value ? sep(tmpFull.value) : '下载目录同盘 .gvs-tmp'))
 
 /* ---- 卡片展示用的规格 ---- */
@@ -529,60 +591,8 @@ async function applyRule() {
 
         <aside class="qside">
           <div class="card side-card">
-            <h3 class="side-h">输出</h3>
-            <details class="output-options" :open="!embedded"><summary>命名与刮削</summary><div class="output-options-body">
-
-          <div v-if="canMatchTmdb" class="blk">
-            <span class="lab">内容类型</span>
-            <div class="kind-options" role="group" aria-label="内容类型">
-              <button type="button" class="btn sm" :class="{ primary: isMovie }" :aria-pressed="isMovie" @click="changeKind('movie')">电影</button>
-              <button type="button" class="btn sm" :class="{ primary: !isMovie }" :aria-pressed="!isMovie" @click="changeKind('show')">剧集</button>
-            </div>
-          </div>
-
-          <div v-if="store.state?.settings.tmdbKey && canMatchTmdb" class="blk">
-            <span class="lab">TMDB 匹配</span>
-            <div v-if="tmdbLoading" class="dim small row"><span class="spin" />正在查 TMDB…</div>
-            <div v-else-if="tmdbError" class="warn-box">TMDB：{{ tmdbError }} <button type="button" class="linkish" @click="loadTmdb">重试</button></div>
-            <template v-else>
-              <div class="match" :class="{ none: !tmdb }">
-                <Icon v-if="tmdb" name="check" :size="16" :stroke="2.5" />
-                <span>{{ tmdb ? `${tmdb.name}${tmdb.year ? ` (${tmdb.year})` : ''}` : tmdbHits.length ? '不使用 TMDB' : '未找到 TMDB 条目' }}</span>
-                <button v-if="tmdbHits.length" type="button" class="linkish" @click="tmdbOpen = !tmdbOpen">{{ tmdbOpen ? '收起' : '更换' }}</button>
-                <button v-else type="button" class="linkish" @click="loadTmdb">重试</button>
-              </div>
-              <div v-if="tmdbOpen" class="hits">
-                <button v-for="h in tmdbHits" :key="`${h.kind}:${h.id}`" type="button" class="hit" :class="{ on: tmdb?.id === h.id && tmdb?.kind === h.kind }" @click="selectTmdb(h)">
-                  {{ h.name }}<span class="muted">{{ h.kind === 'movie' ? '电影' : '剧集' }} {{ h.year || '' }}</span>
-                </button>
-                <button type="button" class="hit" :class="{ on: !tmdb }" @click="selectTmdb(null)">不使用 TMDB</button>
-              </div>
-            </template>
-          </div>
-
-          <div v-if="tmdb?.kind === 'show'" class="blk">
-            <label for="tmdb-season" class="lab">输出季号</label>
-            <div v-if="seasonsLoading" class="dim small row"><span class="spin" />正在读取 TMDB 季列表…</div>
-            <div v-else-if="seasonsError" class="warn-box">季列表：{{ seasonsError }} <button type="button" class="linkish" @click="loadSeasons">重试</button></div>
-            <div v-else-if="seasonsWarning" class="warn-box">{{ seasonsWarning }} <button type="button" class="linkish" @click="loadSeasons">重试</button></div>
-            <select id="tmdb-season" v-model="selectedSeason" class="season-select" :disabled="seasonsLoading">
-              <option :value="''">沿用平台季号</option>
-              <optgroup v-for="list in seasonLists" :key="list.key" :label="list.label">
-                <option v-for="season in list.seasons" :key="seasonKey(season)" :value="seasonKey(season)">{{ seasonLabel(season) }}</option>
-              </optgroup>
-            </select>
-            <span class="small muted">整批使用所选季号，集号沿用平台；目录和文件名预览同步更新。</span>
-            <span v-if="selectedSeasonRow?.groupId" class="small muted">采用「{{ selectedSeasonRow.groupName }}」分组，保留平台集号，不换算总集数。</span>
-            <span v-if="!seasonsLoading && !seasonsError && !seasons.length" class="small muted">TMDB 暂无季列表，可沿用平台季号下载。</span>
-          </div>
-
-          <div v-if="naming" class="blk">
-            <span class="lab">文件名预览</span>
-            <div class="name mono">{{ sep(naming.folder) }}/<br /><span>{{ naming.file }}</span></div>
-            <span v-if="naming.note" class="small muted">{{ naming.note }}</span>
-          </div>
-
-          </div></details>
+            <h3 class="side-h">发布与保存</h3>
+            <PublicationFields v-if="d" ref="publicationFields" v-model="publication" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @match="selectManualTmdb" @restore="restorePublication" />
             <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">
               <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
             </button>
@@ -591,6 +601,75 @@ async function applyRule() {
             </button>
           </div>
         </aside>
+        <section class="card output-card output-options" aria-label="输出与命名">
+          <div class="output-heading"><div><h3>输出与命名</h3><span class="small muted">标题 · 年份 · 季集号</span></div>
+            <button type="button" class="btn sm" :disabled="!namingChanged || starting" @click="resetNaming">恢复自动</button>
+          </div>
+          <div class="output-grid">
+            <div class="output-settings">
+              <div v-if="canMatchTmdb" class="blk">
+                <span class="lab">内容类型</span>
+                <div class="kind-options" role="group" aria-label="内容类型">
+                  <button type="button" class="btn sm" :class="{ primary: isMovie }" :aria-pressed="isMovie" @click="changeKind('movie')">电影</button>
+                  <button type="button" class="btn sm" :class="{ primary: !isMovie }" :aria-pressed="!isMovie" @click="changeKind('show')">剧集</button>
+                </div>
+              </div>
+
+              <div v-if="store.state?.settings.tmdbKey && canMatchTmdb" class="blk">
+                <span class="lab">TMDB 匹配</span>
+                <div v-if="tmdbLoading" class="dim small row"><span class="spin" />正在查 TMDB…</div>
+                <div v-else-if="tmdbError" class="warn-box">TMDB：{{ tmdbError }} <button type="button" class="linkish" @click="loadTmdb">重试</button></div>
+                <template v-else>
+                  <div class="match" :class="{ none: !tmdb }">
+                    <Icon v-if="tmdb" name="check" :size="16" :stroke="2.5" />
+                    <span>{{ tmdb ? `${tmdb.name}${tmdb.year ? ` (${tmdb.year})` : ''}` : tmdbHits.length ? '不使用 TMDB' : '未找到 TMDB 条目' }}</span>
+                    <button v-if="tmdbHits.length" type="button" class="linkish" @click="tmdbOpen = !tmdbOpen">{{ tmdbOpen ? '收起' : '更换' }}</button>
+                    <button v-else type="button" class="linkish" @click="loadTmdb">重试</button>
+                  </div>
+                  <div v-if="tmdbOpen" class="hits">
+                    <button v-for="h in tmdbHits" :key="`${h.kind}:${h.id}`" type="button" class="hit" :class="{ on: tmdb?.id === h.id && tmdb?.kind === h.kind }" @click="selectTmdb(h)">
+                      {{ h.name }}<span class="muted">{{ h.kind === 'movie' ? '电影' : '剧集' }} {{ h.year || '' }}</span>
+                    </button>
+                    <button type="button" class="hit" :class="{ on: !tmdb }" @click="selectTmdb(null)">不使用 TMDB</button>
+                  </div>
+                </template>
+              </div>
+
+              <label class="blk" for="output-title"><span class="lab">文件名标题</span>
+                <input id="output-title" :value="manualTitle ?? naming?.title ?? ''" class="season-select" maxlength="160" placeholder="自动：TMDB 英文名优先" :disabled="starting || tmdbLoading || publicationFields?.loading" @input="manualTitle = ($event.target as HTMLInputElement).value" @blur="manualTitle = manualTitle === '' ? null : manualTitle" />
+              </label>
+              <div class="naming-numbers">
+                <label class="blk" for="output-year"><span class="lab">年份</span>
+                  <input id="output-year" :value="manualYear ?? (naming?.year || '')" type="number" min="1000" max="9999" step="1" class="season-select mono" placeholder="自动" :disabled="starting" @input="manualYear = ($event.target as HTMLInputElement).value" @blur="manualYear = manualYear === '' ? null : manualYear" />
+                </label>
+                <label v-if="!isMovie" class="blk" for="manual-season"><span class="lab">季号</span>
+                  <input id="manual-season" :value="manualSeason !== '' ? manualSeason : selectedSeasonRow?.number ?? naming?.season ?? ''" type="number" min="0" max="999" step="1" class="season-select mono" placeholder="自动" :disabled="starting" @input="manualSeason = ($event.target as HTMLInputElement).value; selectedSeason = ''" />
+                  <span class="small muted">0 为特别篇</span>
+                </label>
+              </div>
+              <div v-if="tmdb?.kind === 'show'" class="blk">
+                <label for="tmdb-season" class="lab">从 TMDB 选择季</label>
+                <select id="tmdb-season" v-model="selectedSeason" class="season-select" :disabled="seasonsLoading || starting" @change="manualSeason = ''">
+                  <option :value="''">沿用平台季号</option>
+                  <optgroup v-for="list in seasonLists" :key="list.key" :label="list.label">
+                    <option v-for="season in list.seasons" :key="seasonKey(season)" :value="seasonKey(season)">{{ seasonLabel(season) }}</option>
+                  </optgroup>
+                </select>
+                <span v-if="seasonsLoading" class="small muted">正在读取季列表…</span>
+                <span v-else-if="seasonsError || seasonsWarning" class="small muted">{{ seasonsError || seasonsWarning }} <button type="button" class="linkish" @click="loadSeasons">重试</button></span>
+                <span v-if="selectedSeasonRow?.groupId" class="small muted">{{ selectedSeasonRow.groupName }} · 保留平台集号</span>
+              </div>
+              <p v-if="namingInputError || namingError" class="warn-box" role="alert">{{ namingInputError || namingError }}</p>
+            </div>
+            <div class="output-preview" :class="{ pending: namingLoading }" :aria-busy="namingLoading">
+              <div class="preview-heading"><strong>文件名预览</strong><button type="button" class="btn sm" :disabled="!naming?.file || namingLoading || !!namingInputError" @click="copyText(naming!.file, '已复制文件名')"><Icon name="copy" :size="15" />复制</button></div>
+              <div v-if="naming" class="filename-preview"><code class="mono"><template v-for="(part, index) in filenameParts" :key="index">{{ part }}<template v-if="index < filenameParts.length - 1">.<wbr /></template></template></code></div>
+              <div v-else class="preview-empty small muted">{{ namingLoading ? '正在生成预览…' : '选择画质后生成预览' }}</div>
+              <div v-if="naming" class="folder-preview"><span class="lab"><Icon name="folder" :size="15" />本地目录</span><code class="mono"><template v-for="(part, index) in folderParts" :key="index">{{ part }}<template v-if="index < folderParts.length - 1">/<wbr /></template></template></code></div>
+              <p v-if="naming?.note" class="small muted preview-note">{{ naming.note }}</p>
+            </div>
+          </div>
+        </section>
       </div>
 
       <Teleport :to="footerTarget || 'body'" :disabled="!footerTarget">
@@ -598,6 +677,7 @@ async function applyRule() {
           <div class="selection-summary">
             <strong>{{ quality ? qname(quality) : '请选择画质' }}</strong>
             <span class="muted small">{{ audioSummary || embeddedNote || '随视频音轨' }} · {{ count }} {{ noun }} · 整批沿用当前选择</span>
+            <span v-if="publicationRequired" class="small err">请选择资源分类，下载完成后自动上传</span>
           </div>
           <div v-if="totalSize" class="sum"><span class="dim">预计占用</span><span class="mono">约 {{ human(totalSize) }}</span></div>
           <button type="button" class="btn primary big" :disabled="!canStart" @click="start">
@@ -611,7 +691,7 @@ async function applyRule() {
 
 <style scoped>
 .qpage { position: relative; }
-.quality-page { overflow: visible; }
+.quality-page { overflow-y: auto; }
 .page.embedded { height: auto; flex-shrink: 0; overflow: visible; scroll-margin-top: 16px; padding: 20px 22px; border: 1px solid var(--line); border-radius: var(--ui-radius-lg, 16px); background: var(--card); }
 .page.embedded .h1-row { gap: 12px; }
 .h2s { font-size: 18px; font-weight: 900; }
@@ -620,7 +700,7 @@ async function applyRule() {
 .row { display: flex; align-items: center; gap: 8px; }
 .qbody { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
 .qmain { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.qside { position: sticky; top: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.qside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .toprow { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .mini { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .mini :deep(.ap > svg), .mini :deep(.ap > .muted:empty) { display: none; }
@@ -694,8 +774,23 @@ async function applyRule() {
 .kind-options { display: flex; gap: 8px; }
 .season-select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }
 .season-select:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
-.output-options > summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--ink-2); padding: 4px 0; }
-.output-options-body { display: flex; flex-direction: column; gap: 16px; padding: 10px 0 2px; }
+.output-card { grid-column: 1 / -1; padding: 22px; min-width: 0; }
+.output-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.output-heading h3 { margin: 0 0 5px; font-size: 17px; font-weight: 850; }
+.output-heading .btn { flex-shrink: 0; }
+.output-grid { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 28px; align-items: start; }
+.output-settings { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.naming-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.output-preview { min-width: 0; padding: 20px; background: var(--paper-2); border-radius: 12px; border: 1px solid var(--line); }
+.output-preview.pending { opacity: .6; }
+.preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.filename-preview { padding: 16px 0 20px; color: var(--ink); font-size: 14px; line-height: 1.9; overflow-wrap: anywhere; word-break: normal; user-select: text; }
+.filename-preview code, .folder-preview code { font: inherit; font-family: var(--font-mono, ui-monospace, monospace); }
+.folder-preview { display: flex; flex-direction: column; gap: 8px; padding-top: 16px; border-top: 1px solid var(--line); }
+.folder-preview .lab { display: flex; align-items: center; gap: 6px; }
+.folder-preview code { color: var(--ink-2); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; word-break: normal; }
+.preview-note { margin: 16px 0 0; line-height: 1.6; }
+.preview-empty { padding: 28px 0; }
 .blk { display: flex; flex-direction: column; gap: 6px; }
 .lab { font-size: 13px; color: var(--ink-3); }
 .match { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--ok-bg); color: var(--ok); border-radius: 8px; font-size: 14px; font-weight: 500; }
@@ -705,8 +800,6 @@ async function applyRule() {
 .hit { padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: var(--card); color: var(--ink); text-align: left; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
 .hit:last-child { border-bottom: 0; }
 .hit:hover, .hit.on { background: var(--paper-2); }
-.name { padding: 10px 12px; background: var(--ui-input); border: 1px solid var(--line); color: var(--ink-2); border-radius: 8px; font-size: 12px; line-height: 1.7; word-break: break-all; }
-.name span { color: var(--orange); }
 .dir { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
 .dir:hover { color: var(--orange-text); }
 .tmp { color: var(--ink-3); font-size: 12px; }
@@ -726,10 +819,13 @@ async function applyRule() {
 .actionbar .btn.big { flex-shrink: 0; min-width: 200px; border-radius: 11px; }
 @media (max-width: 1180px) {
   .qbody { grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; }
+  .output-grid { grid-template-columns: minmax(200px, 270px) minmax(0, 1fr); gap: 20px; }
 }
 @media (max-width: 980px) {
   .qbody { grid-template-columns: 1fr; }
   .qside { position: static; }
   .actionbar { flex-wrap: wrap; }
+  .output-grid { grid-template-columns: 1fr; }
+  .output-card { padding: 18px; }
 }
 </style>

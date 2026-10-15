@@ -1,3 +1,10 @@
+import { PublicationWorker } from './integrations/plutofish/publication-worker.ts'
+import { verifiedGatewayKey } from './integrations/plutofish/gateway.ts'
+import { PlutoFishConnection } from './integrations/plutofish/connection.ts'
+import { completePublication, preparePublication } from './integrations/plutofish/publication.ts'
+import { savePublication } from './integrations/plutofish/publication-store.ts'
+import { publicationStatus } from './integrations/plutofish/publication-types.ts'
+import { ConnectionForm } from './integrations/plutofish/tui-form.ts'
 import QRCode from 'qrcode'
 import { userMessage, userFacing } from './lib/user-message.ts'
 import { ProviderSessions, type SessionCommand } from './lib/provider-session.ts'
@@ -30,7 +37,7 @@ import {
 import { GwClient, ReloginRequired, type KeyInfo } from './lib/client.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from './lib/vault-migrate.ts'
 import { selectAudioTracks } from './lib/audio-selection.ts'
-import { previewFilename, usesMeasuredNaming } from './lib/completed-naming.ts'
+import { usesMeasuredNaming } from './lib/completed-naming.ts'
 import { normalizeHttpProxy } from './lib/proxy.ts'
 import {
   JobHub,
@@ -61,7 +68,7 @@ import {
   type YkAccount,
   type YkLogin,
 } from './lib/youku-session.ts'
-import { normalizeTmdbProxy, tmdbSearch, tmdbSeasons } from './lib/tmdb.ts'
+import { normalizeTmdbProxy, tmdbSearch, tmdbSeasons, tmdbFilenameTitle } from './lib/tmdb.ts'
 import { mediaKindFromMetadata, movieEdition, type TitleKind } from './lib/media-kind.ts'
 import { clipTitle, extractDouyinURL, extractTencentLinks, extractYoukuVideoId, extractIQLink, extractIQCNLink } from './lib/link.ts'
 import { pickDouyinURL, pickURL, tencentPlayProbeOk } from './lib/media.ts'
@@ -73,7 +80,8 @@ import {
   runLogStartup,
   setRunLogDisabled,
 } from './lib/runlog.ts'
-import { completedFilename, filename, folder, dots, tierHeight } from './lib/name.ts'
+import { filename, folder, dots, tierHeight } from './lib/name.ts'
+import { namingPreviewFilename, NAMING_PREVIEW_NOTE } from './lib/naming-preview.ts'
 import { confirmationLines, detailListRows, episodeRanges, settingGroup, settingInfoLines, viewMetrics, HELP_LINES } from './lib/ui-layout.ts'
 import { JOB_PAGE_SIZE } from './lib/view.ts'
 import { anyInt, asBool, asString, firstStr, isObj } from './lib/util.ts'
@@ -137,7 +145,10 @@ export class Runtime {
   private qIdx = 0
   private setIdx = 0
   private hostInput: string
-  private keyInput: string
+  private readonly publications: PublicationWorker
+  private readonly plutofish: PlutoFishConnection
+  private readonly connectionForm: ConnectionForm
+  private connectingBoth = false
   private query = ''
   private editField = ''
   private editValue = ''
@@ -178,6 +189,7 @@ export class Runtime {
   private tmdbGeneration = 0
   private tmdbSeasonPicker: Snapshot['tmdbSeasonPicker']
   private jobs: Job[] = []
+  private publicationCategory = ''
   private readonly logs = new Map<number, string[]>()
   private readonly draft = new DownloadDraft()
   private get pending() {
@@ -232,6 +244,18 @@ export class Runtime {
 
   constructor(options: { simulate?: boolean } = {}) {
     this.simulated = !!options.simulate
+    this.plutofish = new PlutoFishConnection({
+      ...(this.simulated ? { load: () => ({ url: '', key: '' }) } : {}),
+      changed: () => {
+        if (!this.plutofish.ready) this.scene = 'setup'
+        this.emit()
+      },
+    })
+    this.publications = new PublicationWorker(this.plutofish, draft => {
+      for (const job of this.jobs) if (job.publication?.fileKey === draft.fileKey) job.publication = draft
+      this.emit()
+    })
+    this.connectionForm = new ConnectionForm(this.plutofish.view().url)
     this.cfg = this.simulated
       ? {
           host: 'http://demo.local',
@@ -257,9 +281,18 @@ export class Runtime {
       () => this.emit(),
     )
     this.hostInput = this.cfg.host
-    this.keyInput = this.cfg.key
     this.hub = new JobHub((e) => {
       patchJob(this.jobs, e)
+      const job = this.jobs.find(j => j.id === e.id)
+      if (job?.publication && e.done && !e.err && !e.stopped) {
+        job.publication = completePublication(job.publication, e.log, e.completedMedia ?? (e.actualVersion?.file && e.actualVersion.media ? { file: { size: e.actualVersion.file.size }, media: e.actualVersion.media } : undefined))
+        try { savePublication(job.publication) }
+        catch { this.say('下载完成，但发布清单保存失败，请检查目录权限', 'err') }
+      }
+      if (job?.publication) {
+        try { this.publications.event(job.publication, e) }
+        catch { this.say('发布清单保存失败，请检查目录权限', 'err') }
+      }
       const line = [e.status, e.err || e.log, e.done ? e.note : ''].filter(Boolean).join(' · ')
       const history = this.logs.get(e.id) ?? []
       if (line && history.at(-1) !== line) {
@@ -272,7 +305,7 @@ export class Runtime {
       this.scene = 'setup'
     } else {
       this.cli = new GwClient(this.cfg.host, this.cfg.key, () => this.cfg)
-      this.scene = 'home'
+      this.scene = 'setup'
     }
     if (this.simulated) {
       this.cli = new GwClient(this.cfg.host, this.cfg.key, () => this.cfg)
@@ -340,6 +373,7 @@ export class Runtime {
   }
 
   set(field: string, value: string): void {
+    if (this.connectingBoth && (['host', 'key', 'plutofishUrl'].includes(field) || field.startsWith('connectionSecret'))) return
     if (this.scene === 'edit' && this.editField === 'IQ 登录密码') {
       if (field === 'secretAppend') this.editValue = (this.editValue + value.replace(/[\r\n]/g, '')).slice(0, 256)
       if (field === 'secretBackspace') this.editValue = [...this.editValue].slice(0, -1).join('')
@@ -351,8 +385,9 @@ export class Runtime {
       this.searching = false
     } else if (field === 'host') {
       this.hostInput = value
-      this.cfg.host = value.replace(/\/+$/, '').trim()
-    } else if (field === 'key') this.keyInput = value
+    } else if (field === 'key') this.connectionForm.gatewayKey = value
+    else if (field === 'plutofishUrl') this.connectionForm.url = value
+    else if (field.startsWith('connectionSecret')) this.connectionForm.secret(field, value)
     else if (field === 'edit') this.editValue = value
     this.emit()
   }
@@ -366,6 +401,12 @@ export class Runtime {
       return
     }
     const k = normKey(name, mods.shift)
+    if (!this.simulated && (!this.plutofish.ready || !this.keyInfo || this.connectingBoth)) {
+      this.scene = 'setup'
+      this.updateSetup(k === 'tab' && mods.shift ? 'shift+tab' : k)
+      this.emit()
+      return
+    }
     // Alt/⌥ or Ctrl+1..7. Bare 1-7 is workspace-only (see updateWorkspace).
     if ((mods.alt || mods.ctrl) && ['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k)) {
       this.switchPlatform(Number(k) - 1)
@@ -398,7 +439,7 @@ export class Runtime {
     }
     switch (this.scene) {
       case 'setup':
-        this.updateSetup(k)
+        this.updateSetup(k === 'tab' && mods.shift ? 'shift+tab' : k)
         break
       case 'home':
         this.scene = 'workspace'
@@ -414,12 +455,16 @@ export class Runtime {
         if (k === 'esc') {
           this.scene = 'quality'
         } else if (k === 'enter') {
-          const tasks = this.draft.take()
-          if (tasks.length) this.enqueueAll(tasks)
+          try { if (this.pending.length) this.enqueueAll(this.pending) }
+          catch (e) { this.say(userMessage(e, '发布信息保存失败'), 'err'); this.emit() }
         } else if (k === 'o') {
           this.editField = '确认下载目录'
           this.editValue = this.cfg.outDir
           this.scene = 'edit'
+        } else if (k.toLowerCase() === 'c') {
+          const options = ['', ...(this.plutofish.view().identity?.categories ?? []).map(c => c.value)]
+          this.publicationCategory = options[(options.indexOf(this.publicationCategory) + 1) % options.length]!
+          this.emit()
         } else if (k.toLowerCase() === 't') {
           void this.selectTMDBSeason()
         } else {
@@ -468,6 +513,11 @@ export class Runtime {
         if (k === 'enter' && this.jobs[this.cursor]) {
           this.scene = 'job-detail'
           this.logOffset = 0
+        } else if (['u', 'p'].includes(k.toLowerCase()) && this.jobs[this.cursor]?.publication?.output) {
+          const draft = this.jobs[this.cursor]!.publication!
+          try {
+            this.publications.control(draft.fileKey, k.toLowerCase() === 'p' ? 'pause' : 'resume')
+          } catch { this.say('发布状态保存失败，请检查目录权限', 'err') }
         } else
           this.cursor = moveJobCursor(this.cursor, k, this.jobs.length, JOB_PAGE_SIZE)
         break
@@ -490,6 +540,8 @@ export class Runtime {
   }
 
   close(): void {
+    void this.publications.close().finally(() => this.plutofish.close())
+    this.connectionForm.clearSecrets()
     this.editValue = ''; this.iqLoginUsername = ''; this.iqLoginAreaCode = ''
     this.stopQR()
     this.discovery.invalidate()
@@ -500,6 +552,7 @@ export class Runtime {
 
   private lastLoggedScene: Scene | '' = ''
   private emit(): void {
+    if (!this.simulated && (!this.plutofish.ready || !this.keyInfo || this.connectingBoth)) this.scene = 'setup'
     if (this.scene !== this.lastLoggedScene) {
       this.contentOffset = 0
       this.settingsExpanded = false
@@ -740,7 +793,7 @@ export class Runtime {
       host: this.cfg.host,
       status: this.status,
       statusKind: this.statusKind,
-      busy: this.busy || this.discovery.view.loading,
+      busy: this.busy || this.connectingBoth || this.discovery.view.loading,
       tunnelOk: this.tunnelOk,
       tunnelError: this.tunnelErr || undefined,
       tunnelTransport: this.tunnelTransport,
@@ -804,6 +857,8 @@ export class Runtime {
       probeFailed: this.probeFailed,
       query: this.query,
       hostInput: this.hostInput,
+      plutofish: this.plutofish.view(),
+      connectionForm: this.connectionForm.view(),
       hostFocused: this.hostFocused,
       keyFocused: this.keyFocused,
       keyConfigured: Boolean(this.cfg.key.trim()),
@@ -921,20 +976,8 @@ export class Runtime {
   }
 
   private async boot(): Promise<void> {
-    await this.ensureBins()
-    if (this.scene === 'home') {
-      await this.refreshKey()
-      if (this.scene === 'home') {
-        await this.migrateVaultOnce()
-        this.scene = 'workspace'
-        const p = this.providers().find((p) => p !== 'douyin')
-        if (p) {
-          this.provIdx = this.providers().indexOf(p)
-          await this.discovery.open(p)
-        } else this.say('当前 Key 没有可浏览的平台', 'warn')
-        this.emit()
-      }
-    }
+    void this.ensureBins()
+    if (this.cfg.key.trim() && this.plutofish.view().hasKey) await this.connectBoth()
   }
 
   /**
@@ -1052,32 +1095,63 @@ export class Runtime {
   }
 
   private updateSetup(k: string): void {
-    if (k === 'tab') {
-      this.hostFocused = !this.hostFocused
-      this.keyFocused = !this.keyFocused
+    if (this.connectingBoth) return
+    if (k === 'tab' || k === 'shift+tab') {
+      this.connectionForm.tab(k === 'shift+tab')
+      this.hostFocused = this.connectionForm.field === 0
+      this.keyFocused = this.connectionForm.field === 1
       return
     }
-    if (k !== 'enter') return
-    this.cfg.host = this.hostInput.replace(/\/+$/, '').trim()
-    this.cfg.key = this.keyInput.trim()
-    if (!this.cfg.key) {
-      this.say('请填写 API Key', 'warn')
-      return
-    }
-    this.persistConfig()
-    this.cli = new GwClient(this.cfg.host, this.cfg.key, () => this.cfg)
-    this.scene = 'home'
-    void this.refreshKey().then(() => {
-      if (this.scene === 'home') {
-        this.scene = 'workspace'
-        const p = this.providers().find((p) => p !== 'douyin')
-        if (p) {
-          this.provIdx = this.providers().indexOf(p)
-          void this.discovery.open(p)
+    if (k === 'enter') void this.connectBoth()
+  }
+
+  private async connectBoth(): Promise<void> {
+    if (this.connectingBoth) return
+    this.connectingBoth = true
+    this.scene = 'setup'
+    this.keyInfo = null
+    this.discovery.invalidate()
+    this.tunnelAbort?.abort()
+    this.tunnelOn = false
+    this.tunnelOk = false
+    this.emit()
+    try {
+      const host = this.hostInput.trim().replace(/\/+$/, '')
+      if (!/^https?:\/\//.test(host)) throw new Error('请填写有效的网关地址')
+      const key = this.connectionForm.gatewayKey.trim() || (host === this.cfg.host ? this.cfg.key.trim() : '')
+      if (!key) throw new Error('请填写网关 API Key')
+      await this.plutofish.verify({ url: this.connectionForm.url, key: this.connectionForm.key })
+      if (this.abort.signal.aborted) return
+      this.cli = new GwClient(host, key, () => this.cfg)
+      const info = await verifiedGatewayKey(this.cli)
+      if (this.abort.signal.aborted) return
+      this.cfg.host = host
+      this.cfg.key = key
+      this.persistConfig()
+      this.keyInfo = info
+      this.connectionForm.clearSecrets()
+      this.plutofish.monitor()
+      // TUI 下载队列不跨进程恢复，但已经落盘的成品必须仍能暂停、继续或重试上报。
+      for (const draft of this.publications.restored()) {
+        if (!this.jobs.some(job => job.publication?.fileKey === draft.fileKey) && draft.binding.publisherId === this.plutofish.view().identity?.id) {
+          this.jobs.push({ id: nextJobID(), title: draft.title, status: '下载完成', pct: 1, log: draft.output, err: '', publication: draft })
         }
-        this.emit()
       }
-    })
+      if (needsTunnel(p => this.has(p))) this.openTunnel()
+      await this.migrateVaultOnce()
+      if (this.abort.signal.aborted || !this.plutofish.ready) return
+      this.scene = 'workspace'
+      this.say('网关与 PlutoFish 验证通过', 'ok')
+      const p = this.providers().find(p => p !== 'douyin')
+      if (p) { this.provIdx = this.providers().indexOf(p); void this.discovery.open(p) }
+    } catch (e) {
+      this.keyInfo = null
+      this.scene = 'setup'
+      this.say(e instanceof Error ? e.message : '连接失败，请重试', 'err')
+    } finally {
+      this.connectingBoth = false
+      if (!this.abort.signal.aborted) this.emit()
+    }
   }
 
   resize(width: number, height: number) {
@@ -1199,6 +1273,7 @@ export class Runtime {
       ? [
           clip(job.title, this.viewport.width - 2),
           `状态 ${job.status} · ${Math.round(job.pct * 100)}%`,
+          ...(job.publication ? wrapLines(`${publicationStatus(job.publication)} · ${job.publication.workTarget.tmdbId ? 'TMDB ' + job.publication.workTarget.tmdbId : '平台 ' + (job.publication.workTarget.sourceWorkId || '待补全')} · ${job.publication.categoryLabel || '分类待补全'}\n版本 ${job.publication.releaseKey}\n文件 ${job.publication.fileKey}`, this.viewport.width - 2) : []),
           ...readTencentDiagnostics(this.cfg.host + String.fromCharCode(0) + this.cfg.key, String(job.id), 20).map(e => `[腾讯诊断] ${e.at} ${e.action}/${e.phase} ${e.status} → ${e.decision}${e.code ? ' code=' + e.code : ''}`),
           // The fixed heading is two rows; long titles remain readable in the log.
           ...(title.length > 1 ? [...title, ''] : []),
@@ -1227,8 +1302,10 @@ export class Runtime {
         .map(a => [a.lang !== '—' ? a.lang : '', a.label].filter(Boolean).join(' ')).join(' / ') || '平台默认',
       directory: naming && first?.provider !== 'douyin' ? folder(naming, this.cfg.outDir) : this.cfg.outDir,
       name: naming && first ? usesMeasuredNaming(first)
-        ? previewFilename(naming, first.provider, this.qualities[this.qIdx] ?? { height: first.height, codec: first.codec }, first.audioTracks ?? this.audios.filter(a => a.selected)) : filename(naming) : '',
-      note: first && usesMeasuredNaming(first) ? '封装后按实际规格、默认音轨及已确认档位补全文件名。' : '',
+        ? namingPreviewFilename(naming, first.provider, this.qualities[this.qIdx], first.audioTracks) : filename(naming) : '',
+      note: [first && usesMeasuredNaming(first) ? NAMING_PREVIEW_NOTE : '',
+        `PlutoFish 分类：${this.plutofish.view().identity?.categories?.find(c => c.value === this.publicationCategory)?.label || '待补全'}（C 切换）`,
+        `资料：${first?.tmdbId ? 'TMDB ' + first.tmdbId : '平台原始资料'} · 上传到绑定源账号根目录（0）并登记草稿；任务页 U 继续 / P 暂停上传`].filter(Boolean).join('\n'),
     }
   }
   private switchPlatform(slot: number): void {
@@ -1716,18 +1793,33 @@ export class Runtime {
       this.cursor =
         (this.cursor - 1 + this.tmdbHits.length) % this.tmdbHits.length
     else if (k === 'enter' && this.tmdbHits[this.cursor]) {
-      const h = this.tmdbHits[this.cursor]
-      this.setTitleKind(h.kind)
-      for (const t of this.pending) {
-        t.tmdbId = h.id
-        t.year = h.year || t.year
-        t.nameDots = dots(h.name)
-        t.plot = h.overview ?? ''
-        if (h.name) t.series = h.name
-      }
-      this.scene = 'confirm'
-      this.say(`已匹配${h.kind === 'movie' ? '电影' : '剧集'}：${h.name || h.title}${h.kind === 'show' ? ' · T 选择 TMDB 季号' : ''}`, 'ok')
+      void this.selectTMDBTitle(this.tmdbHits[this.cursor])
     }
+  }
+
+  private async selectTMDBTitle(h: TMDBHit): Promise<void> {
+    const generation = this.requestGeneration
+    let title = h.name || h.title
+    if (this.cfg.tmdbKey.trim()) {
+      this.searching = true
+      this.say('正在读取 TMDB 命名标题… · S 跳过 / Esc 返回')
+      this.emit()
+      title = await tmdbFilenameTitle(this.cfg.tmdbKey, h.kind, h.id, title, { proxy: this.cfg.tmdbProxy })
+      if (generation !== this.requestGeneration) return
+      this.searching = false
+    }
+    this.setTitleKind(h.kind)
+    for (const t of this.pending) {
+      t.tmdbId = h.id
+      t.year = h.year || t.year
+      t.nameDots = dots(h.name)
+      t.filenameTitle = title
+      t.plot = h.overview ?? ''
+      if (h.name) t.series = h.name
+    }
+    this.scene = 'confirm'
+    this.say(`已匹配${h.kind === 'movie' ? '电影' : '剧集'}：${h.name || h.title}${h.kind === 'show' ? ' · T 选择 TMDB 季号' : ''}`, 'ok')
+    this.emit()
   }
 
   private async selectTMDBSeason(): Promise<void> {
@@ -2262,6 +2354,9 @@ export class Runtime {
     const movie = this.isMovie()
     return {
       provider: this.detailProv,
+      sourceWorkId: this.detailId,
+      namingOrder: 'title-year',
+      posterUrl: this.detailInfo?.posterUrl,
       namingVersion: ['youku', 'tencent', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(this.detailProv) ? 1 : undefined,
       includeEpisodeTitle: this.cfg.includeEpisodeTitle !== false,
       title: ep.title,
@@ -2279,7 +2374,7 @@ export class Runtime {
       tmdbId: 0,
       nameDots: '',
       year: this.detailInfo?.year ?? 0,
-      plot: '',
+      plot: this.detailInfo?.desc ?? '',
       kind: movie ? 'movie' : 'show',
       edition: movie ? movieEdition(ep.title, this.detailTitle) : '',
       languages: ep.languages
@@ -2563,21 +2658,27 @@ export class Runtime {
   }
 
   private enqueueAll(tasks: DlTask[]): void {
+    if (!this.simulated && (!this.plutofish.ready || !this.keyInfo || this.connectingBoth)) { this.scene = 'setup'; this.emit(); return }
     if (!this.cli || !tasks.length) return
+    if (!this.simulated) {
+      for (const task of tasks) task.publication = preparePublication(task, this.plutofish.view(), this.publicationCategory)
+      for (const task of tasks) { savePublication(task.publication!); this.publications.register(task.publication!) }
+    }
     const added = []
     for (const t of tasks) {
       const id = nextJobID()
       added.push({
         id,
         title: jobTitle(t),
+        publication: t.publication,
         status: '排队',
         pct: 0,
         log: '',
         err: '',
       })
-      if (!this.simulated) this.hub.enqueue({ ...this.cfg }, this.cli, id, t)
     }
     this.jobs.unshift(...added)
+    if (!this.simulated) added.forEach((job, i) => this.hub.enqueue({ ...this.cfg }, this.cli!, job.id, tasks[i]!))
     this.pending = []
     this.pushNavigation('detail', this.detailCursor)
     this.cursor = 0
@@ -3254,6 +3355,7 @@ function parseDetail(
   const score = asString(data.score) || asString(raw.score)
   return {
     title,
+    posterUrl: [data.poster, data.cover, data.cover_url, data.series_cover, raw.poster, raw.cover].map(asString).find(s => /^https?:\/\//.test(s)) || '',
     desc:
       asString(data.desc) ||
       asString(raw.desc) ||

@@ -15,34 +15,34 @@ const media = (patch: Partial<MediaSpecs> = {}): MediaSpecs => ({ status: 'probe
 test('four requested names preserve title order, S00, three-digit episodes and measured suffixes', () => {
   expect(completedFilename(naming({ title: '心动的信号', season: 0, episode: 298, year: 2018,
     episodeTitle: '花絮特辑：星星柏涵约会真诚的情话好动人' }), media({ fps: 60, audio: { status: 'confirmed', codec: 'eac3', channels: 2 } })))
-    .toBe('心动的信号.S00E298.花絮特辑.星星柏涵约会真诚的情话好动人.2018.2160p.TX.WEB-DL.60fps.HEVC.DDP.2.0-WF.mkv')
+    .toBe('心动的信号.S00E298.花絮特辑.星星柏涵约会真诚的情话好动人.2018.2160p.TX.WEB-DL.SDR.60fps.HEVC.DDP.2.0-WF.mkv')
   expect(completedFilename(naming({ kind: 'movie', title: '四重心影', source: 'YK' }), media()))
-    .toBe('四重心影.2026.2160p.YOUKU.WEB-DL.HEVC.AAC.2.0-WF.mkv')
+    .toBe('四重心影.2026.2160p.YOUKU.WEB-DL.SDR.HEVC.AAC.2.0-WF.mkv')
   expect(completedFilename(naming({ title: '一瓯春', episode: 29, episodeTitle: '朱门盛景，终究一场梦', source: 'YK' }), media({ dynamicRange: 'DV', fps: 60 }), 'HQ'))
     .toBe('一瓯春.S01E29.朱门盛景.终究一场梦.2026.2160p.YOUKU.WEB-DL.HQ.DV.60fps.HEVC.AAC.2.0-WF.mkv')
   expect(completedFilename(naming({ title: '一念永恒', season: 4, episode: 14, year: 2020, episodeTitle: '一念永恒 完结季 第14话' }), media({ audio: { status: 'confirmed', codec: 'eac3', channels: 2 } })))
-    .toBe('一念永恒.S04E14.一念永恒.完结季.第14话.2020.2160p.TX.WEB-DL.HEVC.DDP.2.0-WF.mkv')
+    .toBe('一念永恒.S04E14.一念永恒.完结季.第14话.2020.2160p.TX.WEB-DL.SDR.HEVC.DDP.2.0-WF.mkv')
 })
 
 test('actual lower resolution and regular fps replace the selected 4K/60 specs', () => {
   const name = completedFilename(naming(), media({ width: 1920, height: 808, codec: 'h264', fps: 25 }))
-  expect(name).toContain('.1080p.TX.WEB-DL.AVC.AAC.2.0-')
+  expect(name).toContain('.1080p.TX.WEB-DL.SDR.AVC.AAC.2.0-')
   expect(name).not.toContain('2160p')
   expect(name).not.toContain('fps')
-  expect(completedFilename(naming(), media({ fps: 60000 / 1001 }), 'MAXPLUS')).toContain('.WEB-DL.MAXPLUS.60fps.HEVC.')
+  expect(completedFilename(naming(), media({ fps: 60000 / 1001 }), 'MAXPLUS')).toContain('.WEB-DL.MAXPLUS.SDR.60fps.HEVC.')
   expect(completedFilename(naming(), media({ fps: 50, dynamicRange: 'HLG' }))).toContain('.WEB-DL.HDR.50fps.')
   expect(completedFilename(naming({ episodeTitle: '节目' }), media())).not.toContain('.节目.2026')
 })
 
-test('portrait 4K specials name the measured resolution and keep SDR out of the suffix', () => {
+test('portrait 4K specials name the measured resolution and retain confirmed SDR in the suffix', () => {
   const n = naming({ title: '毛雪汪', season: 0, episode: 171, year: 2021,
     episodeTitle: '购物车：便携养生好物分享' })
   const specs = media({ width: 2160, height: 3840, fps: 60000 / 1001,
     audio: { status: 'confirmed', codec: 'eac3', channels: 2 } })
   expect(completedFilename(n, specs))
-    .toBe('毛雪汪.S00E171.购物车.便携养生好物分享.2021.2160p.TX.WEB-DL.60fps.HEVC.DDP.2.0-WF.mkv')
+    .toBe('毛雪汪.S00E171.购物车.便携养生好物分享.2021.2160p.TX.WEB-DL.SDR.60fps.HEVC.DDP.2.0-WF.mkv')
   expect(completedFilename(n, media({ width: 1080, height: 1920, fps: 25 })))
-    .toEndWith('.2021.1080p.TX.WEB-DL.HEVC.AAC.2.0-WF.mkv')
+    .toEndWith('.2021.1080p.TX.WEB-DL.SDR.HEVC.AAC.2.0-WF.mkv')
 })
 
 test('IQ movies and episodes use the platform tag and actual default audio without guessed premium markers', () => {
@@ -50,9 +50,9 @@ test('IQ movies and episodes use the platform tag and actual default audio witho
   expect(source).toBe('IQ')
   expect(completedFilename(naming({ kind: 'movie', title: '电影', source }), media({
     width: 1920, height: 808, audio: { status: 'confirmed', codec: 'eac3', channels: 6 },
-  }))).toBe('电影.2026.1080p.IQ.WEB-DL.HEVC.DDP.5.1-WF.mkv')
+  }))).toBe('电影.2026.1080p.IQ.WEB-DL.SDR.HEVC.DDP.5.1-WF.mkv')
   expect(completedFilename(naming({ title: '节目', season: 2, episode: 12, episodeTitle: '团圆', source }), media()))
-    .toBe('节目.S02E12.团圆.2026.2160p.IQ.WEB-DL.HEVC.AAC.2.0-WF.mkv')
+    .toBe('节目.S02E12.团圆.2026.2160p.IQ.WEB-DL.SDR.HEVC.AAC.2.0-WF.mkv')
 })
 
 test('domestic IQ uses IQIYI and actual video/default audio specs for movies and specials', () => {
@@ -60,12 +60,12 @@ test('domestic IQ uses IQIYI and actual video/default audio specs for movies and
   expect(source).toBe('IQIYI')
   expect(completedFilename(naming({ source, season: 0, episode: 298, episodeTitle: '特别篇' }), media({
     width: 1920, height: 808, codec: 'h264', fps: 25, audio: { status: 'confirmed', codec: 'aac', channels: 2 },
-  }))).toBe('节目.S00E298.特别篇.2026.1080p.IQIYI.WEB-DL.AVC.AAC.2.0-WF.mkv')
+  }))).toBe('节目.S00E298.特别篇.2026.1080p.IQIYI.WEB-DL.SDR.AVC.AAC.2.0-WF.mkv')
   expect(completedFilename(naming({ source, kind: 'movie', title: '电影', container: 'mp4' }), media({
     fps: 60000 / 1001, dynamicRange: 'DV', audio: { status: 'confirmed', codec: 'eac3', channels: 6 },
   }))).toBe('电影.2026.2160p.IQIYI.WEB-DL.DV.60fps.HEVC.DDP.5.1-WF.mp4')
   expect(completedFilename(naming({ source }), media({ audio: { status: 'ambiguous' } })))
-    .toBe('节目.S01E01.2026.2160p.IQIYI.WEB-DL.HEVC-WF.mkv')
+    .toBe('节目.S01E01.2026.2160p.IQIYI.WEB-DL.SDR.HEVC-WF.mkv')
   expect(sourceTag('iq')).toBe('IQ')
 })
 
@@ -74,7 +74,7 @@ test('long Chinese subtitles retain the measured suffix without creating directo
   const result = completedFilename(n, media({ audio: { status: 'confirmed', codec: 'dts', channels: 6 } }))
   expect(Buffer.byteLength(result)).toBeLessThanOrEqual(240)
   expect(result).toContain('.S01E01.')
-  expect(result).toEndWith('.2026.2160p.TX.WEB-DL.HEVC.DTS.5.1-WF.mp4')
+  expect(result).toEndWith('.2026.2160p.TX.WEB-DL.SDR.HEVC.DTS.5.1-WF.mp4')
   expect(result).not.toMatch(/[\/\\\x00-\x1f]/)
   expect(result).not.toContain('�')
 })
@@ -89,7 +89,7 @@ test('domestic EDR and EDR 10bit follow the actual download-plan video ID and oc
     expect(evidence).toEqual({ marker: 'EDR', stream: edr.id, evidence: 'download_plan' })
     expect(JSON.stringify(evidence)).not.toContain('SECRET')
     expect(completedFilename(naming({ source: sourceTag('iqcn') }), media({ fps: 60 }), evidence.marker))
-      .toBe('节目.S01E01.2026.2160p.IQIYI.WEB-DL.EDR.60fps.HEVC.AAC.2.0-WF.mkv')
+      .toBe('节目.S01E01.2026.2160p.IQIYI.WEB-DL.EDR.SDR.60fps.HEVC.AAC.2.0-WF.mkv')
     expect(completedFilename(naming({ source: sourceTag('iqcn'), kind: 'movie', title: '电影', container: 'mp4' }),
       media({ dynamicRange: 'HDR', fps: 25, audio: { status: 'confirmed', codec: 'eac3', channels: 6 } }), evidence.marker))
       .toBe('电影.2026.2160p.IQIYI.WEB-DL.EDR.HDR.HEVC.DDP.5.1-WF.mp4')
@@ -198,7 +198,7 @@ test('finalization reads specs once, archives the final path and handles probe f
     writeFileSync(file, 'finished-video')
     const probe = async () => { calls++; return media() }
     const named = await finalizeCompletedName(file, naming(), {}, undefined, probe)
-    expect(named.output).toEndWith('-WF.mp4')
+    expect(named.output).toEndWith('.SDR.HEVC.AAC.2.0-WF.mp4')
     const actual = tencentActualVersion({}, '', 'default', {}, 'vid')
     const record = await finishedVersionRecord(named.output, actual, undefined, named.media)
     const archive = join(root, 'records.jsonl')

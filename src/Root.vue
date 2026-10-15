@@ -41,7 +41,8 @@ import QualityScene from './scenes/QualityScene.vue'
 import ResultsScene from './scenes/ResultsScene.vue'
 import SearchScene from './scenes/SearchScene.vue'
 import SettingsScene from './scenes/SettingsScene.vue'
-import SetupScene from './scenes/SetupScene.vue'
+import SetupScene from './integrations/plutofish/TuiSetup.vue'
+import { connectionSecretKey, isConnectionSecret } from './integrations/plutofish/tui-input.ts'
 import TmdbScene from './scenes/TmdbScene.vue'
 import WorkspaceScene from './scenes/WorkspaceScene.vue'
 import { chipChunks, colsLine, ink } from './lib/rows'
@@ -84,7 +85,7 @@ watch(
   },
 )
 watch(
-  () => state.value.hostFocused,
+  () => state.value.connectionForm?.field ?? state.value.hostFocused,
   () => {
     if (state.value.scene !== 'setup') return
     queueMicrotask(() => setupScene.value?.focus?.())
@@ -121,6 +122,9 @@ watch(edit, (value) => {
 })
 
 onPaste((event) => {
+  if (isConnectionSecret(state.value)) {
+    bridge.set('connectionSecretAppend', decodePasteBytes(event.bytes)); event.preventDefault(); return
+  }
   if (state.value.scene === 'edit' && state.value.editField === 'IQ 登录密码') {
     bridge.set('secretAppend', decodePasteBytes(event.bytes)); event.preventDefault()
   }
@@ -132,6 +136,7 @@ onKeyDown((event) => {
     exit()
     return
   }
+  if (connectionSecretKey(state.value, event, (field, value) => bridge.set(field, value))) { event.preventDefault(); return }
   if (state.value.scene === 'edit' && state.value.editField === 'IQ 登录密码') {
     if (['enter', 'return', 'escape', 'esc'].includes(name)) bridge.key(event.name)
     else if (name === 'backspace') bridge.set('secretBackspace', '')
@@ -337,8 +342,8 @@ const hints = computed((): Array<[string, string]> => {
     if (state.value.tmdbState === 'error' || !state.value.tmdbHits?.length)
       return [['r', '重试'], ['s', '跳过'], ['esc', '返回画质']]
   }
-  if (state.value.scene === 'confirm' && state.value.canSelectTmdbSeason)
-    return [['⏎', '加入队列'], ['t', 'TMDB 季号'], ['o', '改目录'], ['esc', '返回画质']]
+  if (state.value.scene === 'confirm')
+    return [['⏎', '加入队列'], ['c', '发布分类'], ...(state.value.canSelectTmdbSeason ? [['t', 'TMDB 季号'] as [string, string]] : []), ['o', '改目录'], ['esc', '返回画质']]
   if (state.value.scene === 'quality' && !audios.value.length)
     return [
       ['⏎', '继续'],
@@ -360,7 +365,7 @@ const hints = computed((): Array<[string, string]> => {
   return HINTS[state.value.scene] ?? []
 })
 const globalHints = computed(() =>
-  state.value.scene === 'setup' ? GLOBAL_HINTS.slice(0, 1) : GLOBAL_HINTS,
+  state.value.scene === 'setup' ? [] : GLOBAL_HINTS,
 )
 
 // --- header ---------------------------------------------------------------
@@ -516,7 +521,7 @@ const headerLine = computed(() =>
         v-else-if="state.scene === 'setup'"
         ref="setupScene"
         v-model:host="host"
-        v-model:api-key="key"
+        @field="(field, value) => bridge.set(field, value)"
         :state="state"
         :width="bodyW"
       />
