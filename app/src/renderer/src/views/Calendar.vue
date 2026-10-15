@@ -490,7 +490,7 @@ const subline = computed(() => {
 .date.on .dt { background: var(--on-orange) !important; opacity: .7; }
 .date.on .dt.x { opacity: .3; }
 .date.none:not(.on) { background: color-mix(in srgb, var(--card) 50%, transparent); }
-.date.none .s { color: var(--ink-3); }
+.date.none:not(.on) .s { color: var(--ink-3); }
 
 .fold-w { display: flex; flex-direction: column; }
 .fold { border: 1px dashed var(--line-2); border-radius: var(--ui-radius-md); padding: 10px 14px; color: var(--ink-2); display: flex; justify-content: space-between; align-items: center; font-weight: 650; font-size: 13px; background: transparent; cursor: pointer; text-align: left; }

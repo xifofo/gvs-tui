@@ -68,12 +68,10 @@ onBeforeUnmount(() => { revision++ })
   <div v-if="allowed('appletvplus')" class="provider-account">
     <h3>Apple TV · 账号登录</h3>
     <p>粘贴官网的媒体令牌或完整 Cookie，选择你的 Apple 账号地区。</p>
-    <label><span>账号地区</span><select v-model="appleCountry" class="input"><option value="hk">香港</option><option value="tw">台湾</option><option value="jp">日本</option><option value="us">美国</option><option value="gb">英国</option><option value="au">澳大利亚</option><option value="ca">加拿大</option></select></label>
-    <a class="btn sm" :href="`https://tv.apple.com/${appleCountry}`" target="_blank" rel="noopener noreferrer">打开 Apple TV 官网</a>
-    <textarea v-model="cookie" autocomplete="off" spellcheck="false" placeholder="媒体令牌（0. 开头）或完整 Cookie" />
+    <div class="controls"><label class="grow"><span>账号地区</span><select v-model="appleCountry" class="input" aria-label="Apple 账号地区"><option value="hk">香港</option><option value="tw">台湾</option><option value="jp">日本</option><option value="us">美国</option><option value="gb">英国</option><option value="au">澳大利亚</option><option value="ca">加拿大</option></select></label><a class="btn sm" :href="`https://tv.apple.com/${appleCountry}`" target="_blank" rel="noopener noreferrer">打开 Apple TV 官网</a></div>
+    <textarea v-model="cookie" class="input" aria-label="本人 Apple TV 媒体令牌或 Cookie，仅本次提交" autocomplete="off" spellcheck="false" placeholder="媒体令牌（0. 开头）或完整 Cookie" />
     <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'appletvplus',op:'import',cookie,country:appleCountry})">导入登录态</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'appletvplus',op:'logout'})">退出</button></div>
-    <input v-model="appleVerifyID" autocomplete="off" placeholder="单集或电影 ID：umc.cmc.…" />
-    <button class="btn sm" :disabled="busy || !appleVerifyID.trim()" @click="command({provider:'appletvplus',op:'verify',id:appleVerifyID.trim()})">验证播放权益</button>
+    <div class="controls"><input v-model="appleVerifyID" class="input" autocomplete="off" aria-label="单集或电影 ID" placeholder="单集或电影 ID：umc.cmc.…" /><button class="btn sm" :disabled="busy || !appleVerifyID.trim()" @click="command({provider:'appletvplus',op:'verify',id:appleVerifyID.trim()})">验证播放权益</button></div>
     <p v-if="views.appletvplus" aria-live="polite">{{ views.appletvplus.summary }}</p>
   </div>
   <div v-for="terminal in allowed('migu') ? (['mobile','tv'] as const) : []" :key="terminal" class="provider-account">
@@ -196,5 +194,5 @@ onBeforeUnmount(() => { revision++ })
 .provider-account{padding:4px 0 14px}
 h3{font-size:14px;margin:0 0 10px} p{font-size:12px;line-height:1.65;opacity:.8;overflow-wrap:anywhere}
 .controls{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.controls .input{width:auto;min-width:150px;flex:1}
-textarea{min-height:80px;margin:10px 0} strong{display:block;margin:10px 0}label{display:flex;align-items:center;gap:12px}label span{white-space:nowrap;flex-shrink:0}label select{min-width:0;flex:1}
+textarea{min-height:80px;margin:10px 0} strong{display:block;margin:10px 0}label{display:flex;align-items:center;gap:12px}.controls label.grow{flex:1;min-width:200px}label span{white-space:nowrap;flex-shrink:0}label select{min-width:0;flex:1}
 </style>

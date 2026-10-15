@@ -11,13 +11,13 @@ const ROWS: Row[] = [
     system: 'widevine',
     title: 'Widevine 设备文件',
     ext: '.wvd',
-    desc: 'friDay影音、HamiVideo、LINE TV、Disney+ 获取内容密钥时使用。支持 L1 / L3；Disney+ 高画质需要 L1。',
+    desc: 'friDay影音、HamiVideo、LINE TV、Disney+、Apple TV 获取内容密钥时使用。支持 L1 / L3；Disney+ 高画质与 Apple TV 4K / HDR 需要 L1。',
   },
   {
     system: 'playready',
     title: 'PlayReady 设备文件',
     ext: '.prd',
-    desc: 'Apple TV 下载时使用。支持 SL150 / SL2000 / SL3000，等级由网关读取文件得出。',
+    desc: 'Apple TV 下载时使用（同时上传 .wvd 时优先使用 .prd）。支持 SL150 / SL2000 / SL3000，等级由网关读取文件得出。',
   },
 ]
 

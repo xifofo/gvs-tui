@@ -416,7 +416,8 @@ const plat = (p: Provider) => hasProvider(p)
 .tab.on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--orange); margin-right: 8px; vertical-align: 2px; box-shadow: 0 0 8px rgb(var(--ui-accent-channel) / 70%); }
 .panel { flex-grow: 1; min-width: 0; max-width: 760px; }
 .card { overflow: hidden; }
-.card > .h2s { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
+/* :deep so the rule also reaches cards rendered by child components (设备文件、下载钩子). */
+.card > :deep(.h2s) { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
 .small { font-size: 13px; }
 .row { display: flex; align-items: center; gap: 8px; }
 .acct { display: flex; align-items: center; gap: 8px; }
