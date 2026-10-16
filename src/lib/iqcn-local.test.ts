@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, copyFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, copyFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { downloadIQCNLocalSegment, iqcnProcessing, restoreIQCNLocal, type IQCNLocalRuntime } from './iqcn-local.ts'
@@ -117,4 +117,35 @@ test('installed local helper rejects invalid material without overwriting output
   writeFileSync(dest, 'existing')
   await expect(restoreIQCNLocal(source, dest, material)).rejects.toThrow('还原失败')
   expect(readFileSync(dest, 'utf8')).toBe('existing')
+})
+
+
+test('explicit cleartext plans allow empty tickets; protected and unknown streams still require material', () => {
+  const plan = { transport: 'local-v1', localProcessing: { version: 1, ticket: '', identity: 'fixture' }, video: { drmType: 1 } }
+  expect(iqcnProcessing(plan)).toEqual({ version: 1, ticket: '', identity: 'fixture', drmType: 1 })
+  expect(iqcnProcessing({ ...plan, localProcessing: material, video: { drmType: 5 } })).toEqual(material)
+  for (const drmType of [undefined, 0, 5, 99, '1', null]) {
+    expect(() => iqcnProcessing({ ...plan, video: { drmType } })).toThrow('同步更新')
+  }
+  for (const override of [
+    { transport: 'legacy' },
+    { localProcessing: { ...plan.localProcessing, version: 2 } },
+    { localProcessing: { ...plan.localProcessing, identity: '' } },
+    { localProcessing: undefined },
+  ]) expect(() => iqcnProcessing({ ...plan, ...override })).toThrow('同步更新')
+})
+
+test('ticketless cleartext plan downloads through the installed helper and removes temporary files', async () => {
+  const work = mkdtempSync(join(tmpdir(), 'iqcn-cleartext-'))
+  try {
+    const bytes = Buffer.alloc(188 * 2)
+    for (let i = 0; i < bytes.length; i += 188) { bytes[i] = 0x47; bytes[i + 3] = 0x10 }
+    const processing = iqcnProcessing({ transport: 'local-v1', localProcessing: { version: 1, ticket: '', identity: 'fixture' }, video: { drmType: 1 } })
+    const cli = { invoke: async () => ({ transport: 'local-v1', index: 0, bytes: bytes.length, urls: ['https://fixture.ptqy.gitv.tv/media'] }) } as unknown as GwClient
+    const result = await downloadIQCNLocalSegment(cli, 'plan', 0, bytes.length, processing, work, undefined, {
+      fetch: async () => new Response(bytes), restore: restoreIQCNLocal,
+    })
+    expect(result.equals(bytes)).toBe(true)
+    expect(readdirSync(work)).toEqual([])
+  } finally { rmSync(work, { recursive: true, force: true }) }
 })

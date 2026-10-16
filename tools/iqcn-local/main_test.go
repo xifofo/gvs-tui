@@ -105,3 +105,58 @@ func TestPairedSampleAndLargeLocalSegment(t *testing.T) {
 		}
 	}
 }
+
+func TestTicketlessCleartext(t *testing.T) {
+	packet := make([]byte, 188)
+	packet[0], packet[3] = 0x47, 0x10
+	for _, tc := range []struct {
+		name     string
+		drmType  int
+		identity string
+		data     []byte
+		wantOK   bool
+	}{
+		{"explicit cleartext", 1, "fixture", packet, true},
+		{"protected", 5, "fixture", packet, false},
+		{"unknown", 99, "fixture", packet, false},
+		{"missing type", 0, "fixture", packet, false},
+		{"missing identity", 1, "", packet, false},
+		{"truncated", 1, "fixture", packet[:187], false},
+		{"empty", 1, "fixture", nil, false},
+		{"invalid sync", 1, "fixture", make([]byte, 188), false},
+		{"scrambled", 1, "fixture", append([]byte{0x47, 0, 0, 0x90}, packet[4:]...), false},
+		{"transport error", 1, "fixture", append([]byte{0x47, 0x80, 0, 0x10}, packet[4:]...), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			source, dest := filepath.Join(dir, "source.ts"), filepath.Join(dir, "output.ts")
+			if err := os.WriteFile(source, tc.data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			req := request{Version: 1, DRMType: tc.drmType, Identity: tc.identity, Source: source, Destination: dest}
+			got, err := process(req)
+			if !tc.wantOK {
+				if err == nil {
+					t.Fatal("invalid cleartext accepted")
+				}
+				if _, err := os.Stat(dest); !os.IsNotExist(err) {
+					t.Fatal("failed processing created output")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.ClearCandidate || got.Restored || got.Version != 1 || got.Bytes != len(tc.data) {
+				t.Fatalf("invalid report: %+v", got)
+			}
+			output, err := os.ReadFile(dest)
+			if err != nil || !bytes.Equal(output, tc.data) {
+				t.Fatal("cleartext bytes changed")
+			}
+			if _, err := process(req); err == nil {
+				t.Fatal("existing output overwritten")
+			}
+		})
+	}
+}

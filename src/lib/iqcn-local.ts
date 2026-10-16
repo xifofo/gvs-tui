@@ -7,7 +7,7 @@ import { iqcnLocalPath } from './tool-paths.ts'
 import { asString, isObj } from './util.ts'
 import { iqcnSegmentDescriptor } from './iqcn-control.ts'
 
-export type IQCNProcessing = { version: number; ticket: string; identity: string }
+export type IQCNProcessing = { version: number; ticket: string; identity: string; drmType?: 1 }
 export type IQCNSegmentTiming = { index:number; bytes:number; descriptorMs:number; networkMs:number; restoreMs:number; readMs:number; totalMs:number; descriptorRequests:number; fetchAttempts:number }
 type LocalResult = { version: number; bytes: number; restored: boolean; clearCandidate: boolean }
 export type IQCNLocalRuntime = {
@@ -33,10 +33,13 @@ export function iqcnRestoreReason(stderr: string): string {
 
 export function iqcnProcessing(plan: Record<string, unknown>): IQCNProcessing {
   const value = isObj(plan.localProcessing) ? plan.localProcessing : {}
-  if (plan.transport !== 'local-v1' || value.version !== 1 || !asString(value.ticket) || !asString(value.identity)) {
+  const ticket = asString(value.ticket).trim()
+  const cleartext = isObj(plan.video) && plan.video.drmType === 1
+  if (plan.transport !== 'local-v1' || value.version !== 1 || (!ticket && !cleartext) || !asString(value.identity)) {
     throw new Error('爱奇艺国内版网关未提供本地下载协议，请同步更新网关和 App')
   }
-  return { version: 1, ticket: asString(value.ticket), identity: asString(value.identity) }
+  // An empty ticket is valid only with the gateway's explicit cleartext DRM type.
+  return { version: 1, ticket, identity: asString(value.identity), ...(!ticket && cleartext ? { drmType: 1 as const } : {}) }
 }
 
 function mediaURL(raw: unknown): string {
