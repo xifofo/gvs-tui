@@ -6,6 +6,7 @@ const props = defineProps<{ jobId?: number }>()
 defineEmits<{ close: [] }>()
 const rows = ref<TencentDiagnostic[]>([]), loading = ref(false), error = ref('')
 const labels: Record<string,string> = {
+  qimei_registration_unverified:'注册响应未确认，未保存身份', qimei_response_invalid:'注册响应格式无法确认', qimei_response_decryption_failed:'注册响应解密未通过', qimei_identity_not_issued:'响应未包含可确认的设备身份', qimei_identity_ambiguous:'响应中的设备身份字段不唯一',
   profile_generated:'画像已自动生成（未发送）', profile_generated_incomplete:'基础画像已自动生成，部分资料待补齐', profile_generation_unavailable:'画像生成暂不可用', profile_observed_retained:'继续使用当前账号的有效画像',
   qimei_profile_incomplete:'注册资料尚未完整', qimei_profile_generated:'注册资料已自动生成', qimei_profile_prepared:'注册请求已准备好，接收结果未确认', qimei_profile_unavailable:'注册资料暂不可用', qimei_identity_registered:'当前设备的注册身份已保存',
   request_completed:'请求完成（不代表风控通过）', request_error:'请求失败', risk_rejected:'风险拒绝',

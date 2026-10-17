@@ -105,7 +105,29 @@ export class TencentOperations {
       const result = delivery as Record<string, unknown>
       if (result.stop === true) {
         const uncertain = result.delivery_unknown === true
-        writeTencentDiagnostic(this.scope, { flow: root.flow, operation: '', job: this.jobID, action: 'qimei', phase: 'delivery', status: uncertain ? 'delivery_unknown' : 'rejected', decision: uncertain ? 'no_automatic_resend' : 'stop_flow' })
+        const unverified = result.status === 'registration_response_unverified'
+          || result.status === 'blocked' && String(result.service_code) === '0'
+        const response = result.response_diagnostics
+        const diagnostic = response && typeof response === 'object' && !Array.isArray(response)
+          ? response as Record<string, unknown> : undefined
+        const responseStatuses: Record<string, string> = {
+          invalid_envelope_or_payload: 'qimei_response_invalid',
+          decryption_failed: 'qimei_response_decryption_failed',
+          identity_not_issued: 'qimei_identity_not_issued',
+          identity_ambiguous: 'qimei_identity_ambiguous',
+        }
+        const responseStatus = typeof diagnostic?.failure === 'string' ? responseStatuses[diagnostic.failure] : undefined
+        writeTencentDiagnostic(this.scope, {
+          flow: root.flow, operation: '', job: this.jobID, action: 'qimei', phase: 'delivery',
+          status: uncertain ? 'delivery_unknown' : unverified ? 'qimei_registration_unverified' : 'rejected',
+          decision: uncertain || unverified ? 'no_automatic_resend' : 'stop_flow',
+          ...(typeof result.http_status === 'number' ? { httpStatus: result.http_status } : {}),
+          ...(String(result.service_code ?? '').match(/^[0-9.]{1,16}$/) ? { code: String(result.service_code) } : {}),
+        })
+        if (unverified && responseStatus) writeTencentDiagnostic(this.scope, {
+          flow: root.flow, operation: '', job: this.jobID, action: 'qimei', phase: 'response',
+          status: responseStatus, decision: 'no_automatic_resend',
+        })
       }
     }
   }

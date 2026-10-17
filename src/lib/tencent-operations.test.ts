@@ -221,3 +221,40 @@ for (const unknown of [false, true]) {
     expect(calls.some(input => input.report_type === 'observe')).toBe(false)
   })
 }
+
+for (const scenario of [
+  {failure:'identity_not_issued',expected:'qimei_identity_not_issued'},
+  {failure:'decryption_failed',expected:'qimei_response_decryption_failed'},
+  {failure:'invalid_envelope_or_payload',expected:'qimei_response_invalid'},
+  {failure:'identity_ambiguous',expected:'qimei_identity_ambiguous'},
+  {failure:'PRIVATE_UNKNOWN_CAUSE',expected:undefined},
+]) {
+  test(`code-zero registration remains unverified with safe failure ${scenario.expected || 'unknown'}`,async()=>{
+    const previous=process.env.GVS_TENCENT_DIAGNOSTICS_PATH
+    const dir=mkdtempSync(join(tmpdir(),'tx-response-diagnostics-'))
+    const file=join(dir,'diagnostics.jsonl');process.env.GVS_TENCENT_DIAGNOSTICS_PATH=file
+    let calls=0
+    try{
+      const tracker=new TencentOperations(async()=>{
+        calls++
+        return {binding:'opaque',status:'registration_response_unverified',stop:true,adprofile:{generated:true,complete:false,qimei_registration:{generated:true,complete:true,payload_generated:true,cipher_generated:true,ready_to_send:true},registration_delivery:{status:'registration_response_unverified',stop:true,http_status:200,service_code:'0',response_diagnostics:{failure:scenario.failure,plain:'PRIVATE_RESPONSE',key:'PRIVATE_KEY'}}}}
+      },()=>{},'',undefined,'unverified-response-scope')
+      await expect(tracker.begin('detail',{cid:'cover'})).rejects.toThrow()
+      const rows=readTencentDiagnostics('unverified-response-scope')
+      const delivery=rows.find(r=>r.phase==='delivery')
+      expect(delivery?.status).toBe('qimei_registration_unverified')
+      expect(delivery?.decision).toBe('no_automatic_resend')
+      expect(delivery?.code).toBe('0');expect(delivery?.httpStatus).toBe(200)
+      if(scenario.expected)expect(rows.some(r=>r.phase==='response'&&r.status===scenario.expected)).toBe(true)
+      else expect(rows.filter(r=>r.phase==='response')).toHaveLength(0)
+      expect(rows.some(r=>r.phase==='delivery'&&r.status==='rejected')).toBe(false)
+      expect(readFileSync(file,'utf8')).not.toContain('PRIVATE_')
+      await expect(tracker.begin('play',{vid:'episode'})).rejects.toThrow('stopped')
+      expect(calls).toBe(1)
+    }finally{
+      if(previous===undefined)delete process.env.GVS_TENCENT_DIAGNOSTICS_PATH
+      else process.env.GVS_TENCENT_DIAGNOSTICS_PATH=previous
+      rmSync(dir,{recursive:true,force:true})
+    }
+  })
+}
