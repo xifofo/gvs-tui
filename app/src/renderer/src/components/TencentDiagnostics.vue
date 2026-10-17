@@ -6,12 +6,15 @@ const props = defineProps<{ jobId?: number }>()
 defineEmits<{ close: [] }>()
 const rows = ref<TencentDiagnostic[]>([]), loading = ref(false), error = ref('')
 const labels: Record<string,string> = {
+  profile_generated:'画像已自动生成（未发送）', profile_generated_incomplete:'基础画像已自动生成，部分资料待补齐', profile_generation_unavailable:'画像生成暂不可用', profile_observed_retained:'继续使用当前账号的有效画像',
+  qimei_profile_incomplete:'注册资料尚未完整', qimei_profile_generated:'注册资料已自动生成', qimei_profile_prepared:'注册请求已准备好，接收结果未确认', qimei_profile_unavailable:'注册资料暂不可用', qimei_identity_registered:'当前设备的注册身份已保存',
   request_completed:'请求完成（不代表风控通过）', request_error:'请求失败', risk_rejected:'风险拒绝',
   binding_invalid:'绑定失效', rate_limited:'请求限频', rejected:'请求被拒绝', stopped_locally:'已在本机停止',
   observed_locally:'网关已记录本地观测', local_only_gateway_source_unsupported:'Electron 本地观测（网关尚未支持该来源）',
   unverified_response:'收到响应，尚未证实接受', delivery_unknown:'送达情况不确定', preview:'仅预览，未发送', disabled:'上报关闭', incomplete:'字段不足，未发送',
   stop_flow:'停止当前流程', reauth_required:'检查登录后重新操作', no_automatic_resend:'不自动重发',
   qimei_decrypted_unverified:'响应已解密，业务结果未确认', native_crypto_only:'已验证密码处理',
+  local_only_gateway_action_unsupported:'当前网关未提供操作记录接口', local_only_reporting_unavailable:'操作记录服务暂不可用，已保留本机诊断',
   inspect_error:'检查错误', local_observation:'仅观测记录', local_only:'仅本地记录', not_acceptance_proof:'不能据此认定接受', continue:'继续当前流程',
 }
 let generation = 0
@@ -28,7 +31,7 @@ watch(() => String(props.jobId ?? '') + ':' + (store.state?.accountScope || ((st
   <section class="diagnostics card" aria-label="腾讯风控处理日志">
     <div class="heading"><h3>腾讯诊断{{ jobId === undefined ? ' · 当前账号' : ' · 任务 ' + jobId }}</h3><button class="btn sm" :disabled="loading" @click="refresh">刷新</button><button class="btn sm" @click="$emit('close')">关闭</button></div>
     <p>本地观测 ≠ 已向腾讯发送；HTTP 200 ≠ 风控接受。不包含 Cookie、绑定令牌、设备凭据、媒体地址或内容密钥。</p>
-    <p>操作观测：{{ store.state?.settings.tencentObservations ? '已开启，支持此来源的网关会接收真实桌面进程指标' : '未开启，可在账号设置中开启' }}。原生事件：{{ store.state?.settings.tencentNativeEventFile ? ({ off: '关闭', preview: '跟随业务操作预览', send: '发送尚未投递事件；镜像仅预览' })[store.state.settings.tencentNativeEventMode || 'preview'] : '未配置实际生产者' }}。</p>
+    <p>操作记录随当前 TV 账号自动处理，无需配置。这里只显示诊断结果。</p>
     <p v-if="error" class="error-box">{{ error }}</p>
     <p v-else-if="loading" aria-live="polite">正在读取当前账号诊断…</p>
     <p v-else-if="!rows.length">暂无诊断记录。不会为了生成日志自动发送取流或上报请求。</p>

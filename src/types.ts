@@ -96,7 +96,7 @@ export type StatusKind = 'info' | 'ok' | 'warn' | 'err'
 /** 会员状态的来源：接口（网页 Cookie）/ 扫码时的快照 / 未知。 */
 export type VipSource = 'api' | 'login' | 'none'
 
-/** `play` 出来的真实取流结果——判断「这个账号现在到底能不能看 VIP」比会员接口可信。 */
+/** Per-title playback response; its isVip flag never certifies current account product membership. */
 export type VipProbe = {
   canPlay: boolean
   isVip: boolean
@@ -136,6 +136,8 @@ export type Snapshot = {
    * 会员那几个 mtop 接口报 SESSION_EXPIRED 只是「查不到会员」，不是掉登录。
    */
   ykAccount?: {
+    membership?: import('./lib/youku-membership.ts').YoukuMembership
+    loginUnknown?: boolean
     loggedIn: boolean
     needsScan: boolean
     nick: string

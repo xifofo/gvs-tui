@@ -5,12 +5,15 @@
 // `revoke` 作废。TUI 之前只在请求头里塞 Yk-Sign，从来没刷新过，
 // 于是 token 一过期就表现为「重启就失效」。
 import type { GwClient } from './client.ts'
+import { parseYoukuMembership, youkuMembershipText, type YoukuMembership } from './youku-membership.ts'
 import { userMessage, errorCode } from './user-message.ts'
 import type { VipProbe, VipSource } from '../types.ts'
 import { anyInt, asBool, asString, isObj } from './util.ts'
 
 export type YkLogin = {
   ok: boolean
+  /** Authoritative expiry, distinct from a temporary status-query failure. */
+  needsRelogin?: boolean
   uid: string
   nick: string
   vip: boolean
@@ -29,9 +32,11 @@ export type YkRefresh = { refreshed: boolean; needsRelogin: boolean; hint: strin
 export type YkAccount = {
   /** 网关侧 App 会话可用（search / play 靠它）。 */
   loggedIn: boolean
+  loginUnknown?: boolean
+  membership?: YoukuMembership
   /** 只有它为真才需要重新扫码。 */
   needsScan: boolean
-  /** 会员状态的可信度：api=会员接口查到了；login=只有扫码时的快照；none=不知道。 */
+  /** 会员状态的可信度：api=当前产品记录；none=未知。登录快照不提升会员状态。 */
   vipSource: VipSource
   isVip: boolean
   vipUntil: string
@@ -43,87 +48,6 @@ export type YkAccount = {
   method: string
   riskLevel: string
   hint: string
-}
-
-/** 递归找 SESSION_EXPIRED 标记。 */
-function hasSessionExpired(node: unknown): boolean {
-  if (!isObj(node)) return false
-  const ret = node.ret
-  if (Array.isArray(ret) && ret.some((r) => typeof r === 'string' && /SESSION_EXPIRED|Session过期/i.test(r))) return true
-  return Object.values(node).some((v) => hasSessionExpired(v))
-}
-
-function subApiOk(profile: unknown): boolean {
-  if (!isObj(profile)) return false
-  for (const v of Object.values(profile)) {
-    if (!isObj(v)) continue
-    if (hasSessionExpired(v)) continue
-    if (!Array.isArray(v.ret)) continue
-    if (v.ret.length === 0) return true
-    if (v.ret.some((ret) => typeof ret === 'string' && /^(SUCCESS|SUCCESS::)|调用成功/i.test(ret))) return true
-  }
-  return false
-}
-
-type ProfileMembership = { isVip: boolean; vipUntil: string }
-
-/**
- * 会员接口的几代返回字段并不统一；只在已经判定为成功的 profile.data 下找
- * 明确的会员布尔值或未来到期时间，避免把 ret/error 文本误判成权益。
- */
-function profileMembership(profile: unknown, now = Date.now()): ProfileMembership {
-  let isVip = false
-  let latest = 0
-  const seen = new Set<unknown>()
-
-  const walk = (node: unknown): void => {
-    if (node === null || node === undefined || seen.has(node)) return
-    if (Array.isArray(node)) {
-      seen.add(node)
-      for (const item of node) walk(item)
-      return
-    }
-    if (!isObj(node)) return
-    seen.add(node)
-    for (const [key, value] of Object.entries(node)) {
-      const norm = key.replace(/[^a-z0-9]/gi, '').toLowerCase()
-      if (['isvip', 'vip', 'ismember', 'memberactive', 'isactive'].includes(norm) && boolish(value)) {
-        isVip = true
-      }
-      if (['endtime', 'expiretime', 'expiresat', 'expireat', 'vipexpiretime', 'vipendtime'].includes(norm)) {
-        const at = membershipTime(value)
-        if (at > latest) latest = at
-      }
-      walk(value)
-    }
-  }
-
-  if (isObj(profile)) {
-    for (const row of Object.values(profile)) {
-      if (!isObj(row) || hasSessionExpired(row)) continue
-      const ret = Array.isArray(row.ret) ? row.ret : []
-      const ok = ret.length === 0 || ret.some((v) => typeof v === 'string' && /^(SUCCESS|SUCCESS::)|调用成功/i.test(v))
-      if (ok) walk(row.data)
-    }
-  }
-  if (latest > now) isVip = true
-  return { isVip, vipUntil: latest > 0 ? new Date(latest).toISOString().slice(0, 10) : '' }
-}
-
-function boolish(value: unknown): boolean {
-  return asBool(value) || value === 1
-}
-
-function membershipTime(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value < 10_000_000_000 ? value * 1000 : value
-  if (typeof value !== 'string' || !value.trim()) return 0
-  const raw = value.trim()
-  if (/^\d+$/.test(raw)) {
-    const n = Number(raw)
-    return Number.isFinite(n) ? (n < 10_000_000_000 ? n * 1000 : n) : 0
-  }
-  const parsed = Date.parse(raw)
-  return Number.isFinite(parsed) ? parsed : 0
 }
 
 /**
@@ -142,7 +66,8 @@ export async function ykAccount(cli: GwClient, sign: string): Promise<YkAccount>
     const out = emptyAccount()
     const msg = e instanceof Error ? e.message : String(e)
     out.needsScan = errorCode(e) === 'RELOGIN_REQUIRED' || /invalid Yk-Sign|re-login|relogin|未登录|YOUKU_RELOGIN_REQUIRED|需要重新登录/i.test(msg)
-    out.loggedIn = !out.needsScan
+    out.loggedIn = false
+    out.loginUnknown = !out.needsScan
     out.hint = userMessage(e)
     return out
   }
@@ -154,7 +79,10 @@ export function parseYkAccount(data: Record<string, unknown>): YkAccount {
   const session = isObj(data.session) ? data.session : {}
   const risk = isObj(data.risk) ? data.risk : {}
 
-  out.loggedIn = asBool(summary.logged_in) || asBool(session.logged_in)
+  const expired = asBool(data.needs_relogin) || asBool(summary.needs_relogin) || asBool(session.needs_relogin)
+  const loginFlag = typeof summary.logged_in === 'boolean' ? summary.logged_in : typeof session.logged_in === 'boolean' ? session.logged_in : undefined
+  out.loginUnknown = !expired && loginFlag === undefined
+  out.loggedIn = !expired && loginFlag === true
   out.nick = asString(summary.nick) || asString(session.nick)
   out.uid = asString(summary.uid) || asString(session.uid)
   out.ytid = asString(summary.ytid) || asString(session.ytid)
@@ -163,24 +91,14 @@ export function parseYkAccount(data: Record<string, unknown>): YkAccount {
   out.riskLevel = asString(risk.level) || 'none'
   out.hint = asString(risk.hint)
 
-  if (asBool(summary.membership_known) || subApiOk(data.profile)) {
-    // 新网关直接给标准化 membership_known；旧网关回退解析原始 Profile。
-    const profile = profileMembership(data.profile)
-    out.vipSource = 'api'
-    out.isVip = asBool(summary.is_vip) || profile.isVip
-    const expire = asString(summary.expire_at)
-    out.vipUntil = out.isVip ? (expire ? expire.slice(0, 10) : profile.vipUntil) : ''
-  } else if (asBool(session.yktk_vip) || asBool(summary.is_vip)) {
-    // 扫码时带回来的权益快照：能显示，但别当权威（到期时间看不到）。
-    out.vipSource = 'login'
-    out.isVip = true
-    out.hint = '会员到期查看需网页 Cookie（扫码登录（网页 Cookie 接口仅作内部续期））'
-  } else {
-    out.hint = '会员接口需要网页 Cookie（扫码登录（网页 Cookie 接口仅作内部续期））；能不能放看画质页的取流结果'
-  }
+  out.membership = parseYoukuMembership(data)
+  out.vipSource = out.membership.status === 'unknown' ? 'none' : 'api'
+  out.isVip = out.membership.status === 'active'
+  out.vipUntil = out.membership.products.length === 1 ? out.membership.products[0]!.endAt.slice(0,10) : ''
+  if (out.membership.status === 'unknown') out.hint = '已登录不代表会员有效；普通优酷、酷喵和帧享权益尚未确认'
 
   // 有 App 凭证就不算掉登录 —— 会员接口失败与登录态无关。
-  out.needsScan = !out.loggedIn
+  out.needsScan = expired || loginFlag === false
   return out
 }
 
@@ -194,31 +112,20 @@ function emptyAccount(): YkAccount {
 export function accountSummary(acc: YkAccount | null, probe?: VipProbe): string {
   if (!acc) return '检查中…'
   if (acc.needsScan) return '登录态不可用 · 需重新扫码'
+  if (acc.loginUnknown) return '登录状态检查暂不可用 · 会员权益未确认'
   if (!acc.loggedIn) return '未登录 · 需扫码'
   const who = [acc.nick, acc.uid && `uid ${acc.uid}`].filter(Boolean).join(' · ')
-  const how = acc.method ? `已登录(${acc.method})` : '已登录'
-  let vip: string
-  if (acc.vipSource === 'api') {
-    vip = acc.isVip ? (acc.vipUntil ? `会员到期 ${acc.vipUntil}` : '会员') : '账号无会员权益'
-  } else if (probe?.isVip && probe.canPlay && !probe.hasTrial) {
-    // 取流成功且服务端按权益给了全量流 —— 这比会员接口更硬。
-    vip = acc.vipSource === 'login' ? '会员（扫码+取流确认）' : '会员（取流确认）'
-  } else if (probe && !probe.canPlay) {
-    vip = '取流被拒 · 权益待查'
-  } else if (acc.vipSource === 'login' && acc.isVip) {
-    vip = '会员（扫码时确认）'
-  } else {
-    vip = '会员状态未知'
-  }
-  const warn = acc.riskLevel && acc.riskLevel !== 'none' ? ` · 风控 ${acc.riskLevel}` : ''
-  return `${who} · ${how} · ${vip}${warn}`
+  const membership = acc.membership ?? {status:'unknown' as const,products:[]}
+  const playback = probe?.hasTrial ? ' · 当前片源仅能试看' : ''
+  return [who, '已登录', youkuMembershipText(membership)].filter(Boolean).join(' · ') + playback
 }
 
 function view(data: Record<string, unknown>): YkLogin {
   const yk = isObj(data.yktk_fields) ? data.yktk_fields : {}
   return {
-    ok: asBool(data.logged_in) || asBool(data.has_stoken) || anyInt(data.yktk_len) > 0
-      || asString(data.uid) !== '' || asString(data.yktk) !== '' || asBool(yk.vip),
+    ok: !asBool(data.needs_relogin) && data.logged_in !== false && (asBool(data.logged_in) || asBool(data.has_stoken) || anyInt(data.yktk_len) > 0
+      || asString(data.uid) !== '' || asString(data.yktk) !== '' || asBool(yk.vip)),
+    needsRelogin: asBool(data.needs_relogin) || data.logged_in === false,
     uid: asString(data.uid),
     nick: asString(data.nick) || asString(yk.nick) || '',
     vip: asBool(yk.vip) || asBool(data.vip),
@@ -238,14 +145,14 @@ export async function ykLoginInfo(cli: GwClient, sign: string): Promise<YkLogin>
   } catch (e) {
     return {
       ok: false, uid: '', nick: '', vip: false, refreshable: false, createdAt: 0, lastRefreshAt: 0,
-      lastError: '', hint: e instanceof Error ? e.message : String(e),
+      lastError: '', needsRelogin: ['RELOGIN_REQUIRED', 'YOUKU_RELOGIN_REQUIRED'].includes(errorCode(e)), hint: e instanceof Error ? e.message : String(e),
     }
   }
 }
 
 /** 自动续期：旧凭证从未刷新过，或距离上次刷新超过 20 分钟。 */
 export function shouldRefreshYouku(info: YkLogin | null, now = Date.now()): boolean {
-  if (!info?.ok || !info.refreshable) return false
+  if (!info?.ok || info.needsRelogin || !info.refreshable) return false
   if (info.lastRefreshAt > 0) return now - info.lastRefreshAt > 20 * 60_000
   // QR 完成后的最初一分钟不强刷；否则 ptoken 尚未完全落库时可能误报重登。
   return info.createdAt > 0 && now - info.createdAt > 60_000

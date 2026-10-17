@@ -101,12 +101,14 @@ export class GwClient {
 
   private nativeEventSettings() {
     const cfg = this.cfgOf?.()
-    const collect = resolveNativeCollectMode(cfg || {})
+    // External captures and replay templates belong to explicit research runs.
+    // Persisted settings from older releases must not arm them in the App.
+    const collect = process.env.GVS_TENCENT_NATIVE_RESEARCH === '1' ? resolveNativeCollectMode(cfg || {}) : 'off'
     const configured = this.nativeEventFileOverride ?? (cfg?.tencentNativeEventFile?.trim() || '')
     const path = collect === 'off' ? '' : collect === 'fixture' ? (configured || defaultTencentNativeEventPath()) : configured
     return {
       path,
-      mode: (collect === 'off' ? 'off' : (cfg?.tencentNativeEventMode ?? 'preview')) as 'off' | 'preview' | 'send',
+      mode: (collect === 'off' ? 'off' : collect === 'fixture' ? 'preview' : (cfg?.tencentNativeEventMode ?? 'preview')) as 'off' | 'preview' | 'send',
       collect,
       gateway: this.host,
       account: this.accountFor?.('tencent') || GW_DEFAULT_ACCOUNT,
@@ -136,14 +138,14 @@ export class GwClient {
   }
 
   private tencentReportsEnabled(): boolean {
-    const cfg = this.cfgOf?.()
-    const settings = this.nativeEventSettings()
-    return !!(cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1' || settings.path && settings.mode !== 'off')
+    // Automatic for both clients, including configurations saved with the old
+    // opt-in toggle disabled. The environment override is for support runs.
+    return process.env.GVS_TENCENT_OBSERVE !== '0'
   }
 
   private async tencentReport(input: Record<string, unknown>, account = this.accountFor?.('tencent')): Promise<Record<string, unknown>> {
     const extra = account && account !== GW_DEFAULT_ACCOUNT ? { [GW_ACCOUNT_HEADER]: account } : undefined
-    const envelope = await this.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, extra, 10_000)
+    const envelope = await this.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, extra, input.report_type === 'event' ? 10_000 : 2_000)
     return (envelope.data ?? {}) as Record<string, unknown>
   }
 
@@ -272,7 +274,7 @@ export class GwClient {
       (provider === 'tencent' && action === 'play' ? TENCENT_PLAY_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
     if (account && account !== GW_DEFAULT_ACCOUNT) {
       // 账号的凭证已经托管在网关该账号下；别再用全局配置里的 Cookie 头覆盖它
-      const { 'Iq-Cookie': _iq, 'Tx-Cookie': _tx, 'Dy-Cookie': _dy, ...rest } = extra ?? {}
+      const { 'Iq-Cookie': _iq, 'Tx-Cookie': _tx, 'Dy-Cookie': _dy, 'Yk-Sign': _yk, ...rest } = extra ?? {}
       extra = { ...rest, [GW_ACCOUNT_HEADER]: account }
     }
     if (provider === 'douyin' && !extra?.['Dy-Cookie'] && !(account && account !== GW_DEFAULT_ACCOUNT)) {
@@ -285,7 +287,7 @@ export class GwClient {
       if (provider === 'tencent') {
         writeTencentDiagnostic(this.host + String.fromCharCode(0) + this.key, { flow: operation?.root.flow || '', operation: diagnosticOperation, job: this.diagnosticJobID, action, phase: error ? 'error' : 'decision', status: risk.status, decision: risk.decision, httpStatus: risk.httpStatus, code: risk.code })
         const code = risk.code && /^[0-9.]{1,16}$/.test(risk.code) ? risk.code : '-'
-        runLog(`tencent_decision action=${action} source=${this.source} observations=${cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1' ? 'on' : 'off'} job=${this.diagnosticJobID || '-'} status=${risk.status} decision=${risk.decision} code=${code} http=${risk.httpStatus || '-'}`)
+        runLog(`tencent_decision action=${action} source=${this.source} observations=${this.tencentReportsEnabled() ? 'on' : 'off'} job=${this.diagnosticJobID || '-'} status=${risk.status} decision=${risk.decision} code=${code} http=${risk.httpStatus || '-'}`)
       }
       return risk
     }

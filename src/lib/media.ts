@@ -1655,54 +1655,44 @@ export async function youkuAudioURLs(data: Record<string, unknown>, want: string
   return urls
 }
 
-/** Resolve the requested row, or the actual fallback video, once for URL and delivery. */
+/** Resolve only the selected rendition; a refreshed catalogue cannot silently downgrade it. */
 function youkuVideoSelection(data: Record<string, unknown>, want: string): { playlist: string; streamType: string } {
   const [streamType = '', source = ''] = want.split('|')
-  if (want && Array.isArray(data.streams)) {
-    for (const s of data.streams) {
-      if (!isObj(s)) continue
-      if (asString(s.stream_type) !== streamType) continue
-      if (source && asString(s.source) !== source) continue
-      if (asString(s.media_type).toLowerCase() === 'audio') continue
-      const u = asString(s.playlist_url)
-      if (u) return { playlist: u, streamType: asString(s.stream_type) }
-    }
+  const expectedLane = source || (streamType.toLowerCase().startsWith('cmfv') ? 'frame_xiang' : '')
+  if (expectedLane && asString(data.lane) && asString(data.lane) !== expectedLane) {
+    throw new Error('优酷所选来源端与返回的主响应不一致，已停止下载，避免混用音轨和密钥')
   }
-  // A source-qualified selection must not silently become another lane.
-  if (source) throw new Error('优酷所选来源端没有返回对应档位，请重新取流或选择可用档位')
+  const rows = (Array.isArray(data.streams) ? data.streams.filter(isObj) : [])
+    .filter(s => !['audio', 'subtitle'].includes(asString(s.media_type).toLowerCase()))
+  if (want) {
+    const matches = rows.filter(s => asString(s.stream_type) === streamType && (!source || asString(s.source) === source))
+      .map(s => ({ playlist: asString(s.playlist_url) || asString(s.url), streamType: asString(s.stream_type) }))
+      .filter(s => s.playlist)
+    if (new Set(matches.map(s => s.playlist)).size > 1) throw new Error('优酷所选档位对应多个来源，请重新选择带来源的档位')
+    if (matches.length) return matches[0]!
+  }
   if (isObj(data.video)) {
     const playlist = asString(data.video.playlist_url) || asString(data.video.url)
-    const streamType = asString(data.video.stream_type)
-    if (streamType) return { playlist, streamType }
-    // Some gateways expose the fallback identity only in the URL-bound catalog row.
-    const types = (Array.isArray(data.streams) ? data.streams.filter(isObj) : [])
-      .filter(s => asString(s.media_type).toLowerCase() !== 'audio' && playlist &&
-        (s.playlist_url === playlist || s.url === playlist))
-      .map(s => asString(s.stream_type)).filter(Boolean)
-    return { playlist, streamType: new Set(types).size === 1 ? types[0]! : want }
+    const boundRows = rows.filter(s => playlist && (s.playlist_url === playlist || s.url === playlist))
+    const types = new Set([asString(data.video.stream_type), ...boundRows.map(s => asString(s.stream_type))].filter(Boolean))
+    const actual = types.size === 1 ? [...types][0]! : ''
+    const lane = asString(data.lane) || asString(data.video.source)
+    const sourceMatches = !source || lane === source || boundRows.some(s => asString(s.source) === source)
+    if (playlist && (!want || actual === streamType && sourceMatches)) return { playlist, streamType: actual }
   }
-  return { playlist: '', streamType: want }
+  if (want) throw new Error(source
+    ? '优酷所选来源端没有返回对应档位，请重新取流或选择可用档位'
+    : '优酷未返回所选档位，已停止下载，避免静默换成其他画质')
+  return { playlist: '', streamType: '' }
 }
 
 export function youkuVideoPlaylist(data: Record<string, unknown>, want: string): string {
   return youkuVideoSelection(data, want).playlist
 }
 
-
-/**
- * 帧享 HQ（cmfv + 独立 audio playlist）才分轨下载。依据实际选中的地址，
- * 批量任务可能选了 TV 档位、但当前集只返回 HQ，不能继续按旧档位判断。
- * 酷喵 TV / App 等 HLS：视频 m3u8 自带音轨，不要强拉独立音轨或 --drop-audio。
- */
+/** CMAF video is independent of its audio even when the audio catalogue is missing. */
 export function youkuUsesSeparateAudio(data: Record<string, unknown>, quality = ''): boolean {
-  const delivery = asString(data.audio_delivery).toLowerCase()
-  const st = youkuVideoSelection(data, quality).streamType.toLowerCase()
-  const hq = st.startsWith('cmfv')
-  if (delivery === 'muxed' && !hq) return false
-  if (!hq) return false
-  if (delivery === 'separate') return true
-  const tracks = Array.isArray(data.audio_tracks) ? data.audio_tracks : []
-  return tracks.some((tr) => isObj(tr) && !!asString(tr.playlist_url))
+  return youkuVideoSelection(data, quality).streamType.toLowerCase().startsWith('cmfv')
 }
 
 const YOUKU_LANG_KEYS = new Set(['en', 'zh', 'yue'])

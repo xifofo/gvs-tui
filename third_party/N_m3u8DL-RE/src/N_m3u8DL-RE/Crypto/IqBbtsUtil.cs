@@ -30,15 +30,8 @@ public static class IqBbtsUtil
     {
         if (key.Length != 16) throw new ArgumentException("IQ BBTS requires a 16-byte content key");
         if (data.Length % Ts != 0 || data.Length < Ts) throw new InvalidDataException("Invalid IQ transport stream length");
-        var match = Regex.Match(Encoding.ASCII.GetString(data), @"mdcm\|s1:9:10\|(?:[^|]*\|)?v([0-9a-f]{32})", RegexOptions.IgnoreCase);
-        if (!match.Success)
-        {
-            if (Encoding.ASCII.GetString(data).Contains("mdcm|", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Unsupported IQ mdcm encryption pattern");
-            return false; // The initial clear portion is part of the same video playlist.
-        }
-        var iv = Convert.FromHexString(match.Groups[1].Value);
-        iv.AsSpan(12, 4).Clear();
+        var iv = IqMdcmDescriptor.ReadIv(data);
+        if (iv == null) return false; // Initial clear slices have no mdcm service descriptor.
         var (videoPid, headerBytes) = VideoPid(data);
         using var aes = Aes.Create();
         aes.Key = key;

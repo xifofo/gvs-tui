@@ -586,7 +586,7 @@ export class Runtime {
     if (this.has('mgtv')) f.push('芒果扫码','芒果状态','芒果退出')
     if (this.has('bilibili')) f.push('B 站扫码','B 站 Cookie','B 站状态','B 站退出')
     if (this.has('migu')) f.push('咪咕 App 扫码','咪咕 App 状态','咪咕 App 退出','咪咕 TV 扫码','咪咕 TV 状态','咪咕 TV 退出')
-    if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯原生事件采集', '腾讯原生事件文件', '腾讯原生事件模式', '腾讯诊断日志')
+    if (this.has('tencent')) f.push('腾讯诊断日志')
     f.push('运行日志')
     return f
   }
@@ -764,6 +764,8 @@ export class Runtime {
             uid: this.ykAcct.uid,
             method: this.ykAcct.method,
             vipSource: this.ykAcct.vipSource,
+            membership: this.ykAcct.membership,
+            loginUnknown: this.ykAcct.loginUnknown,
             isVip: this.ykAcct.isVip,
             vipUntil: this.ykAcct.vipUntil,
             riskLevel: this.ykAcct.riskLevel,
@@ -838,7 +840,7 @@ export class Runtime {
     // `cred info` 是唯一会校验签名的只读接口：签名不在网关凭证库里时它直接报
     // not found / revoked。这时候 `account` 还能从全局会话答出来（所以你看到
     // 「已登录」），但 play/download 一律报 invalid Yk-Sign。
-    this.signMissing =
+    this.signMissing = this.ykLogin?.needsRelogin === true ||
       !this.ykLogin?.ok && SIGN_DEAD_RE.test(this.ykLogin?.hint ?? '')
     if (this.signMissing) {
       this.say(
@@ -850,6 +852,8 @@ export class Runtime {
       try {
         const res = await ykRefresh(this.cli, this.cfg.youkuSign)
         if (res.needsRelogin) {
+          this.signMissing = true
+          if (this.ykLogin) this.ykLogin = { ...this.ykLogin, ok:false, needsRelogin:true }
           this.say(
             `优酷登录态需要重新扫码：设置 → 优酷扫码（${res.hint || '网关续期被拒'}）`,
             'warn',
@@ -1933,7 +1937,7 @@ export class Runtime {
       } else {
         const probe = this.vipProbe
         const tail = probe
-          ? ` · 取流: ${probe.canPlay ? '可播' : '不可播'}${probe.isVip ? ' · 会员权益✓' : ''}${probe.hasTrial ? ' · 仅试看' : ''}`
+          ? ` · 本次片源: ${probe.canPlay ? '已返回' : '不可播'}${probe.hasTrial ? ' · 仅试看' : ''}`
           : ''
         this.say(
           `${accountSummary(this.ykAcct)}${tail}`,

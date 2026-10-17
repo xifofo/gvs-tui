@@ -49,14 +49,12 @@ export type SettingsView = {
   tmdbKey: string
   tmdbLang: string
   threads: number
-  tencentObservations: boolean
-  tencentNativeEventFile: string
-  tencentNativeEventMode: 'off' | 'preview' | 'send'
   hamiClient: 'tv' | 'web'
   tencentCookie: string
   douyinCookie: string
   iqCookie: string
   iqProfile: string
+  iqCdn?: 'auto' | 'akamai' | 'bscloud' | 'zenlayer'
   hongguoNfo: boolean
   huangguoNfo: boolean
   hongguoFmt: string
@@ -65,7 +63,7 @@ export type SettingsView = {
   ui: UiPrefs
 }
 
-export type SettingsPatch = Partial<Omit<SettingsView, 'keyMasked' | 'hasKey' | 'ui'>> & { key?: string; ui?: Partial<UiPrefs> }
+export type SettingsPatch = Partial<Omit<SettingsView, 'keyMasked' | 'hasKey' | 'ui'>> & { key?: string; ui?: Partial<UiPrefs>; iqCookieSource?: 'auto' | 'domestic' | 'international' }
 
 export type AppState = {
   accountScope?: string

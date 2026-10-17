@@ -1,6 +1,6 @@
 import { DSNP_VIDEO_CODECS, resolveManifestDownload } from './manifest-provider.ts'
 import { downloadWebVideo } from './web-video-download'
-import { userMessage } from './user-message.ts'
+import { userMessage, errorCode } from './user-message.ts'
 import { youkuMediaError } from './media-output.ts'
 import { decryptYoukuTs } from './youku-ts.ts'
 import { tencentPlayInput } from './tencent-qr.ts'
@@ -33,6 +33,7 @@ import { moveFileSync } from './file-move.ts'
 import { downloadIQ } from './iq.ts'
 import { downloadIQCN } from './iqcn.ts'
 import { youkuPlayInput } from './youku-play-input.ts'
+import { assertYoukuPlayback, assertYoukuDuration, assertYoukuCompletedMedia } from './youku-playback.ts'
 import type { IQCNLocalRuntime } from './iqcn-local.ts'
 import { runLog } from './runlog.ts'
 import { prepareAudioLanguage } from './audio-language.ts'
@@ -100,6 +101,8 @@ export type JobEvt = {
   /** Present only on successful completion; requested quality remains separate. */
   actualVersion?: ActualVersion
   completedMedia?: CompletedMedia
+  /** Explicit expiry reported by Youku; never inferred from a decode failure. */
+  requiresReauth?: boolean
   /** Final event only: the user stopped the job instead of it failing. */
   stopped?: 'pause' | 'cancel'
 }
@@ -464,7 +467,7 @@ export async function runTask(
       return
     }
     runLog(`download ${id} failed: ${e instanceof Error ? e.message : String(e)}`)
-    emitEvt({ id, status: '失败', pct: lastPct, log: '', err: userMessage(e), done: true })
+    emitEvt({ id, status: '失败', pct: lastPct, log: '', err: userMessage(e), done: true, ...(t.provider === 'youku' && ((e instanceof Error && e.name === 'ReloginRequired') || ['RELOGIN_REQUIRED', 'YOUKU_RELOGIN_REQUIRED'].includes(errorCode(e))) ? { requiresReauth: true } : {}) })
   } finally {
     if (!succeeded && ownsOutput && out) {
       // Remove only our empty reservation; retain any completed/partial media for diagnosis.
@@ -991,7 +994,21 @@ async function dlYouku(
     if ((drm.videoEnc || drm.audioEnc) && !drm.reKey) throw new Error('优酷加密轨道未返回密钥，请重试取流或检查登录状态')
     const playlist = youkuVideoPlaylist(payload, t.quality)
     if (!playlist) throw new Error('优酷 play 没有 playlist_url')
+    const selectedVideo = (Array.isArray(payload.streams) ? payload.streams.filter(isObj) : [])
+      .find(row => row.playlist_url === playlist || row.url === playlist)
+      || (isObj(payload.video) ? payload.video : {})
+    const declaredDuration = Number(selectedVideo.duration_ms) / 1000
+    if (declaredDuration > 0) assertYoukuDuration(declaredDuration, t.duration)
     const separateAudio = youkuUsesSeparateAudio(payload, t.quality)
+    // A missing CMAF audio catalogue is not evidence that the video contains audio.
+    // Stop before downloading a large silent video instead of failing at the final mux.
+    if (separateAudio && !youkuAudioPlaylist(payload, '')) {
+      throw new Error('优酷所选帧享档位未返回可下载的独立音轨，已在下载前停止；不会改用其他端的音轨或画质')
+    }
+    const evidence = youkuNamingEvidence(payload, playlist)
+    const safeChoice = /^[\w.|=-]{1,160}$/.test(t.quality) ? t.quality : 'unknown'
+    const safeLane = ['frame_xiang', 'tv', 'app'].includes(asString(payload.lane)) ? asString(payload.lane) : 'unknown'
+    runLog(`youku selection requested=${safeChoice} actual=${evidence.stream || 'unknown'} lane=${safeLane} audio_delivery=${separateAudio ? 'separate' : 'muxed'} audio_tracks=${Array.isArray(payload.audio_tracks) ? payload.audio_tracks.length : 0}`)
     const videoAlreadyDownloaded = completedTracks.has(videoPath)
     emit('下载', 0.05, playlist.split(/[?#]/)[0]?.split('/').pop() ?? '')
     // 帧享 HQ：视频分轨下载并 drop 内嵌音；非 HQ（酷喵 TV/App）：保留视频 m3u8 自带音轨。
@@ -1098,6 +1115,9 @@ async function dlYouku(
       else if (muxAudios.length) await mkvmergeMux(mkvmerge, videoPath, muxAudios, partial, muxProgress, signal, undefined, audioLanguageFallback)
       else await mkvmergeRemux(mkvmerge, videoPath, partial, muxProgress, signal, audioLanguageFallback)
       signal?.throwIfAborted()
+      const completed = await probeFinishedMedia(partial, signal)
+      assertYoukuCompletedMedia(completed, t.duration)
+      runLog(`youku coverage expected_seconds=${t.duration || 0} actual_seconds=${completed.durationSeconds || 0} dynamic_range=${completed.dynamicRange || 'unknown'}`)
       moveFileSync(partial, out)
       if (usesMeasuredNaming(t) && muxAudios.length) t.namingEvidence = { ...t.namingEvidence, muxAudio: { index: defaultAudioIndex(muxAudios), count: muxAudios.length } }
       succeeded = true
@@ -1223,7 +1243,9 @@ async function playYouku(cli: GwClient, cfg: FileConfig, t: DlTask, vid = t.vid)
   // RE/relay reads the selected playlist; expanding every track here fetches
   // unused playlists and adds latency to every signed-URL refresh.
   const input = youkuPlayInput(vid, t.quality)
-  return cli.invoke('youku', 'play', input, cli.extra(cfg, 'youku'))
+  const data = await cli.invoke('youku', 'play', input, cli.extra(cfg, 'youku'))
+  assertYoukuPlayback(data)
+  return data
 }
 
 

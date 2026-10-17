@@ -224,3 +224,11 @@ test('详情海报：data / show / raw.show / video / 第一集依次兜底', ()
   expect(detailPoster({ episodes: [{ cover: 'https://a/24.jpg' }] })).toBe('https://a/24.jpg')
   expect(detailPoster({ cover: 'https://a/25.jpg', raw: { cover: 'https://a/26.jpg' } })).toBe('https://a/25.jpg')
 })
+
+test('Tencent known CID with a stale search target opens detail rather than another search', () => {
+  const [result]=toCards('tencent',{items:[{id:'mzc00200gag6dkh',title:'嫁金钗',target:{type:'search',query:'嫁金钗'}}]})
+  expect(result!.target).toBe('detail')
+  expect(result!.id).toBe('mzc00200gag6dkh')
+  expect(result!.query).toBeUndefined()
+  expect(result!.video).toBeUndefined()
+})

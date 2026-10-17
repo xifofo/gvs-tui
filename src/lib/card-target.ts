@@ -19,7 +19,7 @@ export function cardTarget(provider: string, item: Record<string, unknown>): Car
   const vid = [item.vid, item.videoId, meta.vid, meta.videoId].map(id).find(Boolean)
   if (mediaProvider && vid) return { type: 'video', id: vid }
   if (mediaProvider) {
-    for (const value of [item.url, item.link, meta.url, meta.link, item.id]) {
+    for (const value of [item.url, item.link, meta.url, meta.link, item.id, meta.id, target.url, target.id]) {
       const url = str(value)
       if (!url.includes('://')) continue
       if (provider === 'tencent') {
@@ -34,6 +34,12 @@ export function cardTarget(provider: string, item: Record<string, unknown>): Car
     }
   }
   const fallback = id(item.id) || id(meta.id)
+  // Tencent cover IDs have a known 15-character form. Old gateway search
+  // targets must not erase that identity, but numeric keyword/rank IDs stay search.
+  if (provider === 'tencent' && type === 'search') {
+    const cid = [fallback, targetID].find(value => /^[a-z0-9]{15}$/i.test(value))
+    if (cid) return { type: 'detail', id: cid }
+  }
   if (type === 'search') return { type, query: str(target.query) || str(item.title || meta.title) }
   if (type === 'video' && fallback) return { type, id: fallback }
   if (fallback || targetID) return { type: 'detail', id: targetID || fallback }

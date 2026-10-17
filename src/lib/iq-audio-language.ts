@@ -10,6 +10,7 @@ const AUDIO_LANGUAGES: Record<number, { language: string; name: string; incorrec
 
 /** Correct known source audio IDs without changing the requested track identity. */
 export function normalizeIQAudioLanguage(row: Record<string, unknown>, requestedId = ''): Record<string, unknown> {
+  if (row.source === 'domestic') return row
   const id = asString(row.id) || requestedId
   const lid = Number(row.lid ?? (/^\d+:\d+:\d+$/.test(id) ? id.split(':')[0] : NaN))
   const known = AUDIO_LANGUAGES[lid]

@@ -1,33 +1,18 @@
-﻿# 腾讯原生事件：TUI 全流程验证（免手机运行时）
+# 腾讯原生协议研究：免手机模板回放
 
-用户决策：**全部在 TUI 验证、要支持采集、日常使用不允许再插手机。** 手机/adb/Frida 仅用于研究侧一次采集/更新模板。
+2026-10-16 更新：本功能是隔离研究入口。普通 App/TUI 使用不需要手机、采集器、JSONL、模板或发送模式配置，操作记录默认自动处理。当前产品行为与验收范围见[接入说明](tencent-native-business-flow-20261015.md)。
 
-## TUI 怎么开（不插手机）
+## 使用范围
 
-1. 本地网关（推荐）  
-   - `GVS_HOST=http://127.0.0.1:8080`（或设置里把网关改成 `http://127.0.0.1:8080`）  
-   - 网关已登录同一 TV 会话；`腾讯 TV 设备 ID` 与会话 `device_id` 一致。
-2. 设置 → **腾讯原生事件采集** → 回车切到 **本地模板 · 免手机**  
-   - 自动：打开观测绑定、模式=预览、写入默认 JSONL（`%APPDATA%/gvs/tencent-native-events.jsonl`）  
-   - 立刻从 `fixtures/tencent-native-templates/` 装载一批新鲜事件（刷新 `observed_at` / id / GUID 摘要）
-3. **腾讯原生事件模式** 保持 `仅预览` 先跑详情/播放；看诊断/日志里 `tencent_native_event ... status=preview`。
-4. 确认预览字段合理后，再视需要：网关 `TENCENT_TV_OBSERVED_EVENT_SEND=1` + 隧道在线 + 模式改 `发送`。
+研究侧一次采集或更新模板后，可在隔离进程中检查 Go 组包和响应解密。显式设置 `GVS_TENCENT_NATIVE_RESEARCH=1` 后，配置中的 `tencentNativeEventCollect=fixture` 才会启用模板生产者；模板从 `fixtures/tencent-native-templates/` 加载，并写入研究配置指定的文件。普通账号设置已经移除这些控件。
 
-外部 JSONL（研究采集器/手机）仍可选：采集=外部 JSONL，把文件指到生产者路径。日常不要用。
+模板回放始终只预览，即使旧配置保存了 `tencentNativeEventMode=send`，也不会发送模板事件。记录中的日期、ID 和 GUID 摘要更新仅用于测试新鲜度与绑定检查，不构成真实观看或设备遥测证据。
 
-## CLI 装载模板（可选）
+CLI 的 `scripts/tencent-native-fixture-feed.ts` 继续可用于研究装载；`scripts/tencent-native-gateway-flow.ts` 是隔离本地集成探针，会显式开启研究入口，不加载用户配置。外部实际生产者文件使用 collect=file，仍须校验账号、网关、设备、来源与送达状态。
 
-```powershell
-cd G:\hongguo_handoff\work\tui-tencent-native-tui-verify-20261015
-bun scripts/tencent-native-fixture-feed.ts `
-  --gateway http://127.0.0.1:8080 `
-  --device-guid <与TV会话一致的设备ID> `
-  --out "$env:APPDATA\gvs\tencent-native-events.jsonl"
-```
+## 已知边界
 
-## 行为边界
-
-- 本地模板是研究固化的事件形状重放，不是下载字节伪装观看，也不是现挂 Frida。
-- 每次业务 drain 前，fixture 模式会再追加一批新鲜模板（满足 5 分钟新鲜度）。
-- `adlog` 不提供可发送模板（需真实广告画像/cookie）。`bosskv`/`getfeature` 可能 preview 为 incomplete，取决于网关 collector/特征完整性。
-- 手机采集脚本仍在 gateway `scripts/research/`，仅研究用。
+- 普通产品已实现自动画像生成和 Qimei 注册，本模板回放仍是研究入口。腾讯实网接收验收尚未完成；操作观测、模板回放或本地联调均不等于腾讯线上接收。
+- `watch` 模板不表示用户实际观看；下载字节和下载耗时不会转换成观看时长。
+- `adlog` 需要实际广告画像；`bosskv`、`getfeature` 的缺失字段不能靠模板证明真实发生。
+- 手机、adb、Frida 仅属于研究侧。普通客户端不会要求用户安装或连接这些工具。

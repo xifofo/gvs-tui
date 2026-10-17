@@ -12,7 +12,19 @@ permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare draft desktop release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "GVS 桌面端 $GITHUB_REF_NAME" --notes-file "docs/release-${GITHUB_REF_NAME}.md"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -102,34 +114,31 @@ jobs:
       - run: bun x electron-builder ${{ matrix.target }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-${{ matrix.os }}
-          if-no-files-found: error
-          path: |
-            app/release/*.exe
-            app/release/*.exe.blockmap
-            app/release/*.dmg
-            app/release/latest*.yml
+      - name: Upload installers to draft release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(release/*.exe release/*.exe.blockmap release/*.dmg release/latest*.yml)
+          test "${#files[@]}" -gt 0
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
 
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/desktop-v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - run: ls -la dist
-      - uses: softprops/action-gh-release@v2
-        with:
-          name: GVS 桌面端 ${{ github.ref_name }}
-          make_latest: "false"
-          generate_release_notes: true
-          files: dist/*
-          body: |
-            **Windows**：下载 `GVS-Setup-*-x64.exe` 安装；已安装的会在后台自动更新。
-            **macOS**：按芯片下载 `arm64`（M 系列）或 `x64`（Intel）的 dmg。未签名，首次打开请右键 → 打开；
-            需先 `brew install ffmpeg gpac mkvtoolnix`。
-            Windows 和两种 Mac 安装包均自带维护版 RE，无需用户自行构建 RE。
+      - uses: actions/checkout@v4
+      - name: Verify installers and publish desktop release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
+          grep -Fq "GVS-Setup-${GITHUB_REF_NAME#desktop-v}-x64.exe" <<< "$assets"
+          grep -Fq "GVS-${GITHUB_REF_NAME#desktop-v}-arm64.dmg" <<< "$assets"
+          grep -Fq "GVS-${GITHUB_REF_NAME#desktop-v}-x64.dmg" <<< "$assets"
+          grep -Fxq 'latest.yml' <<< "$assets"
+          grep -Fxq 'latest-mac.yml' <<< "$assets"
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false --notes-file "docs/release-${GITHUB_REF_NAME}.md"

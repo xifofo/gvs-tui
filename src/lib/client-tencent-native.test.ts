@@ -1,4 +1,11 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { beforeEach, afterEach, describe, expect, test } from 'bun:test'
+
+const savedResearch = process.env.GVS_TENCENT_NATIVE_RESEARCH
+beforeEach(() => { process.env.GVS_TENCENT_NATIVE_RESEARCH = '1' })
+afterEach(() => {
+  if (savedResearch === undefined) delete process.env.GVS_TENCENT_NATIVE_RESEARCH
+  else process.env.GVS_TENCENT_NATIVE_RESEARCH = savedResearch
+})
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -181,3 +188,52 @@ test('fixture collect feeds phone-free templates before drain without adb', asyn
   }
 })
 
+
+for (const source of ['tui_process', 'electron_process'] as const) {
+  test(`${source}: normal TV operations are automatic and ignore old collector settings`, async () => {
+    delete process.env.GVS_TENCENT_NATIVE_RESEARCH
+    const f = setup(source)
+    // Upgrades must also work when the old opt-in was saved as disabled.
+    f.cfg.tencentObservations = false
+    f.cfg.tencentNativeEventCollect = 'fixture'
+    f.cfg.tencentNativeEventMode = 'send'
+    await f.client.invoke('tencent', 'detail', { cid: 'cover1', session_type: 'tv' })
+    await f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    const job = f.client.forkTencentJob(42, 'episode1')
+    f.switchAccount('slot-b')
+    await job.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    job.observeTencentTransfer(1024, 2048)
+    await job.closeTencentTransfer(false, false)
+    expect(f.calls.filter(c => c.input.report_type === 'bind')).toHaveLength(1)
+    expect(f.calls.some(c => c.input.report_type === 'observe')).toBe(true)
+    expect(f.calls.filter(c => c.input.report_type === 'event')).toHaveLength(0)
+    expect(readFileSync(f.cfg.tencentNativeEventFile!, 'utf8')).toBe('')
+    expect(f.calls.every(c => c.account === 'slot-a')).toBe(true)
+    const observations = f.calls.filter(c => c.input.report_type === 'observe').map(c => JSON.parse(String(c.input.payload)))
+    expect(observations.every(e => e.source === source)).toBe(true)
+    expect(observations.some(e => e.action === 'download' && e.phase === 'finish')).toBe(true)
+    expect(observations.some(e => 'played_time_mills' in e.metrics)).toBe(false)
+  })
+}
+
+test('a fresh desktop TV client needs no reporting or collector settings', async () => {
+  delete process.env.GVS_TENCENT_NATIVE_RESEARCH
+  const f = setup('electron_process')
+  delete f.cfg.tencentObservations
+  delete f.cfg.tencentNativeEventFile
+  delete f.cfg.tencentNativeEventCollect
+  delete f.cfg.tencentNativeEventMode
+  await f.client.invoke('tencent', 'search', { q: 'title', session_type: 'tv' })
+  expect(f.calls.map(c => c.input.report_type || c.action)).toEqual(['bind', 'observe', 'search', 'observe'])
+})
+
+test('research replay stays preview-only even with a saved send mode', async () => {
+  const f = setup('tui_process')
+  f.cfg.tencentNativeEventCollect = 'fixture'
+  f.cfg.tencentNativeEventMode = 'send'
+  f.cfg.tencentTVDevice = 'D0F1A2B3C4D511F191697C8C09268FCA'
+  await f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+  const events = f.calls.filter(c => c.input.report_type === 'event')
+  expect(events.length).toBeGreaterThan(0)
+  expect(events.every(c => c.input.send === '0')).toBe(true)
+})

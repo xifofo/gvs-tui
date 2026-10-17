@@ -43,6 +43,8 @@ export type FileConfig = {
   iqCookie?: string
   /** Advanced source deviceId + certificate digest; server certificate normally supplies it. */
   iqProfile?: string
+  /** Official IQ CDN preference; never fabricates a host or signed URL. */
+  iqCdn?: 'auto' | 'akamai' | 'bscloud' | 'zenlayer'
   /** Opt-in: probe play with encode=all (风控敏感，默认关) */
   tencentEncodeAll?: boolean
   /** Opt-in: catalog probe with source=1 / 原画 (默认关，易触发权益锁) */

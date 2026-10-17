@@ -108,8 +108,12 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   const re = await ensureM3u8dl()
   const version = spawnSync(re,['--version'],{encoding:'utf8',windowsHide:true,timeout:10000})
   if (version.status !== 0 || !/gvs-iq\./i.test(version.stdout+version.stderr)) throw new Error('IQ 需要 GVS 自维护 RE，请更新内置工具或运行 build-managed-re')
-  const play = () => cli.invoke('iq','play',{vid:task.vid,quality:task.quality},cli.extra(cfg,'iq'),{timeoutMs:150000})
+  let source = ''
+  const play = () => cli.invoke('iq','play',{vid:task.vid,quality:task.quality,source,cdn:cfg.iqCdn || 'auto'},cli.extra(cfg,'iq'),{timeoutMs:150000})
   let data = await play()
+  source = asString(data.source)
+  if (source === 'domestic' && Number(/gvs-iq\.(\d+)/i.exec(version.stdout + version.stderr)?.[1] || 0) < 3) throw new Error('国内 Cookie 取流需要 IQ.3 或更新的内置下载器，请更新工具')
+  const mediaRef = source === 'domestic' ? 'https://www.iqiyi.com/' : 'https://www.iq.com/'
   let plan = iqPlan(data)
   mkdirSync(work,{recursive:true})
   const manifest = join(work,'iq-video.m3u8'), video = join(work,'iq-video.ts')
@@ -120,7 +124,8 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   for (let retry=0; !iqVideoComplete(video,identity); retry++) {
     signal?.throwIfAborted()
     const route = await selectIQCDN(plan.playlist, isObj(data.video) ? data.video.cdnCandidates : undefined, {
-      preferencePath, headers: headersFor('https://www.iq.com/'), signal, excluded,
+      preferencePath, headers: headersFor(mediaRef), signal, excluded,
+      preferredHost: isObj(data.video) ? asString(data.video.preferredCDN) : '',
       note: message => emit('CDN 优选',0.02,message),
     })
     plan = { ...plan, playlist: route.playlist }
@@ -129,7 +134,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
     const routeAbort = new AbortController(), slow = iqCDNSlowGuard()
     const downloadSignal = signal ? AbortSignal.any([signal,routeAbort.signal]) : routeAbort.signal
     try {
-      await downloadPlaylist({src:manifest,dest:video,ref:'https://www.iq.com/',key:plan.key,keyMethod:'IQ_BBTS',select:'video',threads:cfg.threads,workDir:work,workTag:'iq-video',resumeIdentity:identity,signal:downloadSignal,cb:(n,total,info)=>{
+      await downloadPlaylist({src:manifest,dest:video,ref:mediaRef,key:plan.key,keyMethod:'IQ_BBTS',select:'video',threads:cfg.threads,workDir:work,workTag:'iq-video',resumeIdentity:identity,signal:downloadSignal,cb:(n,total,info)=>{
         emit(info?.phase==='decrypt'?'视频解密':info?.phase==='merge'?'视频合并':'视频下载',0.02+0.66*(total>1?n/total:n),formatSpeed(n,total,(Date.now()-videoStarted)/1000,info))
         if (retry<2 && route.alternatives && slow(info?.phase,info?.transfer?.bytesPerSecond)) routeAbort.abort(new IQCDNSlowError())
       }})
@@ -158,7 +163,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
     emit('音轨下载',0.70+0.12*index/requested.length,`独立音轨 ${index+1}/${requested.length}`)
     const loadAudio = async (timeoutMs: number) => {
       signal?.throwIfAborted()
-      const audio = normalizeIQAudioLanguage(await cli.invoke('iq','audio',{vid:task.vid,audioId:id,renditionVid:plan.rendition},cli.extra(cfg,'iq'),{timeoutMs}), id)
+      const audio = normalizeIQAudioLanguage(await cli.invoke('iq','audio',{vid:task.vid,audioId:id,renditionVid:plan.rendition,source},cli.extra(cfg,'iq'),{timeoutMs}), id)
       signal?.throwIfAborted()
       if (audio.clear !== true) throw new Error('IQ 独立音轨没有明确标记明文，已停止')
       const parts = Array.isArray(audio.parts) ? audio.parts.filter(isObj) : []
@@ -170,7 +175,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
     audioPartPaths.push(...paths)
     const started=Date.now(), measure=transferSpeed()
     await downloadIQParts(parts.map((part,pi)=>({url:asString(part.url),path:paths[pi]!})),{
-      identity:JSON.stringify([task.vid,plan.rendition,id]),threads:cfg.threads,headers:headersFor('https://www.iq.com/'),signal,
+      identity:JSON.stringify([task.vid,plan.rendition,id]),threads:cfg.threads,headers:headersFor(mediaRef),signal,
       refreshParts:async () => (await loadAudio(30000)).parts.map(part => ({url:asString(part.url)})),
       onRetry:(pi,attempt,reason)=>emit('音轨重试',0.70+0.12*index/requested.length,`${reason}，重试分段 ${pi+1}/${parts.length}（${attempt}/2）；保留已完成分段`),
       progress:(bytes,done,total)=>emit('音轨下载',0.70+0.12*(index+Math.min(1,Number(audio.size)>0?bytes/Number(audio.size):done/Math.max(1,total)))/requested.length,

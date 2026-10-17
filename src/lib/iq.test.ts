@@ -143,3 +143,8 @@ test('IQ Netscape cookie import preserves only the IQ domain',()=>{
   expect(normalizeIQCookie('#HttpOnly_.iq.com\tTRUE\t/\tTRUE\t0\tI00001\tOWN\n.evil.invalid\tTRUE\t/\tTRUE\t0\tsecret\tIGNORE')).toBe('I00001=OWN')
   expect(()=>normalizeIQCookie('a=b\r\nInjected: yes')).toThrow()
 })
+
+test('domestic Web audio names are not rewritten with overseas language IDs', () => {
+  const row={source:'domestic',id:'157:1:500',lid:157,language:'zho',lang:'普通话',label:'普通话 · 杜比 5.1',codec:'eac3'}
+  expect(normalizeIQAudioLanguage(row)).toEqual(row)
+})
