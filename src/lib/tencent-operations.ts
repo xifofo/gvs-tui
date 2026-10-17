@@ -1,3 +1,4 @@
+import { tencentProfileStoppedBinding } from './tencent-profile-binding.ts'
 import { randomUUID } from 'node:crypto'
 import { TencentNativeEventStop } from './tencent-native-events.ts'
 import { errorCode } from './user-message.ts'
@@ -5,7 +6,7 @@ import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
 import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
 
 export type ReportCall = (input: Record<string, unknown>) => Promise<Record<string, unknown>>
-type Root = { flow: string; pending?: Promise<string>; binding?: string; rejected?: boolean; observationSources?: string[] }
+type Root = { reportingStopped?: boolean; flow: string; pending?: Promise<string>; binding?: string; rejected?: boolean; observationSources?: string[] }
 export type TencentOperation = {
   root: Root; id: string; action: string; vid?: string; cid?: string
   started: number; cpu: NodeJS.CpuUsage
@@ -53,6 +54,13 @@ export class TencentOperations {
         ? data.observation_sources.filter((value): value is string => typeof value === 'string')
         : ['tui_process']
       this.profileDiagnostics(root, data.adprofile)
+      if (tencentProfileStoppedBinding(data)) {
+        // Registration owns its no-resend ledger. It cannot deny a catalogue,
+        // detail or playback request that has not even reached Tencent yet.
+        root.reportingStopped = true
+        root.observationSources = []
+        return root.binding
+      }
       const bindingRisk = tencentRisk(data)
       if (bindingRisk.stop) { root.rejected = true; throw new TencentRiskStop(bindingRisk) }
       return root.binding
@@ -120,7 +128,7 @@ export class TencentOperations {
         writeTencentDiagnostic(this.scope, {
           flow: root.flow, operation: '', job: this.jobID, action: 'qimei', phase: 'delivery',
           status: uncertain ? 'delivery_unknown' : unverified ? 'qimei_registration_unverified' : 'rejected',
-          decision: uncertain || unverified ? 'no_automatic_resend' : 'stop_flow',
+          decision: 'no_automatic_resend',
           ...(typeof result.http_status === 'number' ? { httpStatus: result.http_status } : {}),
           ...(String(result.service_code ?? '').match(/^[0-9.]{1,16}$/) ? { code: String(result.service_code) } : {}),
         })
@@ -200,7 +208,7 @@ export class TencentOperations {
       if (errorCode(error) === 'ACCOUNT_BINDING_INVALID' || error instanceof Error && /report_binding_/.test(error.message)) { op.root.rejected = true; throw error }
       // Logging failures do not change playback; the main request validates its binding.
     }
-    if (this.native && op.root.binding && !op.root.rejected) {
+    if (this.native && op.root.binding && !op.root.rejected && !op.root.reportingStopped) {
       try { await this.native(op.root.binding, this.call) }
       catch (error) {
         if (error instanceof TencentNativeEventStop) op.root.rejected = true

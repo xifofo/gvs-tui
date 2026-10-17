@@ -208,17 +208,25 @@ test('cached issued Qimei identity is not mislabeled as an incomplete profile', 
   }
 })
 
-for (const unknown of [false, true]) {
-  test(`automatic registration stop in a successful binding envelope blocks the current operation (unknown=${unknown})`, async () => {
-    const calls: Record<string, unknown>[] = []
-    const tracker = new TencentOperations(async input => {
+for (const status of ['pending','blocked','rejected','delivery_unknown','registration_response_unverified','http_rejected','invalid_response','binding_invalid']) {
+  test(`optional profile ${status} stops reporting while normal operations remain usable`,async()=>{
+    const calls:Record<string,unknown>[]=[]
+    let nativeCalls=0
+    const tracker=new TencentOperations(async input=>{
       calls.push(input)
-      return { binding: 'opaque', status: 'rejected', stop: true, ...(unknown ? { delivery_unknown: true } : {}), adprofile: { generated: true, complete: false, qimei_registration: { generated: true }, registration_delivery: { stop: true, delivery_unknown: unknown } } }
-    }, () => {})
-    await expect(tracker.begin('detail', { cid: 'cover1' })).rejects.toThrow('请求已停止')
-    await expect(tracker.begin('play', { vid: 'episode1' })).rejects.toThrow('stopped after rejection')
+      return {binding:'opaque',status,stop:true,...(status==='delivery_unknown'?{delivery_unknown:true}:{}),adprofile:{generated:true,complete:false,qimei_registration:{generated:true},registration_delivery:{status,stop:true}}}
+    },()=>{},'',undefined,'','tui_process',async()=>{nativeCalls++})
+    const detail=await tracker.begin('detail',{cid:'cover'})
+    expect(detail?.root.binding).toBe('opaque')
+    await tracker.finish(detail,{episodes:[{vid:'episode'}]})
+    const play=await tracker.begin('play',{vid:'episode'})
+    await tracker.finish(play,{em:0})
     expect(calls).toHaveLength(1)
-    expect(calls.some(input => input.report_type === 'observe')).toBe(false)
+    expect(nativeCalls).toBe(0)
+    expect(tracker.boundInput(play,{})).toMatchObject({session_type:'tv',report_binding:'opaque'})
+    // Only the actual business response can stop the business flow.
+    await tracker.finish(play,{em:93})
+    await expect(tracker.begin('play',{vid:'episode'})).rejects.toThrow('stopped after rejection')
   })
 }
 
@@ -239,7 +247,8 @@ for (const scenario of [
         calls++
         return {binding:'opaque',status:'registration_response_unverified',stop:true,adprofile:{generated:true,complete:false,qimei_registration:{generated:true,complete:true,payload_generated:true,cipher_generated:true,ready_to_send:true},registration_delivery:{status:'registration_response_unverified',stop:true,http_status:200,service_code:'0',response_diagnostics:{failure:scenario.failure,plain:'PRIVATE_RESPONSE',key:'PRIVATE_KEY'}}}}
       },()=>{},'',undefined,'unverified-response-scope')
-      await expect(tracker.begin('detail',{cid:'cover'})).rejects.toThrow()
+      const detail=await tracker.begin('detail',{cid:'cover'})
+      expect(detail?.root.binding).toBe('opaque')
       const rows=readTencentDiagnostics('unverified-response-scope')
       const delivery=rows.find(r=>r.phase==='delivery')
       expect(delivery?.status).toBe('qimei_registration_unverified')
@@ -249,7 +258,8 @@ for (const scenario of [
       else expect(rows.filter(r=>r.phase==='response')).toHaveLength(0)
       expect(rows.some(r=>r.phase==='delivery'&&r.status==='rejected')).toBe(false)
       expect(readFileSync(file,'utf8')).not.toContain('PRIVATE_')
-      await expect(tracker.begin('play',{vid:'episode'})).rejects.toThrow('stopped')
+      await tracker.finish(detail,{em:0})
+      await tracker.begin('play',{vid:'episode'})
       expect(calls).toBe(1)
     }finally{
       if(previous===undefined)delete process.env.GVS_TENCENT_DIAGNOSTICS_PATH

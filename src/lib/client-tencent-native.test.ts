@@ -237,3 +237,42 @@ test('research replay stays preview-only even with a saved send mode', async () 
   expect(events.length).toBeGreaterThan(0)
   expect(events.every(c => c.input.send === '0')).toBe(true)
 })
+
+for (const legacy of [false,true]) {
+  test(`real desktop client search detail and play survive a blocked profile (legacy=${legacy})`,async()=>{
+    const previous=process.env.GVS_TENCENT_NATIVE_RESEARCH
+    delete process.env.GVS_TENCENT_NATIVE_RESEARCH
+    const previousDiagnostics=process.env.GVS_TENCENT_DIAGNOSTICS_PATH
+    const directory=mkdtempSync(join(tmpdir(),'tx-profile-business-isolation-'))
+    process.env.GVS_TENCENT_DIAGNOSTICS_PATH=join(directory,'diagnostics.jsonl')
+    const calls:Array<{action:string;input:Record<string,unknown>}>=[]
+    let businessRisk=false
+    const server=Bun.serve({port:0,hostname:'127.0.0.1',async fetch(req){
+      const body=await req.json() as {action:string;input:Record<string,unknown>};calls.push(body)
+      if(body.action==='report'&&body.input.report_type!=='bind')throw new Error('Profile stopped: no extra report calls permitted')
+      const delivery={status:'blocked',stop:true,automatic_retry:false,report_requests:0,service_code:'0'}
+      const data=body.action==='report'?{binding:'fixture-business-binding',status:legacy?'blocked':'bound',...(legacy?{stop:true}:{}),adprofile:{generated:true,complete:false,qimei_registration:{generated:true},registration_delivery:delivery}}
+        :body.action==='search'?{items:[{cid:'synthetic-cover',title:'fixture'}]}:body.action==='detail'?{episodes:[{vid:'synthetic-episode'}]}:{em:businessRisk?93:0,has_url:!businessRisk}
+      return Response.json({code:0,msg:'SUCCESS',data})
+    }})
+    try{
+      const cfg={host:server.url.href.replace(/\/$/,''),key:'fixture-key',tencentMode:'tv'} as FileConfig
+      const cli=new GwClient(cfg.host,cfg.key,()=>cfg,'electron_process')
+      expect((await cli.invoke('tencent','search',{q:'fixture',session_type:'tv'})).items).toBeArray()
+      expect((await cli.invoke('tencent','detail',{cid:'synthetic-cover',session_type:'tv'})).episodes).toBeArray()
+      expect((await cli.invoke('tencent','play',{vid:'synthetic-episode',session_type:'tv'})).em).toBe(0)
+      expect(calls.map(c=>c.action)).toEqual(['report','search','detail','play'])
+      expect(calls.slice(1).every(c=>c.input.report_binding==='fixture-business-binding')).toBe(true)
+      businessRisk=true
+      await expect(cli.invoke('tencent','play',{vid:'synthetic-episode',session_type:'tv'})).rejects.toThrow()
+      const count=calls.length
+      await expect(cli.invoke('tencent','detail',{cid:'synthetic-cover',session_type:'tv'})).rejects.toThrow()
+      expect(calls.length).toBe(count)
+    }finally{
+      server.stop(true)
+      if(previous===undefined)delete process.env.GVS_TENCENT_NATIVE_RESEARCH;else process.env.GVS_TENCENT_NATIVE_RESEARCH=previous
+      if(previousDiagnostics===undefined)delete process.env.GVS_TENCENT_DIAGNOSTICS_PATH;else process.env.GVS_TENCENT_DIAGNOSTICS_PATH=previousDiagnostics
+      rmSync(directory,{recursive:true,force:true})
+    }
+  })
+}
