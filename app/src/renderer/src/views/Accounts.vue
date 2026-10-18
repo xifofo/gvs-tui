@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { PROVIDER_NAME, type Provider } from '@shared/api'
-import { accountBucket, moveProvider, orderProviders, providerMeta } from '@shared/provider-registry'
+import { accountBucket, moveProvider, optionalLast, orderProviders, providerMeta } from '@shared/provider-registry'
 import { loadDRMRequirements } from '../drm-reqs'
 import { loadPlatformMeta, platformMeta } from '../platform-meta'
 import PlatformMetaInfo from '../components/PlatformMetaInfo.vue'
@@ -28,11 +28,11 @@ const counts = computed(() => {
     hidden: ordered.value.length - vis.length,
   }
 })
-const list = computed(() => ordered.value.filter((p) => {
+const list = computed(() => optionalLast(ordered.value.filter((p) => {
   if (filter.value === 'hidden') return hidden.value.has(p)
   if (hidden.value.has(p)) return false
   return filter.value === 'all' || bucket(p) === filter.value
-}))
+})))
 const TABS: Array<{ key: Filter; label: string }> = [{ key: 'all', label: '全部' }, { key: 'attention', label: '需处理' }, { key: 'ok', label: '已登录' }, { key: 'hidden', label: '已隐藏' }]
 const toneClass: Record<string, string> = { ok: 'ok', warn: 'warn', err: 'err', muted: '' }
 
@@ -71,6 +71,7 @@ onMounted(() => { void loadDRMRequirements(); void loadPlatformMeta(true) })
         <div class="ah">
           <PlatformLogo :provider="p" :size="28" />
           <b class="an">{{ PROVIDER_NAME[p] }}</b>
+          <span v-if="providerMeta(p).optional" class="muted" :title="providerMeta(p).benefit">可选</span>
           <template v-if="reorder">
             <button type="button" class="btn sm icon" :aria-label="`上移 ${PROVIDER_NAME[p]}`" @click="move(p, -1)"><Icon name="up" :size="15" /></button>
             <button type="button" class="btn sm icon" :aria-label="`下移 ${PROVIDER_NAME[p]}`" @click="move(p, 1)"><Icon name="down" :size="15" /></button>

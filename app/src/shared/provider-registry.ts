@@ -10,6 +10,11 @@ export type ProviderMeta = {
   methods: LoginMethod[]
   /** Works without any login (anonymous or public API). */
   loginOptional: boolean
+  /**
+   * Optional login: the client works without it. 爱奇艺国内版（iqcn）扫码已覆盖 iQ 内容的
+   * 国内车道，所以 IQ 海外版只在 iq.com 独播内容时才需要。
+   */
+  optional?: boolean
   /** Network / region hint shown on the account card. */
   region?: string
   /** One line about what logging in unlocks. */
@@ -21,8 +26,8 @@ export type ProviderMeta = {
 export const PROVIDER_META: Record<string, ProviderMeta> = {
   youku: { id: 'youku', methods: ['qr'], loginOptional: false, region: '请求从本机出网', benefit: '扫码后可下载会员片源', multiAccount: false },
   tencent: { id: 'tencent', methods: ['qr', 'cookie'], loginOptional: false, region: '请求从本机出网', benefit: '登录后可下载会员画质', multiAccount: false },
-  iq: { id: 'iq', methods: ['password', 'cookie'], loginOptional: false, region: '需要台湾 / 海外网络节点', benefit: '普通话独立音轨与字幕随下载合流', multiAccount: false },
-  iqcn: { id: 'iqcn', methods: ['qr'], loginOptional: false, benefit: '爱奇艺 App 扫码，网关按 Key 保存', multiAccount: false },
+  iq: { id: 'iq', methods: ['password', 'cookie'], loginOptional: true, optional: true, region: '需要台湾 / 海外网络节点', benefit: '可选：仅 iq.com 独播内容需要；国内内容用爱奇艺国内版扫码即可', multiAccount: false },
+  iqcn: { id: 'iqcn', methods: ['qr'], loginOptional: false, benefit: '爱奇艺 App 扫码，网关按 Key 保存；同一 Key 下同时供 iQ 内容的国内车道', multiAccount: false },
   mgtv: { id: 'mgtv', methods: ['qr'], loginOptional: false, benefit: '芒果 TV App 扫码', multiAccount: false },
   bilibili: { id: 'bilibili', methods: ['qr', 'cookie'], loginOptional: true, benefit: '匿名可用；登录后解锁高画质', multiAccount: false },
   migu: { id: 'migu', methods: ['qr'], loginOptional: false, benefit: '合并 TV 4K 与 App HDR Vivid 画质', multiAccount: false },
@@ -57,6 +62,15 @@ export function orderProviders<T extends string>(available: readonly T[], order:
 export function visibleProviders<T extends string>(available: readonly T[], prefs: { providerOrder: readonly string[]; hiddenProviders: readonly string[] }): T[] {
   const hidden = new Set(prefs.hiddenProviders)
   return orderProviders(available, prefs.providerOrder).filter((p) => !hidden.has(p))
+}
+
+/**
+ * Optional-login platforms (currently IQ 海外版) come after the ones the client
+ * really needs, so 爱奇艺国内版 shows up first. Sorting is stable, so the user's
+ * own order is preserved inside each group.
+ */
+export function optionalLast<T extends string>(available: readonly T[]): T[] {
+  return [...available].sort((a, b) => Number(!!providerMeta(a).optional) - Number(!!providerMeta(b).optional))
 }
 
 /** Move one id up/down inside an order list built from `available`. Returns the new full order. */
