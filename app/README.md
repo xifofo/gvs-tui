@@ -68,6 +68,11 @@ bun run dist:mac     # 需在 Mac 上执行；release/GVS-<版本>-arm64.dmg / -
   包装脚本写在用户数据目录的 `bin/`，不改动 .app 本身。
 - 目前没有代码签名；macOS 首次打开需右键 → 打开。
 
+Mac 使用独立的 `build/icon-mac.icns`，窗口使用同版 `build/icon-mac.png`。
+它们从应用内的 `gvs-mark.svg` 生成，包含 Mac 图标安全区与四角圆角，避免满画布图案被系统再次缩小并加上灰色底板。
+图标资源随源码提供，正常打包无需额外工具；修改标志后在 macOS 上执行
+`swift app/scripts/gen-mac-icon.swift`（仓库根目录）重新生成，不影响 Windows 图标与托盘图标。
+
 ## 结构
 
 ```text

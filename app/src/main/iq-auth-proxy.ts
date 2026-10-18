@@ -10,6 +10,8 @@ type IQAuthNetwork = {
 
 const AUTH_HOSTS = new Set(['passport.iq.com', 'intl-passport.iqiyi.com'])
 const SOURCE_SUFFIXES = ['iq.com', 'inter.iqiyi.com', 'video.iqiyi.com']
+/** Region-locked sources the gateway returns as tunnel frames; the direct transport cannot reach them. */
+const OVERSEAS_SOURCE_SUFFIXES = ['friday.tw', 'linetv.tw']
 
 /** Account endpoints only; media and other providers keep their own transport. */
 export function isIQAuthURL(url: URL): boolean {
@@ -23,11 +25,20 @@ export function isIQSourceURL(url: URL): boolean {
     || SOURCE_SUFFIXES.some(host => url.hostname === host || url.hostname.endsWith('.' + host))
 }
 
+/** friDay / LINE TV upstream calls reach us as tunnel frames and need the same proxy exit as IQ. */
+export function isOverseasSourceURL(url: URL): boolean {
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return false
+  return OVERSEAS_SOURCE_SUFFIXES.some(host => url.hostname === host || url.hostname.endsWith('.' + host))
+}
+
 export function createIQSourceRoute(network: IQAuthNetwork): (url: URL) => Promise<Fetcher | undefined> {
   const catalogFetch = createIQCatalogFetch({ log: network.log })
   return async url => {
-    if (!isIQSourceURL(url)) return undefined
-    const label = isIQAuthURL(url) ? 'iq_auth_transport' : 'iq_source_transport'
+    const iq = isIQSourceURL(url)
+    // Other region-locked sources need the proxy transport only, never the IQ catalog rewrite.
+    const overseas = !iq && isOverseasSourceURL(url)
+    if (!iq && !overseas) return undefined
+    const label = isIQAuthURL(url) ? 'iq_auth_transport' : iq ? 'iq_source_transport' : 'overseas_source_transport'
     let proxy = network.configuredProxy?.() ?? ''
     const route = proxy ? 'configured-proxy' : 'system-proxy'
     if (!proxy) {
@@ -38,15 +49,17 @@ export function createIQSourceRoute(network: IQAuthNetwork): (url: URL) => Promi
         return undefined
       }
       const match = /^\s*(PROXY|HTTPS)\s+([^\s;]+)/i.exec(policy)
-      if (!match) throw new Error('IQ 请求的系统代理类型不支持，请使用 HTTP/HTTPS 系统代理')
+      if (!match) throw new Error('隧道出口请求的系统代理类型不支持，请使用 HTTP/HTTPS 系统代理')
       proxy = `${match[1]!.toUpperCase() === 'HTTPS' ? 'https' : 'http'}://${match[2]}`
     }
     return async (input, init) => {
       // Log routing and HTTP status, never paths, queries, credentials or bodies.
       network.log(`${label} host=${url.hostname} route=${route}`)
       try {
-        const response = await catalogFetch(input, { ...init, credentials: 'omit', cache: 'no-store' }, proxy,
-          (address, request) => network.fetch(address, request, proxy))
+        const request: RequestInit = { ...init, credentials: 'omit', cache: 'no-store' }
+        const response = iq
+          ? await catalogFetch(input, request, proxy, (address, call) => network.fetch(address, call, proxy))
+          : await network.fetch(input, request, proxy)
         network.log(`${label} host=${url.hostname} route=${route} http=${response.status}`)
         return response
       } catch (error) {

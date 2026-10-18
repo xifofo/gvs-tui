@@ -21,7 +21,7 @@ import { resolveDesktopTunnelProxy } from './desktop-proxy'
 
 let envProxy = ''
 
-/** IQ login and playback requests follow system/PAC routing without Clash TUN. */
+/** IQ plus region-locked sources (friDay / LINE TV) follow system/PAC routing without Clash TUN. */
 export function installIQSourceProxy(): void {
   setTunnelFetchRoute(createIQSourceRoute({
     fetch: fetchIQAuthProxy,

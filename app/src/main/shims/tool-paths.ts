@@ -3,6 +3,7 @@
 //   Windows 安装包：resources/bin（随包带 ffmpeg / N_m3u8DL-RE / mkvmerge / MP4Box）
 //   macOS 安装包：用户数据目录下的 bin——tools.ts 会在这里写 Homebrew 包装脚本，
 //                 不能写进签名过的 .app 里
+//   内置下载器与 IQCN helper：直接读取 resources/bin，避免旧用户缓存覆盖更新。
 import { app } from 'electron'
 import { join } from 'node:path'
 
@@ -14,6 +15,11 @@ export function tuiBinDir(): string {
 
 export function toolDirectoryFrom(_modulePath: string): string {
   return tuiBinDir()
+}
+
+export function m3u8dlPath(): string {
+  const dir = app.isPackaged ? join(process.resourcesPath, 'bin') : tuiBinDir()
+  return join(dir, process.platform === 'win32' ? 'N_m3u8DL-RE.exe' : 'N_m3u8DL-RE')
 }
 
 export function iqcnLocalPath(): string {

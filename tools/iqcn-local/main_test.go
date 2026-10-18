@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,58 @@ func TestClearCandidateRejectsPartialAndScrambledPackets(t *testing.T) {
 	packet[3] |= 0x80
 	if clearCandidate(packet) {
 		t.Fatal("scrambled candidate accepted")
+	}
+}
+
+func TestExplicitClearVideoNeedsNoTicketAndPreservesEveryByte(t *testing.T) {
+	dir := t.TempDir()
+	source, dest := filepath.Join(dir, "source.ts"), filepath.Join(dir, "output.ts")
+	packet := bytes.Repeat([]byte{0xff}, 188)
+	packet[0], packet[1], packet[2], packet[3] = 0x47, 0x1f, 0xff, 0x10
+	data := bytes.Repeat(packet, 3)
+	if err := os.WriteFile(source, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	req := request{Version: 1, Source: source, Destination: dest, DRMType: 1, Identity: "fixture"}
+	got, err := process(req)
+	if err != nil || got.Restored || !got.ClearCandidate || got.Bytes != len(data) {
+		t.Fatalf("explicit clear stream rejected: %+v %v", got, err)
+	}
+	out, err := os.ReadFile(dest)
+	if err != nil || !bytes.Equal(out, data) {
+		t.Fatal("clear media changed")
+	}
+	if _, err := process(req); err == nil {
+		t.Fatal("existing output overwritten")
+	}
+	for _, drmType := range []int{0, 2, 3} {
+		req.DRMType = drmType
+		req.Destination = filepath.Join(dir, fmt.Sprintf("type-%d.ts", drmType))
+		if _, err := process(req); err == nil || err.Error() != "invalid local processing material" {
+			t.Fatalf("missing ticket accepted for type %d: %v", drmType, err)
+		}
+	}
+}
+
+func TestExplicitClearVideoRejectsMalformedTransportStream(t *testing.T) {
+	packet := make([]byte, 188)
+	packet[0], packet[3] = 0x47, 0x10
+	scrambled := append([]byte(nil), packet...)
+	scrambled[3] |= 0x80
+	transportError := append([]byte(nil), packet...)
+	transportError[1] |= 0x80
+	for _, data := range [][]byte{nil, packet[:187], make([]byte, 188), scrambled, transportError} {
+		dir := t.TempDir()
+		source, dest := filepath.Join(dir, "source.ts"), filepath.Join(dir, "output.ts")
+		if err := os.WriteFile(source, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := process(request{Version: 1, Source: source, Destination: dest, DRMType: 1}); err == nil {
+			t.Fatal("malformed clear candidate accepted")
+		}
+		if _, err := os.Stat(dest); !os.IsNotExist(err) {
+			t.Fatal("failed clear candidate created output")
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ import { assertCencMp4Output, isMpegTsFile } from './media-output.ts'
 import { removeScratch, resumeScratchDir, scratchDir, scratchDirIn } from './scratch.ts'
 import { tencentActualVersion, type ActualVersion } from './actual-version.ts'
 import { tencentCaption } from './tencent-quality-selection.ts'
+import { DownloaderCompatibilityError, hasUnsupportedDownloaderFormat } from './downloader-error.ts'
 
 /** A CDN refused us (403/410 …) — usually the signed URL expired mid-flight. */
 export class CdnDenied extends Error {
@@ -1014,6 +1015,14 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     if (fatal) { reject(fatal); return }
     let file = ''
     try { file = readFileSync(logFile, 'utf8') } catch { /* no log */ }
+    // A parallel worker can report HTTP 502 before another worker exits on an
+    // unsupported media format. Preserve the root error before CDN detection;
+    // refreshing signed URLs cannot resolve an explicit format incompatibility.
+    const compatibilityDetails = cleanRELog(stderrHead + '\n' + file + '\n' + output)
+    if ((code !== 0 || exhausted) && hasUnsupportedDownloaderFormat(compatibilityDetails)) {
+      reject(new DownloaderCompatibilityError(`${compatibilityDetails.slice(0, 2000)}\n${compatibilityDetails.slice(-2000)}`))
+      return
+    }
     // Some RE errors are written only to the log or have no final newline.
     const status = deniedStatus || reHttpFailureMonitor().feed(file + '\n' + output + '\n')
     if (status && (code !== 0 || exhausted)) { reject(new CdnDenied(status, '')); return }

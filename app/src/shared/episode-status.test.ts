@@ -69,3 +69,31 @@ test('legacy labels only match when both sides lack an ID and the exact season o
   expect(stateOf(states, { number: 1 }, true)).toBe('queued')
   expect(stateOf(states, { vid: 'new-movie', number: 1 }, true)).toBeUndefined()
 })
+
+test('catalogue video IDs match jobs and history across two IDs for the same show', () => {
+  const jobs: JobLike[] = [
+    { groupId: 'youku:old-show-id:100', vid: 'episode-6', label: 'S04E06', state: 'done' },
+    { groupId: 'youku:old-show-id:200', vid: 'episode-18', label: 'S01E18', state: 'running' },
+    { groupId: 'youku:793195:300', vid: 'episode-16', label: 'S01E16', state: 'done' },
+    { groupId: 'tencent:old-show-id:100', vid: 'episode-7', label: 'S01E07', state: 'done' },
+    { groupId: 'youku:old-show-id:400', vid: 'trailer-6', label: 'S01E06', state: 'done' },
+    { groupId: 'youku:old-show-id:500', label: 'S01E07', state: 'done' },
+  ]
+  const rows: HistoryLike[] = [
+    { provider: 'youku', showId: 'old-show-id', vid: 'episode-8', label: 'S01E08' },
+    { provider: 'tencent', showId: 'old-show-id', vid: 'episode-7', label: 'S01E07' },
+    { provider: 'youku', showId: 'old-show-id', label: 'S01E07' },
+  ]
+  const vids = ['episode-6', 'episode-7', 'episode-8', 'episode-16', 'episode-18']
+  const states = episodeStates(jobs, 'youku', '793195', rows, vids)
+  expect(stateOf(states, { vid: 'episode-6', number: 6 })).toBe('done')
+  expect(stateOf(states, { vid: 'episode-8', number: 8 })).toBe('done')
+  expect(stateOf(states, { vid: 'episode-16', number: 16 })).toBe('done')
+  expect(stateOf(states, { vid: 'episode-18', number: 18 })).toBe('running')
+  expect(stateOf(states, { vid: 'episode-7', number: 7 })).toBeUndefined()
+  expect(stateOf(states, { vid: 'trailer-6', number: 6 })).toBeUndefined()
+  expect(stateOf(states, { number: 7 })).toBeUndefined()
+  // Works when the download list has been cleared and only SQLite history remains.
+  const saved = episodeStates([], 'youku', '793195', rows, vids)
+  expect(stateOf(saved, { vid: 'episode-8', number: 8 })).toBe('done')
+})

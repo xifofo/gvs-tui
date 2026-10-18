@@ -7,6 +7,7 @@ import { finalizeCompletedName, reserveOutputPath } from './completed-naming.ts'
 import { probeFinishedMedia } from './gvs-record.ts'
 import { defaultIQSubtitleIndex, IQAudioValidationError, muxIQ, orderedIQSubtitles } from './iq-mux.ts'
 import { sourceTag } from './name.ts'
+import { iqEpisodeAudioCatalog, iqSelectedAudioResponse, selectIQEpisodeAudios } from './iq-audio-selection.ts'
 
 const realMediaTest = ['ffmpeg', 'ffprobe'].every(bin => spawnSync(bin, ['-version'],
   { stdio: 'ignore', timeout: 8000 }).status === 0) ? test : test.skip
@@ -63,6 +64,40 @@ test('IQ puts preferred simplified then traditional subtitles first, preserving 
   }
   expect(orderedIQSubtitles([])).toEqual([])
 })
+
+realMediaTest('IQ Chinese edition catalog correction reaches both audio and video tags in the actual container', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gvs-iq-chinese-edition-'))
+  try {
+    const video = join(root, 'video.mkv'), aac = join(root, 'aac.m4a'), ddp = join(root, 'ddp.m4a')
+    ff(['-f', 'lavfi', '-i', 'testsrc2=size=64x48:rate=25', '-t', '0.3', '-c:v', 'mpeg4', video])
+    for (const [path, codec] of [[aac, 'aac'], [ddp, 'eac3']]) {
+      ff(['-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000', '-t', '0.3', '-c:a', codec!, '-f', 'mp4', path!])
+    }
+    const data = { audios: [
+      { id: '6:1:500', lid: 6, lang: '法语', language: 'fra', codec: 'eac3', default: true },
+      { id: '6:2:100', lid: 6, lang: '法语', language: 'fra', codec: 'aac' },
+    ] }
+    const title = '真珠美人魚（中文版）第1集'
+    const selected = selectIQEpisodeAudios(data, { title, audioTracks: [
+      { id: '6:1:500', lang: '日语', codec: 'eac3', isDefault: true },
+      { id: '6:2:100', lang: '日语', codec: 'aac' },
+    ] })
+    const audios = selected.map((choice, index) => {
+      const response = iqSelectedAudioResponse({ id: choice.id, codec: choice.row.codec, language: 'fra' }, choice)
+      return { path: index === 0 ? ddp : aac, language: String(response.language), title: '', isDefault: choice.isDefault }
+    })
+    const catalog = iqEpisodeAudioCatalog(data, title)
+    const dest = reserveOutputPath(join(root, 'chinese.mkv'))
+    await muxIQ('ffmpeg', { video, videoLanguage: String(catalog.find(a => a.default === true)?.language), audios,
+      subtitles: [], dest, reservedOutput: true, emit: () => {} })
+    const streams = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', dest],
+      { encoding: 'utf8', timeout: 10000 })).streams
+    expect(streams.map((s: { tags: { language: string } }) => s.tags.language)).toEqual(['zho', 'zho', 'zho'])
+    expect(streams.filter((s: { codec_type: string }) => s.codec_type === 'audio')
+      .map((s: { codec_name: string; disposition: { default: number } }) => [s.codec_name, s.disposition.default]))
+      .toEqual([['eac3', 1], ['aac', 0]])
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}, 60000)
 
 realMediaTest('IQ mux moves the selected default first and publishes measured naming from a reserved path', async () => {
   const root = mkdtempSync(join(tmpdir(), 'gvs-iq-mux-'))

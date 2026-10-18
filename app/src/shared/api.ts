@@ -386,7 +386,7 @@ export interface GvsApi {
 
   // ---- 下载历史 / 钩子 / ed2k
   history(q?: HistoryQuery): Promise<{ items: HistoryEntry[]; total: number }>
-  historyForShow(provider: Provider, showId: string): Promise<HistoryEntry[]>
+  historyForShow(provider: Provider, showId: string, episodeVids?: string[]): Promise<HistoryEntry[]>
   /** provider:showId → 已下载集数 */
   historyShowCounts(): Promise<Record<string, number>>
   removeHistory(id: number): Promise<void>
