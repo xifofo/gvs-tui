@@ -262,7 +262,7 @@ const plat = (p: Provider) => hasProvider(p)
             <div class="field-full"><input v-model="form.key" class="input mono" :placeholder="s.keyMasked || 'sk_live_…'" autocomplete="off" /></div>
           </div>
           <div class="srow wrap">
-            <div class="sl"><label class="st" for="desktop-proxy">代理地址</label><span class="sd">填写 HTTP/HTTPS 代理地址和端口，留空使用系统代理。用于网关、隧道、TMDB 和 IQ 海外版登录与取流。</span></div>
+            <div class="sl"><label class="st" for="desktop-proxy">代理地址</label><span class="sd">填写 HTTP/HTTPS 代理地址和端口，留空使用系统代理。用于网关、隧道、TMDB、IQ 海外版以及 friDay／LINE TV 的登录与取流。</span></div>
             <div class="field-full"><input id="desktop-proxy" v-model="form.desktopProxy" class="input mono" placeholder="http://127.0.0.1:7890（留空使用系统代理）" autocomplete="off" spellcheck="false" /></div>
           </div>
           <div class="srow">

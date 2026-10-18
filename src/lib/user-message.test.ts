@@ -3,6 +3,20 @@ import { userMessage, userFacing } from './user-message'
 import { errorCatalog } from './user-message-catalog'
 import { IQAudioValidationError } from './iq-mux'
 import { IQAudioTransferError } from './iq-transfer'
+import { DownloaderCompatibilityError } from './downloader-error'
+
+test('unsupported media is not presented as a timeout or CDN failure, including restored errors', () => {
+  const raw = 'N_m3u8DL-RE 下载失败 (1): HTTP 502; connection timed out; Unsupported IQ mdcm encryption pattern https://private.invalid?token=PRIVATE'
+  const message = userMessage(new DownloaderCompatibilityError(raw))
+  expect(message).toContain('视频分片格式')
+  expect(message).toContain('反复重试无法解决')
+  expect(message).toContain('分片已保留')
+  expect(message).not.toMatch(/PRIVATE|token|https|超时|CDN/)
+  expect(userMessage(raw)).toBe(message)
+  expect(userMessage(message)).toBe(message)
+  expect(userMessage('HTTP 502')).not.toBe(message)
+  expect(userMessage('Unsupported socket option')).not.toBe(message)
+})
 
 test('native downloader crashes have a local component explanation in restored jobs too', () => {
   const raw = 'N_m3u8DL-RE 下载失败 (SIGABRT): Fatal error. System.AccessViolationException private-secret'

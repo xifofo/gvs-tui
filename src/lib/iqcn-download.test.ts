@@ -40,7 +40,7 @@ function fixtureClient(bytes: Buffer, subtitles = true, onSegment?: () => void, 
     if (action === 'probe') return plan
     if (action === 'streams') {
       expect(input.transport).toBe('local-v1')
-      return { ...plan, planId: 'fixture-plan', transport: 'local-v1', localProcessing: { version: 1, ticket: 'fixture', identity: 'fixture' },
+      return { ...plan, planId: 'fixture-plan', transport: 'local-v1', localProcessing: plan.localProcessing ?? { version: 1, ticket: 'fixture', identity: 'fixture' },
         video: { ...(plan.video as Record<string, unknown>), segments: parts.map(part => ({ contentlength: part.length })) },
         subtitles: subtitles ? [{ index: 0, language_id: 1, formats: ['srt'] }] : [] }
     }
@@ -70,6 +70,33 @@ function fixtureClient(bytes: Buffer, subtitles = true, onSegment?: () => void, 
   }
   return { cli, runtime, released: () => released, peak: () => peak }
 }
+
+withHostProbe('explicit clear domestic video with an empty ticket passes the real local helper and mux', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-clear-'))
+  try {
+    const bytes = await multiAudioFixture(dir), dest = join(dir, 'result.mkv')
+    const fixture = fixtureClient(bytes, false, undefined, {
+      video: { drmType: 1 }, localProcessing: { version: 1, ticket: '', identity: 'fixture' },
+    })
+    fixture.runtime.restore = async (source, destination, material, signal) => {
+      expect(material).toEqual({ version: 1, ticket: '', identity: 'fixture', drmType: 1 })
+      const report = await restoreIQCNLocal(source, destination, material, signal)
+      expect(report).toMatchObject({ restored: false, clearCandidate: true })
+      expect(readFileSync(destination).equals(readFileSync(source))).toBe(true)
+      return report
+    }
+    await downloadIQCN(fixture.cli, { vid: '123', quality: '600|100|25' } as DlTask,
+      dest, join(dir, 'work'), () => {}, undefined, fixture.runtime, 2)
+    expect(fixture.released()).toBe(1)
+    const specs = await probeFinishedMedia(dest)
+    expect(specs).toMatchObject({ status: 'probed', width: 320, height: 240, codec: 'h264' })
+    const ffmpeg = await ensureFFmpeg()
+    const decoded = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:v', '-map', '0:a', '-f', 'null', '-'],
+      { windowsHide: true, timeout: 30000 })
+    expect(decoded.status).toBe(0)
+    expect(decoded.stderr.toString().trim()).toBe('')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}, 60000)
 
 withHostProbe('domestic shared runner names the measured default audio, preserves S00 and protects collisions and legacy queues', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-naming-'))

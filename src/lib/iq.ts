@@ -20,7 +20,9 @@ import { usesMeasuredNaming } from './completed-naming.ts'
 import { IQAudioValidationError, muxIQ } from './iq-mux.ts'
 import { selectIQSubtitles, type IQSubtitleFile } from './iq-subtitles.ts'
 import { isUnknownAudioLanguage } from './audio-language.ts'
-import { normalizeIQAudioLanguage } from './iq-audio-language.ts'
+import { iqEpisodeAudioCatalog, iqSelectedAudioResponse, selectIQEpisodeAudios } from './iq-audio-selection.ts'
+import { runLog } from './runlog.ts'
+import { DownloaderCompatibilityError } from './downloader-error.ts'
 
 /** IQ's default track identifies the source-preferred language, not its codec tier. */
 function iqAudioLanguage(row: Record<string, unknown>): string {
@@ -32,9 +34,9 @@ function iqAudioLanguage(row: Record<string, unknown>): string {
   return isUnknownAudioLanguage(name) ? '' : `name:${name}`
 }
 
-export function iqOptions(data: Record<string, unknown>): { qualities: Quality[]; audios: Audio[] } {
+export function iqOptions(data: Record<string, unknown>, title = ''): { qualities: Quality[]; audios: Audio[] } {
   const formats = Array.isArray(data.formats) ? data.formats.filter(isObj) : []
-  const tracks = (Array.isArray(data.audios) ? data.audios.filter(isObj) : []).filter(a => asString(a.id)).map(a => normalizeIQAudioLanguage(a))
+  const tracks = iqEpisodeAudioCatalog(data, title)
   const qualities = formats.map(f => {
     const width = Number(f.width) || 0, height = Number(f.height) || 0, tier = tierHeight(width,height)
     const label = tier >= 2160 ? '4K' : tier ? `${tier}P` : asString(f.label)
@@ -115,6 +117,9 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
   if (source === 'domestic' && Number(/gvs-iq\.(\d+)/i.exec(version.stdout + version.stderr)?.[1] || 0) < 3) throw new Error('国内 Cookie 取流需要 IQ.3 或更新的内置下载器，请更新工具')
   const mediaRef = source === 'domestic' ? 'https://www.iqiyi.com/' : 'https://www.iq.com/'
   let plan = iqPlan(data)
+  // Validate this episode before spending time on video. Saved audio IDs can
+  // belong to the episode used by the quality picker, including in old queues.
+  let selectedAudios = selectIQEpisodeAudios(data,task)
   mkdirSync(work,{recursive:true})
   const manifest = join(work,'iq-video.m3u8'), video = join(work,'iq-video.ts')
   adoptIQResume(work,manifest,plan)
@@ -142,6 +147,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
       if (route.hosts[0]) rememberIQCDN(preferencePath,route.hosts[0])
     } catch (error) {
       signal?.throwIfAborted()
+      if (error instanceof DownloaderCompatibilityError) throw error
       const transient = error instanceof IQCDNSlowError || error instanceof CdnDenied && [403,408,410,429,500,502,503,504].includes(error.status) ||
         error instanceof Error && /ResponseEnded|premature|timed?\s*out|connection.*(?:reset|closed)|unexpected.*end/i.test(error.message)
       if (!transient || retry >= 2) throw error
@@ -151,19 +157,23 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
       data = await play()
       plan = iqPlan(data)
       if (iqResumeIdentity(plan) !== identity) throw new Error('IQ 重新取链后片源或密钥改变，原分片已保留，请重新探测')
+      selectedAudios = selectIQEpisodeAudios(data,task)
     }
   }
-  const available = Array.isArray(data.audios) ? data.audios.filter(isObj).map(a => normalizeIQAudioLanguage(a)) : []
-  const requested = task.audioTracks?.length ? task.audioTracks.map(t => t.id) : available.filter(a => a.default === true).map(a => asString(a.id))
-  if (!requested.length) throw new Error('IQ 没有返回默认独立音轨，请重新探测')
+  const available = iqEpisodeAudioCatalog(data,task.title)
   const audioFiles: Array<{path:string;language:string;title:string;isDefault:boolean}> = []
   const audioPartPaths: string[] = []
-  for (const [index,id] of requested.entries()) {
+  for (const [index,selection] of selectedAudios.entries()) {
+    const { id } = selection
     signal?.throwIfAborted()
-    emit('音轨下载',0.70+0.12*index/requested.length,`独立音轨 ${index+1}/${requested.length}`)
+    if (id !== selection.requestedId) {
+      const safe = (value: string) => /^\d+(?::\d+)*$/.test(value) ? value : '-'
+      runLog(`iq audio rebound vid=${safe(task.vid)} requested=${safe(selection.requestedId)} current=${safe(id)}`)
+    }
+    emit('音轨下载',0.70+0.12*index/selectedAudios.length,`独立音轨 ${index+1}/${selectedAudios.length}`)
     const loadAudio = async (timeoutMs: number) => {
       signal?.throwIfAborted()
-      const audio = normalizeIQAudioLanguage(await cli.invoke('iq','audio',{vid:task.vid,audioId:id,renditionVid:plan.rendition,source},cli.extra(cfg,'iq'),{timeoutMs}), id)
+      const audio = iqSelectedAudioResponse(await cli.invoke('iq','audio',{vid:task.vid,audioId:id,renditionVid:plan.rendition,source},cli.extra(cfg,'iq'),{timeoutMs}), selection)
       signal?.throwIfAborted()
       if (audio.clear !== true) throw new Error('IQ 独立音轨没有明确标记明文，已停止')
       const parts = Array.isArray(audio.parts) ? audio.parts.filter(isObj) : []
@@ -177,8 +187,8 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
     await downloadIQParts(parts.map((part,pi)=>({url:asString(part.url),path:paths[pi]!})),{
       identity:JSON.stringify([task.vid,plan.rendition,id]),threads:cfg.threads,headers:headersFor(mediaRef),signal,
       refreshParts:async () => (await loadAudio(30000)).parts.map(part => ({url:asString(part.url)})),
-      onRetry:(pi,attempt,reason)=>emit('音轨重试',0.70+0.12*index/requested.length,`${reason}，重试分段 ${pi+1}/${parts.length}（${attempt}/2）；保留已完成分段`),
-      progress:(bytes,done,total)=>emit('音轨下载',0.70+0.12*(index+Math.min(1,Number(audio.size)>0?bytes/Number(audio.size):done/Math.max(1,total)))/requested.length,
+      onRetry:(pi,attempt,reason)=>emit('音轨重试',0.70+0.12*index/selectedAudios.length,`${reason}，重试分段 ${pi+1}/${parts.length}（${attempt}/2）；保留已完成分段`),
+      progress:(bytes,done,total)=>emit('音轨下载',0.70+0.12*(index+Math.min(1,Number(audio.size)>0?bytes/Number(audio.size):done/Math.max(1,total)))/selectedAudios.length,
         formatSpeed(0,1,(Date.now()-started)/1000,{segments:{done,total},transfer:measure(bytes)})),
     })
     const joined = join(work,`iq-audio-${index}.m4a`)
@@ -190,9 +200,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
       }
     }
     await pipeline(Readable.from(audioChunks()),createWriteStream(joined),{ signal })
-    const isDefault = task.audioTracks?.length ? task.audioTracks.find(t => t.id === id)?.isDefault === true
-      : available.find(a => asString(a.id) === id)?.default === true
-    audioFiles.push({path:joined,language:asString(audio.language)||'und',title:asString(audio.title)||'原声',isDefault})
+    audioFiles.push({path:joined,language:asString(audio.language)||'und',title:asString(audio.title)||'原声',isDefault:selection.isDefault})
   }
   const availableSubs = (Array.isArray(data.subtitles) ? data.subtitles.filter(isObj) : []).map(sub => ({
     url: asString(sub.url), format: asString(sub.format).toLowerCase(), language: asString(sub.lang) || 'und',

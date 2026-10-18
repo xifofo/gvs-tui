@@ -13,8 +13,11 @@ const RANK: Record<EpisodeState, number> = { done: 5, running: 4, queued: 3, pau
 
 export const episodeKey = (number: number, season = 1) => `S${String(season).padStart(2, '0')}E${String(number).padStart(2, '0')}`
 
-export function episodeStates(jobs: readonly JobLike[], provider: string, showId: string, history: readonly HistoryLike[] = []): EpisodeStates {
+export function episodeStates(jobs: readonly JobLike[], provider: string, showId: string, history: readonly HistoryLike[] = [], episodeVids: readonly string[] = []): EpisodeStates {
   const group = `${provider}:${showId}`
+  // 同一节目可能有数字 ID 和字符串 ID 两个入口。只让当前目录中明确
+  // 存在的视频 ID 跨节目入口匹配，不能把另一个入口的季集号带过来。
+  const catalogue = new Set(episodeVids.filter(Boolean))
   const out: EpisodeStates = { byVid: new Map(), legacyLabels: new Map() }
   const add = (vid: string | undefined, label: string, state: EpisodeState) => {
     const index = vid ? out.byVid : out.legacyLabels
@@ -23,11 +26,12 @@ export function episodeStates(jobs: readonly JobLike[], provider: string, showId
     if (!prev || RANK[state] > RANK[prev]) index.set(key, state)
   }
   for (const j of jobs) {
-    if (j.groupId.slice(0, j.groupId.lastIndexOf(':')) !== group) continue
+    const jobGroup = j.groupId.slice(0, j.groupId.lastIndexOf(':'))
+    if (jobGroup !== group && !(jobGroup.startsWith(`${provider}:`) && j.vid && catalogue.has(j.vid))) continue
     add(j.vid, j.label, j.state)
   }
   for (const row of history) {
-    if (row.provider !== provider || row.showId !== showId) continue
+    if (row.provider !== provider || (row.showId !== showId && !(row.vid && catalogue.has(row.vid)))) continue
     add(row.vid, row.label, 'done')
   }
   return out

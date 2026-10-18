@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cleanRELog, formatSpeed, hlsExtinfSeconds, hlsKeyArgs, playlistOverall, playlistStatus, reProgress, reHttpFailureMonitor, reSidecarProgress, reWorkPhase, runM3u8dl, CdnDenied, reDownloadedSegments, reListedSegments, transferSpeed } from './media.ts'
+import { DownloaderCompatibilityError } from './downloader-error.ts'
 
 test('CENC key is also supplied to the HLS parser, skipping the key URI fetch', () => {
   const key = '0123456789abcdef0123456789abcdef'
@@ -104,6 +105,25 @@ test('a downloader can recover from 403 without being killed', async () => {
 
 test('a failed exit with CDN denial and no final newline triggers URL refresh', async () => {
   await expect(runM3u8dl(process.execPath, ['-e', `process.stdout.write('WARN: HTTP 403 Forbidden'); process.exitCode=1`], '')).rejects.toBeInstanceOf(CdnDenied)
+})
+
+test('unsupported IQ format takes precedence over concurrent CDN errors and retains the root exception', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-re-unsupported-'))
+  try {
+    const log = join(dir, 're.log')
+    const fatal = 'Unhandled exception: System.IO.InvalidDataException: Unsupported IQ mdcm encryption pattern key=0123456789abcdef0123456789abcdef https://cdn.test/file?token=secret'
+    const script = `require('fs').writeFileSync(process.argv[1], 'Response status code does not indicate success: 502 (Bad Gateway).\\n'); require('fs').writeSync(2, ${JSON.stringify(fatal)} + '\\n' + 'stack frame\\n'.repeat(3000)); process.exitCode = 1`
+    const error = await runM3u8dl(process.execPath, ['-e', script, log], log).then(() => undefined, e => e as Error)
+    expect(error).toBeInstanceOf(DownloaderCompatibilityError)
+    expect(error).not.toBeInstanceOf(CdnDenied)
+    expect(error?.message).toContain('Unsupported IQ mdcm encryption pattern')
+    expect(error?.message).not.toMatch(/0123456789abcdef|token=secret|https:\/\//)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('unsupported format without an HTTP failure is still a component compatibility error', async () => {
+  const script = `console.error('System.IO.InvalidDataException: Unsupported IQ mdcm encryption pattern'); process.exitCode = 1`
+  await expect(runM3u8dl(process.execPath, ['-e', script], '')).rejects.toBeInstanceOf(DownloaderCompatibilityError)
 })
 
 test('a successful exit is not rejected for recovered CDN warnings in the log', async () => {

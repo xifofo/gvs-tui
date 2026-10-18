@@ -1351,6 +1351,7 @@ export class Core {
       }
     const run = (skipSign: boolean) =>
       probeOptions(this.client(), this.cfg, provider, first.vid, {
+        title: first.title,
         tencentPlayParams: first.tencentPlayParams,
         skipSign: skipSign || undefined,
         languages: languages.length ? languages : undefined,

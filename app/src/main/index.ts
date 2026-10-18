@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, s
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import appIconPng from '../../build/icon.png?asset'
+import macIconPng from '../../build/icon-mac.png?asset'
 import appIconIco from '../../build/icon.ico?asset'
 import trayPng16 from '../../build/tray-16.png?asset'
 import trayPng32 from '../../build/tray-32.png?asset'
@@ -311,7 +312,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   updateAccountCookie: async (id, cookie) => { await accounts.updateCookie(id, cookie) },
   qualityHint: (p, id) => hints.get(`${p}:${id}`),
   history: (q) => history().db.list(q),
-  historyForShow: (p, id) => history().db.forShow(p, id),
+  historyForShow: (p, id, vids) => history().db.forShow(p, id, vids),
   historyShowCounts: () => history().db.showCounts(),
   removeHistory: (id) => history().db.remove(id),
   computeEd2k: (id, jobId) => history().computeEd2k(id, jobId),
@@ -338,7 +339,7 @@ function createWindow(): void {
     minHeight: 700,
     show: false,
     title: 'GVS',
-    icon: process.platform === 'win32' ? appIconIco : appIconPng,
+    icon: process.platform === 'win32' ? appIconIco : process.platform === 'darwin' ? macIconPng : appIconPng,
     backgroundColor: '#f4f2ec',
     autoHideMenuBar: true,
     webPreferences: {

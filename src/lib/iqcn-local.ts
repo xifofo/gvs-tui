@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto'
 import type { GwClient } from './client.ts'
 import { iqcnLocalPath } from './tool-paths.ts'
 import { asString, isObj } from './util.ts'
-import { iqcnSegmentDescriptor } from './iqcn-control.ts'
+import { cachedIQCNDescriptor, iqcnSegmentDescriptor } from './iqcn-control.ts'
+import { runLog } from './runlog.ts'
 
 export type IQCNProcessing = { version: number; ticket: string; identity: string; drmType?: 1 }
 export type IQCNSegmentTiming = { index:number; bytes:number; descriptorMs:number; networkMs:number; restoreMs:number; readMs:number; totalMs:number; descriptorRequests:number; fetchAttempts:number }
@@ -16,6 +17,27 @@ export type IQCNLocalRuntime = {
   onTiming?: (timing: IQCNSegmentTiming) => void
 }
 const MAX_SEGMENT = 64 * 1024 * 1024
+const MAX_CDN_REDIRECTS = 4
+const CDN_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+
+/** Never copy arbitrary network messages, signed URLs or processing material into logs. */
+export function iqcnSegmentFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : ''
+  const http = /^HTTP ([1-5]\d{2})$/.exec(message)
+  if (http) return `http_${http[1]}`
+  const reasons: Record<string, string> = {
+    '分片直连超时': 'timeout',
+    '分片直连连接失败': 'connection_failed',
+    '分片长度不符': 'length_mismatch',
+    '分片超出声明长度': 'oversized',
+    '分片下载不完整': 'incomplete',
+    '分片调度发生循环跳转': 'redirect_loop',
+    '分片调度跳转次数过多': 'redirect_limit',
+    '分片调度未返回跳转地址': 'redirect_missing',
+    '分片跳转地址不属于爱奇艺 CDN': 'redirect_rejected',
+  }
+  return reasons[message] ?? 'network_failed'
+}
 
 /** Only fixed messages emitted by our helper may enter diagnostics. */
 export function iqcnRestoreReason(stderr: string): string {
@@ -34,7 +56,9 @@ export function iqcnRestoreReason(stderr: string): string {
 export function iqcnProcessing(plan: Record<string, unknown>): IQCNProcessing {
   const value = isObj(plan.localProcessing) ? plan.localProcessing : {}
   const ticket = asString(value.ticket).trim()
-  const cleartext = isObj(plan.video) && plan.video.drmType === 1
+  const video = isObj(plan.video) ? plan.video : {}
+  // Retain compatibility with gateways serializing the selected DRM type as text.
+  const cleartext = video.drmType === 1 || video.drmType === '1'
   if (plan.transport !== 'local-v1' || value.version !== 1 || (!ticket && !cleartext) || !asString(value.identity)) {
     throw new Error('爱奇艺国内版网关未提供本地下载协议，请同步更新网关和 App')
   }
@@ -52,6 +76,26 @@ function mediaURL(raw: unknown): string {
   return text
 }
 
+/** Domestic dispatchers may redirect to a CDN edge; validate every hop before fetching it. */
+async function fetchSegmentResponse(url: string, fetcher: IQCNLocalRuntime['fetch'], signal: AbortSignal): Promise<Response> {
+  let current = mediaURL(url)
+  const visited = new Set<string>()
+  for (let redirects = 0; ; redirects++) {
+    signal.throwIfAborted()
+    if (visited.has(current)) throw new Error('分片调度发生循环跳转')
+    visited.add(current)
+    const response = await fetcher(current, { redirect: 'manual', signal })
+    if (!CDN_REDIRECT_STATUSES.has(response.status)) return response
+    const location = response.headers.get('location')
+    await response.body?.cancel()
+    signal.throwIfAborted()
+    if (redirects >= MAX_CDN_REDIRECTS) throw new Error('分片调度跳转次数过多')
+    if (!location) throw new Error('分片调度未返回跳转地址')
+    try { current = mediaURL(new URL(location, current).href) }
+    catch { throw new Error('分片跳转地址不属于爱奇艺 CDN') }
+  }
+}
+
 // Fetch uses the local Node/Bun transport, never GwClient or the tunnel.
 async function fetchSegment(url: string, destination: string, size: number, fetcher: IQCNLocalRuntime['fetch'], signal?: AbortSignal): Promise<void> {
   const timeout = AbortSignal.timeout(60_000)
@@ -60,7 +104,7 @@ async function fetchSegment(url: string, destination: string, size: number, fetc
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
     active.throwIfAborted()
-    const response = await fetcher(url, { redirect: 'manual', signal: active })
+    const response = await fetchSegmentResponse(url, fetcher, active)
     if (![200, 206].includes(response.status) || !response.body) {
       await response.body?.cancel()
       throw new Error(`HTTP ${response.status}`)
@@ -148,8 +192,16 @@ const localRuntime: IQCNLocalRuntime = { fetch: (url, init) => fetch(url, init),
 
 export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, index: number, expected: number, material: IQCNProcessing, work: string, signal?: AbortSignal, runtime = localRuntime, initial?: Record<string, unknown>): Promise<Buffer> {
   if (!Number.isSafeInteger(expected) || expected <= 0 || expected > MAX_SEGMENT) throw new Error('爱奇艺国内版分片大小无效或超过 64 MiB')
+  const validate = (descriptor: Record<string, unknown>) => {
+    if (descriptor.transport !== 'local-v1' || descriptor.index !== index || descriptor.bytes !== expected || !Array.isArray(descriptor.urls) || !descriptor.urls.length || descriptor.urls.length > 16) {
+      throw new Error('网关分片响应不符合本地下载协议')
+    }
+  }
+  // A cache hit must not mask a mismatch in the selected plan's segment table.
+  if (initial) validate(initial)
   const id = randomUUID(), raw = join(work, `iqcn-${id}.source`), clear = join(work, `iqcn-${id}.clear`)
   let firstError = ''
+  let rejected: Record<string, unknown> | undefined
   const started=performance.now()
   const timing:IQCNSegmentTiming={index,bytes:expected,descriptorMs:0,networkMs:0,restoreMs:0,readMs:0,totalMs:0,descriptorRequests:0,fetchAttempts:0}
   try {
@@ -157,34 +209,41 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
     for (let refresh = 0; refresh < 2 && !downloaded; refresh++) {
       signal?.throwIfAborted()
       let descriptor: Record<string, unknown>
+      let source: 'initial' | 'cache' | 'gateway' = 'gateway'
       const descriptorStart=performance.now()
       try {
-        if (!(refresh===0 && initial)) timing.descriptorRequests++
-        descriptor = refresh === 0 && initial
-          ? initial
-          : await iqcnSegmentDescriptor(cli, { planId, index, ...(refresh ? { refresh: '1' } : {}) }, signal)
-        if(!(refresh===0&&initial)&&descriptor.clientDescriptorCacheHit===true)timing.descriptorRequests--
+        // Refreshed batches take precedence over the plan's original URLs.
+        const supplied = refresh === 0 ? cachedIQCNDescriptor(cli, planId, index) ?? initial : undefined
+        if (supplied) {
+          descriptor = supplied
+          source = supplied.clientDescriptorCacheHit === true ? 'cache' : 'initial'
+        } else {
+          timing.descriptorRequests++
+          descriptor = await iqcnSegmentDescriptor(cli, { planId, index, ...(refresh ? { refresh: '1' } : {}) }, signal, rejected)
+          if (descriptor.clientDescriptorCacheHit === true) { timing.descriptorRequests--; source = 'cache' }
+        }
       } catch (error) {
         // Keep the gateway code (e.g. PLAN_EXPIRED) so the caller can renew the plan.
         if (firstError) throw Object.assign(new Error(`${firstError}；刷新分片地址失败`), { errorCode: (error as { errorCode?: unknown })?.errorCode, cause: error })
         throw error
       } finally {timing.descriptorMs+=performance.now()-descriptorStart}
       signal?.throwIfAborted()
-      if (descriptor.transport !== 'local-v1' || descriptor.index !== index || descriptor.bytes !== expected || !Array.isArray(descriptor.urls) || !descriptor.urls.length || descriptor.urls.length > 16) {
-        throw new Error('网关分片响应不符合本地下载协议')
-      }
-      const urls = descriptor.urls.map(mediaURL)
+      validate(descriptor)
+      const urls = (descriptor.urls as unknown[]).map(mediaURL)
       for (const url of urls) {
         const fetchStart=performance.now();timing.fetchAttempts++
         try {
           await fetchSegment(url, raw, expected, runtime.fetch, signal)
           downloaded = true
+          if (firstError) runLog(`iqcn segment recovered index=${index} source=${source} descriptorRequests=${timing.descriptorRequests} fetchAttempts=${timing.fetchAttempts}`)
           break
         } catch (error) {
           signal?.throwIfAborted()
+          if (!firstError) runLog(`iqcn segment retry index=${index} source=${source} reason=${iqcnSegmentFailureReason(error)}`)
           firstError ||= error instanceof Error ? error.message : '分片直连失败'
         } finally {timing.networkMs+=performance.now()-fetchStart}
       }
+      if (!downloaded) rejected = descriptor
     }
     if (!downloaded) throw new Error(firstError || '爱奇艺国内版分片直连失败')
     signal?.throwIfAborted()

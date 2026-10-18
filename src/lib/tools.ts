@@ -2,13 +2,13 @@ import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { tuiBinDir } from './tool-paths.ts'
+import { m3u8dlPath, tuiBinDir } from './tool-paths.ts'
 import { fetchToolBytes } from './tool-download.ts'
 import { moveFileSync } from './file-move.ts'
 export { tuiBinDir } from './tool-paths.ts'
 
 const M3U8_REPO = 'my-name-is-alan/gvs-tui'
-const M3U8_RELEASE = 'managed-re-v0.6.0-iq.1'
+const M3U8_RELEASE = 'managed-re-v0.6.0-iq.3'
 const MKV_REPO = 'Jesseatgao/MKVToolNix-static-builds'
 const SHAKA_REPO = 'shaka-project/shaka-packager'
 
@@ -127,7 +127,7 @@ function prependBin(): void {
 }
 
 export function lookM3u8dl(): string {
-  const bundled = existsFile(join(tuiBinDir(), m3u8dlName()))
+  const bundled = existsFile(m3u8dlPath())
   if (bundled) return bundled
   const env = process.env.N_M3U8DL_RE?.trim()
   if (env) {

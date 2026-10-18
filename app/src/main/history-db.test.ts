@@ -50,3 +50,32 @@ test('migrateJobs imports completed jobs once', () => {
   expect(migrateJobs(db, jobs, () => 99)).toBe(0)
   expect(db.list().items[0]!.size).toBe(99)
 })
+
+test('forShow finds the current catalogue videos across show aliases without mixing episodes or providers', () => {
+  const db = mk()
+  const add = (provider: JobView['provider'], show: string, vid: string, episode: number) => db.record(historyFromJob(
+    view({ provider, groupId: `${provider}:${show}:100`, label: `S01E${episode}` }),
+    { ...task, vid, episode }, 1))
+  add('youku', 'old-show', 'v6', 6)
+  add('youku', 'old-show', 'v7', 7)
+  add('youku', '793195', 'v16', 16)
+  add('youku', 'old-show', 'trailer-6', 6)
+  add('youku', 'old-show', '', 8)
+  add('tencent', 'old-show', 'v8', 8)
+  const vids = ['v6', 'v7', 'v8', 'v16', 'v6', '']
+  expect(db.forShow('youku', '793195').map(e => e.vid)).toEqual(['v16'])
+  expect(db.forShow('youku', '793195', vids).map(e => e.vid)).toEqual(['v6', 'v7', 'v16'])
+  expect(db.forShow('youku', '793195', vids).map(e => e.showId)).toEqual(['old-show', 'old-show', '793195'])
+  expect(db.list().total).toBe(6)
+})
+
+test('forShow batches long catalogues and binds video IDs as data', () => {
+  const db = mk()
+  const vids = Array.from({ length: 1200 }, (_, i) => `v${i}`)
+  const quoted = "v' OR 1=1 --"
+  for (const [i, vid] of [...vids, quoted].entries()) db.record(historyFromJob(
+    view({ groupId: 'youku:old-show:100', provider: 'youku', label: `S01E${i}` }),
+    { ...task, vid, episode: i }, 1))
+  expect(db.forShow('youku', 'new-show', [...vids, quoted])).toHaveLength(1201)
+  expect(db.forShow('youku', 'new-show', [quoted]).map(e => e.vid)).toEqual([quoted])
+})

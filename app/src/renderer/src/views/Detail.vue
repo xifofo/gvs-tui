@@ -57,15 +57,19 @@ const anchor = ref(-1)
 /** 每集下载状态（已下载 / 排队 / 下载中…），来自下载任务列表 */
 /** 下载历史（SQLite）：本地文件删掉后也算已下载 */
 const historyEpisodes = ref<HistoryEntry[]>([])
-watch(() => (d.value ? `${d.value.provider}:${d.value.id}` : ''), async (k) => {
+const episodeVids = computed(() => (d.value?.episodes ?? []).map(e => e.vid).filter(Boolean))
+let historyRequest = 0
+watch(() => [d.value?.provider, d.value?.id, episodeVids.value] as const, async ([provider, id, vids]) => {
+  const request = ++historyRequest
   historyEpisodes.value = []
-  if (!k || !d.value) return
+  if (!provider || !id) return
   try {
-    const rows = await gvs('historyForShow', d.value.provider, d.value.id)
-    if (k === (d.value ? `${d.value.provider}:${d.value.id}` : '')) historyEpisodes.value = rows
+    const rows = await gvs('historyForShow', provider, id, vids)
+    if (request === historyRequest) historyEpisodes.value = rows
   } catch { /* 历史库不可用时只看任务列表 */ }
 }, { immediate: true })
-const epStates = computed(() => episodeStates(store.jobs, d.value?.provider ?? '', d.value?.id ?? '', historyEpisodes.value))
+onUnmounted(() => { ++historyRequest })
+const epStates = computed(() => episodeStates(store.jobs, d.value?.provider ?? '', d.value?.id ?? '', historyEpisodes.value, episodeVids.value))
 const epState = (e: { vid: string; number: number; season?: number; title: string }) => stateOf(epStates.value, e, isMovie.value)
 const doneCount = computed(() => eps.value.filter(e => epState(e) === 'done').length)
 
