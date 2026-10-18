@@ -21,7 +21,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "GVS 桌面端 $GITHUB_REF_NAME" --notes-file "docs/release-${GITHUB_REF_NAME}.md"
+          notes="docs/release-${GITHUB_REF_NAME}.md"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release already exists"
+            exit 0
+          fi
+          if [ -f "$notes" ]; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "GVS 桌面端 $GITHUB_REF_NAME" --notes-file "$notes"
+          else
+            echo "::warning::缺少 $notes，改用自动生成的发布说明"
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "GVS 桌面端 $GITHUB_REF_NAME" --generate-notes
+          fi
 
   build:
     needs: prepare
@@ -141,4 +151,9 @@ jobs:
           grep -Fq "GVS-${GITHUB_REF_NAME#desktop-v}-x64.dmg" <<< "$assets"
           grep -Fxq 'latest.yml' <<< "$assets"
           grep -Fxq 'latest-mac.yml' <<< "$assets"
-          gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false --notes-file "docs/release-${GITHUB_REF_NAME}.md"
+          notes="docs/release-${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false --notes-file "$notes"
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
+          fi
