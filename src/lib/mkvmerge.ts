@@ -8,6 +8,7 @@ import { firstPresentationMs, relativePresentationStarts, isEac3ProbeError, drop
 import { moveFileSync } from './file-move.ts'
 import { removeScratch, scratchDir } from './scratch.ts'
 import { isUnknownAudioLanguage, resolveAudioLanguage } from './audio-language.ts'
+import { withMkvGroupTags } from './release-group.ts'
 
 type Phase = { out: string; inputs?: string[]; cb?: (n: number, total: number) => void }
 
@@ -75,6 +76,7 @@ export async function mkvmergeRemux(
   onProgress?: (n: number, total: number) => void,
   signal?: AbortSignal,
   languageFallback = '',
+  group = '',
 ): Promise<void> {
   const args = ['-o', outPath]
   const info = await identify(mkvmerge, inPath, signal)
@@ -83,7 +85,7 @@ export async function mkvmergeRemux(
     if (languageFallback && isUnknownAudioLanguage(trackLanguage(track))) args.push('--language', `${track.id}:${languageFallback}`)
   }
   args.push(inPath)
-  return run(mkvmerge, args, { out: outPath, inputs: [inPath], cb: onProgress }, signal)
+  return withMkvGroupTags(outPath, group, tags => run(mkvmerge, [...tags, ...args], { out: outPath, inputs: [inPath], cb: onProgress }, signal))
 }
 
 /**
@@ -124,6 +126,7 @@ export async function mkvmergeMux(
   signal?: AbortSignal,
   onWarning?: (message: string) => void,
   languageFallback = '',
+  group = '',
 ): Promise<void> {
   audios = orderedMuxAudios(audios)
   const ffmpeg = await ensureFFmpeg()
@@ -184,9 +187,9 @@ export async function mkvmergeMux(
     const initial = join(work, 'initial.mkv')
     // Do not apply negative adjustments before measuring: that could discard
     // early packets. Correction is done on a single shared Matroska timeline.
-    await run(mkvmerge, mkvmergeMuxArgs(initial, videoPath, audios.map(a => ({ ...a, delayMs: 0 })), videoLanguages), {
+    await withMkvGroupTags(initial, group, tags => run(mkvmerge, [...tags, ...mkvmergeMuxArgs(initial, videoPath, audios.map(a => ({ ...a, delayMs: 0 })), videoLanguages)], {
       out: initial, inputs: [videoPath, ...audios.map(a => a.path)], cb: onProgress,
-    }, signal)
+    }, signal))
     const measure = async (path: string) => Promise.all([
       firstPresentationMs(ffmpeg, path, 'v:0', signal),
       ...audios.map((_, i) => firstPresentationMs(ffmpeg, path, `a:${i}`, signal)),
@@ -245,13 +248,14 @@ async function identify(bin: string, path: string, signal?: AbortSignal): Promis
   })
 }
 
-/** RE can disable its own mux for Dolby Vision. Mkvmerge accepts these
- * decrypted MP4 tracks and keeps the selected audio/subtitle files. */
+/** Mux RE's downloaded tracks, including embedded TS audio. Also used when
+ * RE disables its mux for Dolby Vision; selected audio/subtitles are retained. */
 export async function mkvmergeTrackFiles(bin: string, inputs: string[], out: string,
-  cb?: (n: number, total: number) => void, signal?: AbortSignal): Promise<void> {
+  cb?: (n: number, total: number) => void, signal?: AbortSignal, originalAudioLanguage = '', group = ''): Promise<void> {
   signal?.throwIfAborted()
   const records = await Promise.all(inputs.map(async path => ({path,info:await identify(bin,path,signal)})))
   const tracks = records.flatMap(record=>record.info.tracks)
+  const singleAudio = tracks.filter(track=>track.type==='audio').length === 1
   if (!tracks.some(track=>track.type==='video') || !tracks.some(track=>track.type==='audio')) {
     throw new Error('独立轨道封装失败：缺少已完成的视频或音频轨道')
   }
@@ -260,7 +264,14 @@ export async function mkvmergeTrackFiles(bin: string, inputs: string[], out: str
   for (const {path,info} of records) {
     const match = /^download\.([a-z]{2,3}(?:-[a-z0-9]{2,8})*)(?:\.[\w-]+)*\.(?:m4a|aac|ac3|eac3|srt|vtt|ass)$/i.exec(basename(path))
     for (const track of info.tracks) {
-      if (match && isUnknownAudioLanguage(trackLanguage(track))) args.push('--language',`${track.id}:${match[1]}`)
+      const language = trackLanguage(track)
+      // MGTV's original-only TS may be tagged English by the downloader. Only
+      // correct that generic tag when the original language was confirmed;
+      // retain multilingual tracks and other explicit languages.
+      if (track.type==='audio' && singleAudio && originalAudioLanguage
+        && (isUnknownAudioLanguage(language) || /^(en|eng)(?:[-_]|$)/i.test(language))) {
+        args.push('--language',`${track.id}:${originalAudioLanguage}`)
+      } else if (match && isUnknownAudioLanguage(language)) args.push('--language',`${track.id}:${match[1]}`)
       if (track.type==='subtitles') args.push('--default-track',`${track.id}:no`)
       if (track.type==='audio') {
         args.push('--default-track',`${track.id}:${firstAudio?'yes':'no'}`)
@@ -269,7 +280,7 @@ export async function mkvmergeTrackFiles(bin: string, inputs: string[], out: str
     }
     args.push(path)
   }
-  await run(bin,args,{out,inputs,cb},signal)
+  await withMkvGroupTags(out, group, tags => run(bin,[...tags,...args],{out,inputs,cb},signal))
   const finished = await identify(bin,out,signal)
   for (const type of ['video','audio','subtitles']) {
     if (finished.tracks.filter(track=>track.type===type).length !== tracks.filter(track=>track.type===type).length) {

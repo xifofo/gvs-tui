@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { bilibiliOptions, mgtvOptions, selectedBilibiliMedia, webVideoDetail, webVideoLink, webTracks } from './web-video-providers'
+import { bilibiliOptions, mgtvOptions, probeWebVideo, selectedBilibiliMedia, webVideoDetail, webVideoLink, webTracks } from './web-video-providers'
 import { ProviderSessions } from './provider-session'
 import { needsTunnel } from './tunnel-policy'
 import { PROVIDER_IDS } from './providers'
@@ -74,12 +74,55 @@ test('MGTV only exposes selectable entries without inventing actual HDR or dimen
   const opts=mgtvOptions({qualities:[{quality:'11',name:'4K HDR',catalogHDR:'hdr_vivid',nominalHeight:2160,selectable:true,frameRate:50},{quality:'9',selectable:false}]})
   expect(opts.qualities).toHaveLength(1);expect(opts.qualities[0]!.hdr).toBe('unknown');expect(opts.qualities[0]!.height).toBe(0);expect(opts.qualities[0]!.tier).toBe(2160)
 })
+test('MGTV estimates each rendition from its own catalog kbps and the selected episode duration',()=>{
+  // 玉簟秋 E01: 45:22; the qualities API supplies kbps but no file sizes.
+  const opts=mgtvOptions({qualities:[
+    {quality:'10',selectable:true,bitrateKbps:9746,nominalHeight:2160,frameRate:50},
+    {quality:'9',selectable:true,bitrateKbps:'8770',nominalHeight:2160,frameRate:25},
+    {quality:'4',selectable:true,bitrateKbps:1985,nominalHeight:1080},
+    {quality:'1',selectable:false,bitrateKbps:428},
+  ]},2722)
+  expect(opts.qualities.map(q=>q.size)).toEqual([9746,8770,1985].map(kbps=>Math.round(kbps*1000*2722/8)))
+  expect(opts.qualities.every(q=>q.duration===2722&&q.height===0&&q.hdr==='unknown')).toBe(true)
+  const second=mgtvOptions({qualities:[{quality:'10',selectable:true,bitrateKbps:9746}]},2870)
+  expect(second.qualities[0]!.size).toBe(Math.round(9746*1000*2870/8))
+})
+test('MGTV keeps supplied bytes and uses duration metadata only when it is available',()=>{
+  const opts=mgtvOptions({duration:200,qualities:[
+    {quality:'10',selectable:true,size:123456,estimatedSize:234567,bitrateKbps:1000},
+    {quality:'9',selectable:true,estimatedSize:'234567',bitrateKbps:1000},
+    {quality:'4',selectable:true,duration:120,bitrateKbps:1000},
+    {quality:'3',selectable:true,bitrateKbps:1000},
+  ]},100)
+  expect(opts.qualities.map(q=>q.size)).toEqual([123456,234567,15000000,12500000])
+  expect(mgtvOptions({duration:200,qualities:[{quality:'1',selectable:true,bitrateKbps:1000}]}).qualities[0]!.size).toBe(25000000)
+})
+test('MGTV leaves size unknown without valid bitrate and duration instead of guessing from resolution',()=>{
+  const quality={quality:'10',selectable:true,name:'4K',nominalHeight:2160}
+  for(const rate of [undefined,0,-1,true,'invalid',Infinity]) {
+    expect(mgtvOptions({qualities:[{...quality,bitrateKbps:rate}]},2722).qualities[0]!.size).toBe(0)
+  }
+  for(const duration of [undefined,0,-1,NaN,Infinity]) {
+    expect(mgtvOptions({qualities:[{...quality,bitrateKbps:9746}]},duration).qualities[0]!.size).toBe(0)
+  }
+  expect(mgtvOptions({duration:true,qualities:[{...quality,bitrateKbps:9746}]}).qualities[0]!.size).toBe(0)
+  expect(mgtvOptions({qualities:[{...quality,bitrateKbps:1e300}]},2722).qualities[0]!.size).toBe(0)
+})
+test('MGTV quality probing uses the supplied episode duration with a single catalog request',async()=>{
+  const calls:unknown[]=[]
+  const opts=await probeWebVideo(async(p,a,input)=>{
+    calls.push({p,a,input})
+    return {qualities:[{quality:'10',selectable:true,bitrateKbps:9746}]}
+  },'mgtv','24697722',2722)
+  expect(opts.qualities[0]!.size).toBe(Math.round(9746*1000*2722/8))
+  expect(calls).toEqual([{p:'mgtv',a:'qualities',input:{vid:'24697722',support4k:true,supportHDR10:true,qualityPolicy:'best'}}])
+})
 test('MGTV reads all pages without losing non-intact entries and focuses a direct video',async()=>{
   const calls:Record<string,unknown>[]=[]
   const d=await webVideoDetail(async(_p,_a,input)=>{
     calls.push(input)
     return {id:'clip:1',vid:'2',episodes:input.cursor ? [{vid:'3',number:'2',isIntact:false}] : [{vid:'2',number:'1',isIntact:true}],hasMore:!input.cursor,nextCursor:input.cursor?'':'2'}
-  },'mgtv','https://www.mgtv.com/b/1/2.html')
+  },'mgtv','https://www.mgtv.com/b/1/2.html',async()=>new Response('',{status:503}))
   expect(calls).toHaveLength(2);expect(d.focusVid).toBe('2');expect(d.episode_groups).toEqual(['正片','其他视频'])
 })
 test('Bilibili preserves short explicit pages and the gateway-resolved short-link page',async()=>{

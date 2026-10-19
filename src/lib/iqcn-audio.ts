@@ -27,6 +27,10 @@ function audioSourcePriority(row: Record<string, unknown>): number {
     + (row.has_independent_files === true ? 100 : 0) + (row.selected === true ? 1 : 0)
 }
 
+function audioContentKey(row: Record<string, unknown>): string {
+  return `${Number(row.language_id)}:${Number(row.aat) || 0}:${Number(row.amt) || 0}`
+}
+
 export function iqcnAudios(data: Record<string, unknown>): Audio[] {
   const groups = new Map<string, { row: Record<string, unknown>; selected: boolean }>()
   for (const row of Array.isArray(data.audios) ? data.audios.filter(isObj) : []) {
@@ -39,13 +43,22 @@ export function iqcnAudios(data: Record<string, unknown>): Audio[] {
     }
   }
   const choices = [...groups.entries()]
-  const preferred = choices.find(([, group]) => group.selected)?.[0] ?? choices.find(([, group]) => group.row.has_independent_files === true)?.[0] ?? choices[0]?.[0]
+  const highAAC = new Set(choices.filter(([, { row }]) => Number(row.ct) === 5 && asString(row.cf).toLowerCase() === 'aac')
+    .map(([, { row }]) => audioContentKey(row)))
+  // Prefer high AAC over its standard counterpart only for initial selection.
+  // Keep other languages/channel/content variants and every manual choice.
+  // ct/bid are platform tier identifiers, not measured bitrates.
+  const defaults = new Set(choices.filter(([, { row }]) => !(Number(row.ct) === 1 && asString(row.cf).toLowerCase() === 'aac'
+    && highAAC.has(audioContentKey(row)))).map(([id]) => id))
+  const selectedChoices = choices.filter(([id]) => defaults.has(id))
+  const preferred = selectedChoices.find(([, group]) => group.selected)?.[0]
+    ?? selectedChoices.find(([, group]) => group.row.has_independent_files === true)?.[0] ?? selectedChoices[0]?.[0]
   return choices.map(([id, { row }]) => {
     const codec = asString(row.cf).toUpperCase()
     const name = asString(row.name) || `语言 ${Number(row.language_id)}`
     const quality = Number(row.ct) === 5 ? '高码率' : Number(row.ct) === 1 ? '标准 · 随视频' : ''
     return { id, vid: asString(row.aid), label: [name, codec, quality].filter(Boolean).join(' · '), lang: name,
-      codec, isDefault: id === preferred, selected: true }
+      codec, isDefault: id === preferred, selected: defaults.has(id) }
   })
 }
 

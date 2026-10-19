@@ -23,6 +23,8 @@ export type Mp4Track = {
   id: number; type: string; codec: string; scale: number; movieScale: number
   edits: Edit[]; language: string; name: string; duration: number
   enabled?: boolean
+  /** Decoded channel count from codec configuration, not the legacy sample-entry placeholder. */
+  channels?: number
 }
 export type Mp4TrackScan = Mp4Track & {
   samples: number; bytes: number; firstMs: number; timelineHash: string; payloadHash?: string
@@ -54,9 +56,22 @@ export function parseMp4Tracks(xml: string): Mp4Track[] {
       scale: Number(attr(media, 'TimeScale')), movieScale, edits, language: attr(media, 'LanguageCode'), name: attr(handler, 'Name'), duration: Number(attr(media, 'Duration')) }
     const flags = attr(header, 'Flags')
     const enabled = flags ? (Number.parseInt(flags, flags.startsWith('0x') ? 16 : 10) & 1) !== 0 : undefined
+    let channels: number | undefined
+    if (track.codec === 'dtsx' || track.codec === 'dtsy') {
+      const count = Number(attr(description, 'Channels'))
+      if (Number.isSafeInteger(count) && count > 0) channels = count
+    } else if (track.codec === 'ec-3') {
+      // ISO sample-entry Channels is commonly 2 even for DDP 5.1. Only use
+      // dec3's actual independent stream configuration, without dependents.
+      const configs = [...descriptions.matchAll(/<EC3StreamConfig\b[^>]*\/>/g)]
+      if (configs.length === 1 && attr(configs[0]![0], 'num_sub_dep') === '0') {
+        const config = configs[0]![0], acmod = attr(config, 'acmod'), lfe = attr(config, 'lfon')
+        if (/^[0-7]$/.test(acmod) && /^[01]$/.test(lfe)) channels = [2, 1, 2, 3, 3, 4, 4, 5][Number(acmod)]! + Number(lfe)
+      }
+    }
     if (!track.id || !(track.scale > 0) || !track.codec || !track.type) throw new Error('MP4 轨道信息不完整')
     if (track.codec === 'enca' || track.codec === 'encv') throw new Error('MP4 轨道仍处于加密状态')
-    return { ...track, ...(enabled !== undefined ? { enabled } : {}) }
+    return { ...track, ...(enabled !== undefined ? { enabled } : {}), ...(channels ? { channels } : {}) }
   })
 }
 

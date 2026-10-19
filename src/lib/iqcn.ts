@@ -19,6 +19,7 @@ import { iqcnRendition, resolveIQCNSelection } from './iqcn-quality-selection.ts
 import { runLog } from './runlog.ts'
 import { orderedMuxAudios } from './audio-selection.ts'
 import { clearIQCNDescriptors } from './iqcn-control.ts'
+import { ffmpegGroupArgs } from './release-group.ts'
 export { iqcnSelection } from './iqcn-quality-selection.ts'
 
 /** Domestic selection uses source BID/bitrate/frame rate, never guessed tiers. */
@@ -58,7 +59,7 @@ export function assertIQCNCoverage(tracks: TrackTiming[], expectedSeconds = 0): 
 export const isPlanExpired = (error: unknown): boolean => (error as { errorCode?: unknown } | null)?.errorCode === 'PLAN_EXPIRED'
 
 export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, work: string, emit: (status: string, pct: number, log: string) => void, signal?: AbortSignal,
-  runtime?: IQCNLocalRuntime, threads = 1, options: { reservedOutput?: boolean } = {}): Promise<string> {
+  runtime?: IQCNLocalRuntime, threads = 1, options: { reservedOutput?: boolean; releaseGroup?: string } = {}): Promise<string> {
   signal?.throwIfAborted()
   if (usesMeasuredNaming(task)) task.namingEvidence = undefined
   // The shared measured-naming runner claims an empty provisional path.
@@ -194,7 +195,7 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
       audioFiles.forEach((audio, index) => args.push(`-metadata:s:a:${index}`, `language=${audio.language}`, `-disposition:a:${index}`, audio.isDefault ? 'default' : '0'))
       if (!audioFiles.length) args.push('-disposition:a', '0', '-disposition:a:0', 'default')
       subtitles.forEach((sub, index) => args.push(`-metadata:s:s:${index}`, `language=${sub.language}`, `-metadata:s:s:${index}`, `title=${sub.title}`, `-disposition:s:${index}`, index === subtitleDefault ? 'default' : '0'))
-      args.push('-y', muxed)
+      args.push(...ffmpegGroupArgs(muxed, options.releaseGroup ?? task.group), '-y', muxed)
       await runIQFFmpeg(ffmpeg, args, '爱奇艺国内版音轨与字幕封装失败', signal, copyOptions)
     }
     const { copyFileSync } = await import('node:fs')

@@ -5,10 +5,12 @@ import { defaultAudioIndex, orderedMuxAudios } from './audio-selection.ts'
 import { mp4Lang } from './mp4box.ts'
 import { defaultIQSubtitleIndex, prepareIQSubtitles } from './iq-subtitles.ts'
 import type { IQSubtitleFile } from './iq-subtitles.ts'
+import { ffmpegGroupArgs } from './release-group.ts'
 export { defaultIQSubtitleIndex, orderedIQSubtitles } from './iq-subtitles.ts'
 
 type IQMuxInput = { path: string; language: string; title: string; isDefault?: boolean }
 type IQMuxOptions = {
+  releaseGroup?: string
   video: string
   /** Original source language; independent of a manually selected audio dub. */
   videoLanguage?: string
@@ -66,7 +68,7 @@ export async function muxIQ(bin: string, options: IQMuxOptions): Promise<{ index
       `-disposition:a:${i}`, i === index ? 'default' : '0'))
     subtitles.forEach((s, i) => args.push(`-metadata:s:s:${i}`, `language=${s.language}`,
       `-metadata:s:s:${i}`, `title=${s.title}`, `-disposition:s:${i}`, i === subtitleIndex ? 'default' : '0'))
-    args.push('-n', output)
+    args.push(...ffmpegGroupArgs(output, options.releaseGroup || ''), '-n', output)
     await ffmpeg(bin, args, signal)
     emit('音轨验收', 0.97, '检查所有合流音轨')
     try {

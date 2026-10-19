@@ -1,5 +1,5 @@
 import { isUnknownAudioLanguage } from './audio-language.ts'
-import { normalizeIQAudioLanguage } from './iq-audio-language.ts'
+import { hasIQJapaneseAudioMislabel, normalizeIQAudioLanguage } from './iq-audio-language.ts'
 import { mp4Lang } from './mp4box.ts'
 import { asString, isObj } from './util.ts'
 
@@ -53,9 +53,11 @@ function episodeAudioCatalog(data: Record<string, unknown>, title: string): {
   const rows = raw.map(row => normalizeIQAudioLanguage({ ...row, ...(data.source === 'domestic' ? { source: 'domestic' } : {}) }))
   const edition = editionLanguage(title)
   const corrections = new Map<string, { from: string; to: string }>()
-  // Domestic Cookie audio IDs use a different namespace. Retain the source's
-  // language instead of applying overseas edition or numeric-ID corrections.
-  if (data.source === 'domestic' || rows.some(row => row.source === 'domestic')) return { rows, corrections }
+  // Retain domestic language namespaces unless the entire catalog has the
+  // confirmed iq.com ID-6/French mislabel. Its Cookie route can be domestic;
+  // explicit Chinese editions still need their existing edition correction.
+  if ((data.source === 'domestic' || rows.some(row => row.source === 'domestic')) &&
+      !(raw.length && raw.every(row => hasIQJapaneseAudioMislabel(row)))) return { rows, corrections }
   // Some episodes of an explicitly labelled Japanese/Thai/etc. edition expose
   // only lid=1 in DASH even though the album uses its real language ID. Never
   // apply this to a multilingual catalog or a differently identified dub.

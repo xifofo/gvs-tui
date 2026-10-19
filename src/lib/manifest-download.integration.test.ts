@@ -51,6 +51,7 @@ mediaTest('manifest jobs produce real MKV with audio from HLS, master HLS and DA
       expect(readFileSync(done.log).subarray(0, 4).toString('hex')).toBe('1a45dfa3')
       const probe = JSON.parse(run('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', done.log]))
       expect(probe.format.format_name).toContain('matroska')
+      expect(probe.format.tags.GROUP).toBe('TEST')
       expect(probe.streams.map((s: { codec_type: string }) => s.codec_type).sort()).toEqual(['audio', 'video'])
       expect(Number(probe.format.duration)).toBeGreaterThan(2.8)
     }

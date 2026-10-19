@@ -63,15 +63,54 @@ test('successful Tencent scan keeps only mode/tvid locally; cookie stays on the 
   expect(cfg.tencentMode).toBe('tv')
 })
 
-test('TV login input defaults tv_fp_profile=virtual_ott_4k when device empty', () => {
+test('TV login input uses a preset unless the custom device identity is complete', () => {
   const cfg = defaultConfig()
   const prev = process.env.TENCENT_TV_FP_PROFILE
   delete process.env.TENCENT_TV_FP_PROFILE
   try {
-    expect(tencentTVLoginInput(cfg).tv_fp_profile).toBe('virtual_ott_4k')
+    expect(tencentTVLoginInput(cfg)).toEqual({ tv_fp_profile: 'virtual_ott_4k' })
     cfg.tencentTVDevice = 'ABC'
     cfg.tencentTVQUA = 'QV=1'
-    expect(tencentTVLoginInput(cfg).tv_fp_profile).toBeUndefined()
+    expect(tencentTVLoginInput(cfg)).toEqual({ tv_fp_profile: 'virtual_ott_4k' })
+    cfg.tencentTVVersion = '20.0.0.1008'
+    expect(tencentTVLoginInput(cfg)).toEqual({ tvid: 'ABC', qua_info: 'QV=1', appver: '20.0.0.1008' })
+  } finally {
+    if (prev === undefined) delete process.env.TENCENT_TV_FP_PROFILE
+    else process.env.TENCENT_TV_FP_PROFILE = prev
+  }
+})
+
+test('TV login after a successful scan does not send the saved device as an incomplete override', () => {
+  const cfg = defaultConfig()
+  const prev = process.env.TENCENT_TV_FP_PROFILE
+  delete process.env.TENCENT_TV_FP_PROFILE
+  try {
+    applyTencentLogin(cfg, 'tv', { logged_in: true, tvid: 'SAVED-TV-DEVICE' })
+    const saved = { ...cfg }
+    expect(tencentTVLoginInput(cfg)).toEqual({ tv_fp_profile: 'virtual_ott_4k' })
+    expect(cfg).toEqual(saved)
+  } finally {
+    if (prev === undefined) delete process.env.TENCENT_TV_FP_PROFILE
+    else process.env.TENCENT_TV_FP_PROFILE = prev
+  }
+})
+
+test('partial TV device settings use the configured preset without leaking partial fields', () => {
+  const prev = process.env.TENCENT_TV_FP_PROFILE
+  process.env.TENCENT_TV_FP_PROFILE = ' custom-preset '
+  try {
+    for (let mask = 0; mask < 7; mask++) {
+      const cfg = defaultConfig()
+      cfg.tencentTVDevice = mask & 1 ? 'DEVICE' : ' '
+      cfg.tencentTVQUA = mask & 2 ? 'QV=1' : ''
+      cfg.tencentTVVersion = mask & 4 ? '20.0.0.1008' : undefined
+      expect(tencentTVLoginInput(cfg)).toEqual({ tv_fp_profile: 'custom-preset' })
+    }
+    const cfg = defaultConfig()
+    cfg.tencentTVDevice = ' DEVICE '
+    cfg.tencentTVQUA = ' QV=1 '
+    cfg.tencentTVVersion = ' 20.0.0.1008 '
+    expect(tencentTVLoginInput(cfg)).toEqual({ tvid: 'DEVICE', qua_info: 'QV=1', appver: '20.0.0.1008' })
   } finally {
     if (prev === undefined) delete process.env.TENCENT_TV_FP_PROFILE
     else process.env.TENCENT_TV_FP_PROFILE = prev
@@ -80,6 +119,7 @@ test('TV login input defaults tv_fp_profile=virtual_ott_4k when device empty', (
 
 test('dual QR starts app+tv and polls both', async () => {
   const cfg = defaultConfig()
+  applyTencentLogin(cfg, 'tv', { logged_in: true, tvid: 'SAVED-TV-DEVICE' })
   const calls: Array<Record<string, string>> = []
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -97,7 +137,9 @@ test('dual QR starts app+tv and polls both', async () => {
   expect(paths.appPath).toContain('app-')
   expect(paths.tvPath).toContain('tv-')
   expect(calls.some((c) => c.method === 'app' && c.force === '1')).toBe(true)
-  expect(calls.some((c) => c.method === 'tv' && c.tv_fp_profile === 'virtual_ott_4k')).toBe(true)
+  expect(calls.find((c) => c.method === 'tv')).toEqual({
+    method: 'tv', session_type: 'tv', force: '1', tv_fp_profile: 'virtual_ott_4k',
+  })
   calls.length = 0
   await pollTencentDualQR(cli)
   expect(calls.filter((c) => c.state === 'check')).toHaveLength(2)

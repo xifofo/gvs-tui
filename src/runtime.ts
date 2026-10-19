@@ -2339,7 +2339,7 @@ export class Runtime {
     )
   }
 
-  private probeLangOpts(skipSign = false): { title?: string; skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: Episode['tencentPlayParams'] } {
+  private probeLangOpts(skipSign = false): { title?: string; duration?: number; skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: Episode['tencentPlayParams'] } {
     const seen: Record<string, true> = {}
     const languages: Array<{ vid: string; lang: string }> = []
     for (const t of this.pending) {
@@ -2349,7 +2349,7 @@ export class Runtime {
         languages.push({ vid: l.vid, lang: l.lang })
       }
     }
-    return { title: this.pending[0]?.title, skipSign: skipSign || undefined, languages: languages.length ? languages : undefined, tencentPlayParams: this.pending[0]?.tencentPlayParams }
+    return { title: this.pending[0]?.title, duration: this.pending[0]?.duration, skipSign: skipSign || undefined, languages: languages.length ? languages : undefined, tencentPlayParams: this.pending[0]?.tencentPlayParams }
   }
 
 

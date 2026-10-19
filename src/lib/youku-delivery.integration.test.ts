@@ -103,7 +103,8 @@ mediaTest('Youku exact frame/TV selection keeps matching audio; missing quality 
       }
       if (done.err) throw new Error(done.err)
       expect(done.status).toBe('完成')
-      const probe = JSON.parse(run('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', done.log]))
+      const probe = JSON.parse(run('ffprobe', ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', done.log]))
+      expect(probe.format.tags.GROUP).toBe('TEST')
       expect(probe.streams.map((s: { codec_type: string }) => s.codec_type).sort()).toEqual(['audio', 'video'])
       const requests = requested.slice(requestStart)
       if (['hq-default', 'frame-profile-selected', 'frame-ddp'].includes(mode)) {

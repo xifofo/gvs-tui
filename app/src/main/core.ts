@@ -1369,6 +1369,7 @@ export class Core {
     const run = (skipSign: boolean) =>
       probeOptions(this.client(), this.cfg, provider, first.vid, {
         title: first.title,
+        duration: first.duration,
         tencentPlayParams: first.tencentPlayParams,
         skipSign: skipSign || undefined,
         languages: languages.length ? languages : undefined,
@@ -1497,6 +1498,7 @@ export class Core {
     const tasks = req.episodes.map((ep, i): DlTask => {
       const t: DlTask = {
         provider: req.detail.provider,
+        manualAudioDefault: !!req.defaultAudioId,
         namingVersion: ['youku', 'tencent', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(req.detail.provider) ? 1 : undefined,
         includeEpisodeTitle: this.cfg.includeEpisodeTitle !== false,
         title: ep.title,
