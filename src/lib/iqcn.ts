@@ -68,7 +68,10 @@ export async function downloadIQCN(cli: GwClient, task: DlTask, dest: string, wo
   emit('匹配画质', 0.01, '按本集匹配所选码率、帧率、编码和动态范围')
   const selection = await resolveIQCNSelection(cli, task, signal)
   signal?.throwIfAborted()
-  const requestPlan = () => cli.invoke('iqcn', 'streams', { tvid: task.vid, ...selection, transport: 'local-v1' }, {}, { timeoutMs: 150000 })
+  // 'local-copy' declares that this client can store a whole-file (progressive
+  // MP4) rendition directly. Gateways without that declaration keep refusing
+  // such plans instead of returning ranges the TS-only helper cannot read.
+  const requestPlan = () => cli.invoke('iqcn', 'streams', { tvid: task.vid, ...selection, transport: 'local-v1', 'local-copy': '1' }, {}, { timeoutMs: 150000 })
   let plan = await requestPlan()
   const video = isObj(plan.video) ? plan.video : {}
   let segments = Array.isArray(video.segments) ? video.segments.filter(isObj) : []
