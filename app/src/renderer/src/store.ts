@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { ipcArgs } from '@shared/ipc-args'
+import { titleKey } from '@shared/calendar'
 import type { SearchSourceKey } from '@shared/search-sources'
 import { needsDeviceFile, userMessage, userFacing } from '@shared/user-message'
 import type {
@@ -334,6 +335,17 @@ export function accountsOf(provider: string): AccountSlot[] {
 /** 当前剧是否已订阅 */
 export function subscriptionOf(provider: string, showId: string) {
   return store.subs?.subs.find((s) => s.provider === provider && s.showId === showId) ?? null
+}
+
+/**
+ * 按剧名找订阅：平台排播条目（网关 provider=dengta）只给剧名、没有平台剧集 id，
+ * 所以「已订阅 / 未订阅」和点击跳转都靠归一后的剧名对齐。同平台优先，其次任意平台。
+ */
+export function subscriptionByTitle(title: string, provider?: string) {
+  const key = titleKey(title)
+  if (!key) return null
+  const hits = (store.subs?.subs ?? []).filter((s) => titleKey(s.title) === key)
+  return hits.find((s) => s.provider === provider) ?? hits[0] ?? null
 }
 
 export function hasProvider(p: Provider): boolean {

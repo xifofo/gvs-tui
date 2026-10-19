@@ -89,6 +89,7 @@ import {
   type Tone,
 } from '@shared/api'
 import { mergeUiPrefs, sanitizeUiPrefs } from '@shared/ui-prefs'
+import { parseGatewayCalendar, type CalendarDay } from '@shared/calendar'
 import { installTunnelWebSocket } from './env'
 import { desktopProxy, setDesktopProxy } from './desktop-network'
 import { normalizeDesktopProxy } from './desktop-proxy'
@@ -704,6 +705,22 @@ export class Core {
   private client(): GwClient {
     if (!this.cli) throw new Error('还没有连接网关')
     return this.cli
+  }
+
+  /**
+   * 追剧日历：网关 `provider=dengta / action=calendar`（各平台官方排播，每天更新哪几集）。
+   * 上游抓包、appKey、签名全在网关侧；这里只有一次 invoke 和形状映射。
+   * 网关未连接或上游失败返回 null，调用方退回本地芒果排播直连。
+   */
+  async calendar(days = 14): Promise<CalendarDay[] | null> {
+    if (!this.cli) return null
+    try {
+      const data = await this.invoke('dengta', 'calendar', { days })
+      const out = parseGatewayCalendar(data)
+      return out.length ? out : null
+    } catch {
+      return null
+    }
   }
 
   private async invoke(p: string, action: string, input: Record<string, unknown>, skipSign = false) {
