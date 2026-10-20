@@ -83,7 +83,7 @@ test('machine code takes precedence and messages are idempotent', () => {
   for (const rule of errorCatalog) if (!firstByCode.has(rule.code)) firstByCode.set(rule.code, rule.message)
   for (const rule of errorCatalog) {
     const message = userMessage({ errorCode: rule.code, message: 'unrelated diagnostic' })
-    expect(message).toBe(firstByCode.get(rule.code))
+    expect(message).toBe(firstByCode.get(rule.code) ?? rule.message)
     expect(userMessage(message)).toBe(message)
     expect(message).not.toMatch(/[A-Z]+_[A-Z_]+|diagnostic|https?:\/\//)
   }
