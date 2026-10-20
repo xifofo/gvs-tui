@@ -4,7 +4,7 @@ import { appendFileSync, closeSync, mkdirSync, openSync, readSync, statSync } fr
 import { homedir } from 'node:os'
 import { dirname, extname, join } from 'node:path'
 import type { ActualVersion, CompletedMedia, GVSActualRecord, MediaSpecs } from './actual-version.ts'
-import { readMp4Tracks } from './mp4box.ts'
+import { readMp4Tracks, type Mp4Track } from './mp4box.ts'
 import { lookHostFFmpeg, lookMP4Box, tuiBinDir } from './tools.ts'
 
 /** Bounded content sampling survives rename/move and detects many accidental record/file mismatches. */
@@ -44,6 +44,8 @@ export type ProbeAudioOptions = {
   muxAudio?: { index: number; count: number }
   /** MP4 tkhd enable flags, independent of FFmpeg's inferred default disposition. */
   enabledAudioTrackIds?: number[]
+  /** Codec-independent MP4 metadata, matched by track ID rather than position. */
+  mp4AudioTracks?: Mp4Track[]
 }
 
 function defaultAudio(streams: Array<Record<string, any>>, options: ProbeAudioOptions): NonNullable<MediaSpecs['audio']> {
@@ -67,8 +69,11 @@ function defaultAudio(streams: Array<Record<string, any>>, options: ProbeAudioOp
   }
   if (index < 0) return { status: 'ambiguous' }
   const audio = tracks[index]!
-  const codec = typeof audio.codec_name === 'string' && audio.codec_name !== 'unknown' ? audio.codec_name : undefined
-  const channels = positive(audio.channels)
+  const mp4 = options.mp4AudioTracks?.find(t => t.type === 'soun' && t.id === Number(audio.id))
+  const tag = mp4?.codec || audio.codec_tag_string
+  const codec = /^dts[xy]$/.test(tag || '') ? 'dtsx'
+    : typeof audio.codec_name === 'string' && audio.codec_name !== 'unknown' ? audio.codec_name : undefined
+  const channels = positive(audio.channels) || positive(mp4?.channels)
   return { status: 'confirmed', index, evidence, ...(positive(audio.id) ? { trackId: Number(audio.id) } : {}),
     ...(codec ? { codec } : {}), ...(channels ? { channels } : {}),
     ...(/atmos|\bjoc\b/i.test(String(audio.profile || '')) ? { atmos: true } : {}) }
@@ -214,6 +219,7 @@ export async function probeFinishedMedia(path: string, signal?: AbortSignal, opt
     try {
       const timeout = AbortSignal.timeout(15000)
       const tracks = (await readMp4Tracks(mp4box, path, signal ? AbortSignal.any([signal, timeout]) : timeout)).filter(t => t.type === 'soun')
+      options = { ...options, mp4AudioTracks: tracks }
       if (tracks.length && tracks.every(t => t.enabled !== undefined)) {
         options = { ...options, enabledAudioTrackIds: tracks.filter(t => t.enabled).map(t => t.id) }
       }

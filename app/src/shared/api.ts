@@ -204,7 +204,7 @@ export type EnqueueRequest = {
   audioIds: string[]
   /** Selected subtitle ids when the probe returned subtitles. */
   subtitleIds?: string[]
-  /** 默认播放的已选音轨；省略时按 DTS、杜比 / 全景声、AAC 顺序自动选择。 */
+  /** 用户手动指定的默认音轨；省略时自动选择，实际 10 声道 DTS:X 优先让位给 DDP 5.1。 */
   defaultAudioId?: string
   tmdb: TmdbHit | null
   /** Explicit season from the matched TMDB show's list; episode IDs/numbers stay unchanged. */

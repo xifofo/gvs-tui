@@ -37,6 +37,7 @@ import { assertYoukuPlayback, assertYoukuDuration, assertYoukuCompletedMedia } f
 import type { IQCNLocalRuntime } from './iqcn-local.ts'
 import { runLog } from './runlog.ts'
 import { prepareAudioLanguage } from './audio-language.ts'
+import { youkuAudioLanguage, youkuMuxAudios } from './youku-audio.ts'
 import type { TmdbDetails } from './tmdb.ts'
 import { actualVersionText, tencentActualVersion, type ActualVersion } from './actual-version.ts'
 import { verifyTencentCoverage, verifyTencentSpecs } from './tencent-output.ts'
@@ -46,6 +47,7 @@ import { finalizeCompletedName, reserveOutputPath, tencentNamingEvidence, usesMe
 import { defaultAudioIndex, orderedMuxAudios } from './audio-selection.ts'
 import type { CompletedMedia, MediaSpecs } from './actual-version.ts'
 import { probeFinishedMedia } from './gvs-record.ts'
+import { releaseGroup } from './release-group.ts'
 
 export type DlTask = {
   tencentPlayParams?: import('../types.ts').TencentPlayParams
@@ -73,6 +75,8 @@ export type DlTask = {
   includeEpisodeTitle?: boolean
   /** Audio tracks to mux in (空格勾选的那些）；空 = 只封平台默认音轨。 */
   audioTracks?: Array<{ id: string; label: string; lang: string; vid?: string; codec?: string; isDefault?: boolean }>
+  /** True only when the user explicitly chose a default, retained for retries. */
+  manualAudioDefault?: boolean
   /** Selected separate subtitle renditions (Disney+); undefined = platform default (all). */
   subtitleTracks?: Array<{ id: string; label: string; lang: string; forced: boolean; sdh: boolean; isDefault: boolean }>
   group: string
@@ -312,7 +316,7 @@ export function jobNaming(t: DlTask, cfg: FileConfig): Naming {
     edition: t.edition,
     collection: t.collection,
     source: sourceTag(t.provider),
-    group: t.provider === 'douyin' ? '' : (t.group.trim() || cfg.releaseGroup),
+    group: t.provider === 'douyin' ? '' : releaseGroup(t, cfg),
     tmdbId: t.tmdbId,
     container: t.provider === 'douyin' || (t.provider === 'youku' && t.audioTracks?.some(isDtsAudio))
       ? 'mp4' : t.provider === 'hongguo' && cfg.hongguoFmt ? cfg.hongguoFmt
@@ -350,7 +354,7 @@ export async function runTask(
     signal?.throwIfAborted()
     let audioLanguageFallback = ''
     try {
-      if (t.tmdbId && (t.provider === 'youku' || t.provider === 'tencent')) {
+      if (t.tmdbId && (t.provider === 'youku' || t.provider === 'tencent' || t.provider === 'mgtv')) {
         emit('元数据', 0, '读取 TMDB 制作地区与原始语言')
         audioLanguageFallback = await prepareAudioLanguage(cfg, t, signal)
         log(`audio/video language fallback=${audioLanguageFallback || 'none'} tmdb=${t.tmdbId} countries=${t.tmdbMetadata?.countries.join(',') || 'unknown'}`)
@@ -378,10 +382,10 @@ export async function runTask(
     emit('取链', 0.01, out.split(/[/\\]/).pop() ?? out)
     switch (t.provider) {
       case 'mgtv': case 'bilibili': case 'migu':
-        await writeFinal(out,dest => downloadWebVideo(cli,cfg,t,dest,work,emit,signal))
+        await writeFinal(out,dest => downloadWebVideo(cli,cfg,t,dest,work,emit,signal,audioLanguageFallback))
         break
       case 'iqcn':
-        note = await downloadIQCN(cli, t, out, work, emit, signal, iqcnRuntime, cfg.threads, { reservedOutput: ownsOutput })
+        note = await downloadIQCN(cli, t, out, work, emit, signal, iqcnRuntime, cfg.threads, { reservedOutput: ownsOutput, releaseGroup: n.group })
         break
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
@@ -390,10 +394,10 @@ export async function runTask(
         await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
         break
       case 'hongguo':
-        await dlHongguo(cli, t, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads, work, signal)
+        await dlHongguo(cli, t, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads, work, signal, n.group)
         break
       case 'huangguo':
-        await dlHuangguo(cli, t, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads, work, signal)
+        await dlHuangguo(cli, t, out, ffmpeg, mkvmerge, emit, retryNote, cfg.threads, work, signal, n.group)
         break
       case 'youku':
         out = await dlYouku(cli, cfg, t, dir, out, mkvmerge, emit, retryNote, work, signal, hooks, audioLanguageFallback)
@@ -522,6 +526,7 @@ async function dlHongguo(
   threads: number,
   work: string,
   signal?: AbortSignal,
+  group = '',
 ): Promise<void> {
   emit('取链', 0.02, t.vid)
   let picked = await resolveHongguoDownload(cli, t.vid, t.quality)
@@ -562,7 +567,7 @@ async function dlHongguo(
   if (direct) return
   const remux = (n: number, total: number) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`)
   try {
-    await writeFinal(out, (dest) => mkvmerge ? mkvmergeRemux(mkvmerge, tmp, dest, remux, signal) : ffmpegRemux(ffmpeg, tmp, dest, remux, signal))
+    await writeFinal(out, (dest) => mkvmerge ? mkvmergeRemux(mkvmerge, tmp, dest, remux, signal, '', group) : ffmpegRemux(ffmpeg, tmp, dest, remux, signal))
   } catch (e) {
     if (signal?.aborted) throw e
     moveFileSync(tmp, out.slice(0, out.length - extname(out).length) + '.mp4')
@@ -585,6 +590,7 @@ async function dlHuangguo(
   threads: number,
   work: string,
   signal?: AbortSignal,
+  group = '',
 ): Promise<void> {
   emit('取链', 0.02, t.vid)
   const safe = t.vid.replace(/[^\w.-]+/g, '_')
@@ -669,7 +675,7 @@ async function dlHuangguo(
     const remux = (n: number, total: number) =>
       emit('封装', 0.86 + 0.13 * (n / Math.max(1, total)), `封装 ${human(n)}/${human(total)}`)
     await writeFinal(out, (dest) => mkvmerge && extname(out).toLowerCase() === '.mkv'
-      ? mkvmergeRemux(mkvmerge, muxSource, dest, remux, signal)
+      ? mkvmergeRemux(mkvmerge, muxSource, dest, remux, signal, '', group)
       : ffmpegRemux(ffmpeg, muxSource, dest, remux, signal))
     for (const leftover of [raw, dec]) {
       try { unlinkSync(leftover) } catch { /* keep */ }
@@ -831,7 +837,7 @@ async function dlTencent(
     if (!plan.files.length) {
       // The video stream carries its own default audio track.
       emit('封装', 0.86, out)
-      await muxToOut(dest => mkvmergeRemux(mkvmerge, raw, dest, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal, audioLanguageFallback))
+      await muxToOut(dest => mkvmergeRemux(mkvmerge, raw, dest, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal, audioLanguageFallback, releaseGroup(t,cfg)))
       done = true
       return [note, specs.note].filter(Boolean).join('；')
     }
@@ -859,7 +865,7 @@ async function dlTencent(
     await muxToOut(dest => mkvmergeMux(mkvmerge, raw, muxAudios, dest, (n, total) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`), signal, message => {
       repairs.push(message)
       runLog(`tencent audio repair vid=${t.vid} ${message}`)
-    }, audioLanguageFallback))
+    }, audioLanguageFallback, releaseGroup(t,cfg)))
     if (usesMeasuredNaming(t)) t.namingEvidence = { ...t.namingEvidence, muxAudio: { index: defaultAudioIndex(muxAudios), count: muxAudios.length } }
     done = true
     return [note, specs.note, ...repairs].filter(Boolean).join('；')
@@ -1054,7 +1060,8 @@ async function dlYouku(
         'audio',
         track.id,
       )
-      muxInputs.push({ path: audioPath, title: track.label, lang: track.lang, isDefault: track.isDefault })
+      muxInputs.push({ path: audioPath, title: track.label,
+        lang: youkuAudioLanguage(track.lang, audioLanguageFallback), isDefault: track.isDefault })
       muxDts.push(isDtsAudio(track))
     }
   }
@@ -1105,15 +1112,19 @@ async function dlYouku(
     ])
     signal?.throwIfAborted()
     emit('封装', 0.86, muxInputs.length > 1 ? `封装 ${muxInputs.length} 条音轨` : out)
-    const muxAudios = orderedMuxAudios(muxInputs)
+    const resolvedAudios = youkuMuxAudios(muxInputs, audioInfo, t.manualAudioDefault)
+    if (defaultAudioIndex(resolvedAudios) !== defaultAudioIndex(muxInputs)) {
+      runLog('youku automatic default: downloaded 10-channel DTS:X; prefer selected DDP 5.1')
+    }
+    const muxAudios = orderedMuxAudios(resolvedAudios)
     const muxProgress = (n: number, total: number) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`)
     const partial = join(dir, `.${t.vid}.mux-partial${dts ? '.mp4' : '.mkv'}`)
     temps.add(partial)
     temps.add(`${partial}.timing.json`)
     try {
       if (dts) await mp4boxMux(mp4box, videoPath, muxAudios, partial, muxProgress, signal, audioLanguageFallback)
-      else if (muxAudios.length) await mkvmergeMux(mkvmerge, videoPath, muxAudios, partial, muxProgress, signal, undefined, audioLanguageFallback)
-      else await mkvmergeRemux(mkvmerge, videoPath, partial, muxProgress, signal, audioLanguageFallback)
+      else if (muxAudios.length) await mkvmergeMux(mkvmerge, videoPath, muxAudios, partial, muxProgress, signal, undefined, audioLanguageFallback, releaseGroup(t,cfg))
+      else await mkvmergeRemux(mkvmerge, videoPath, partial, muxProgress, signal, audioLanguageFallback, releaseGroup(t,cfg))
       signal?.throwIfAborted()
       const completed = await probeFinishedMedia(partial, signal)
       assertYoukuCompletedMedia(completed, t.duration)
@@ -1392,7 +1403,7 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
       keepSubtitles: t.provider === 'appletvplus' || t.provider === 'dsnp',
       subtitleUris: t.provider === 'dsnp' && t.subtitleTracks ? t.subtitleTracks.map(s => s.id) : undefined,
       manifestText: source.manifest, videoHeight: source.height || undefined, videoCodecs, audioUris, threads: cfg.threads,
-      select: 'muxed', muxTracks: true, transport: 're', workDir: work, workTag: 'manifest', signal,
+      select: 'muxed', muxTracks: true, releaseGroup: releaseGroup(t,cfg), transport: 're', workDir: work, workTag: 'manifest', signal,
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
     })
     if (source.contentKeys.length) {

@@ -12,6 +12,16 @@ const naming = (patch: Partial<Naming> = {}): Naming => ({ kind: 'show', title: 
 const media = (patch: Partial<MediaSpecs> = {}): MediaSpecs => ({ status: 'probed', width: 3840, height: 2160,
   codec: 'hevc', fps: 24, dynamicRange: 'SDR', audio: { status: 'confirmed', codec: 'aac', channels: 2 }, ...patch })
 
+test('DTS:X MP4 naming retains measured audio without inventing a 10.0 layout; DDP default names DDP', () => {
+  const n = naming({ title: '一出好戏', kind: 'movie', year: 2018, source: 'YOUKU', container: 'mp4' })
+  const measured = media({ width: 3840, height: 1608, dynamicRange: 'DV', fps: 60,
+    audio: { status: 'confirmed', codec: 'dtsx', channels: 10 } })
+  expect(completedFilename(n, measured, 'HQ'))
+    .toBe('一出好戏.2018.2160p.YOUKU.WEB-DL.HQ.DV.60fps.HEVC.DTS.X.10ch-WF.mp4')
+  expect(completedFilename(n, { ...measured, audio: { status: 'confirmed', codec: 'eac3', channels: 6, atmos: true } }, 'HQ'))
+    .toBe('一出好戏.2018.2160p.YOUKU.WEB-DL.HQ.DV.60fps.HEVC.DDP.5.1.Atmos-WF.mp4')
+})
+
 test('four requested names preserve title order, S00, three-digit episodes and measured suffixes', () => {
   expect(completedFilename(naming({ title: '心动的信号', season: 0, episode: 298, year: 2018,
     episodeTitle: '花絮特辑：星星柏涵约会真诚的情话好动人' }), media({ fps: 60, audio: { status: 'confirmed', codec: 'eac3', channels: 2 } })))

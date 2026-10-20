@@ -206,8 +206,10 @@ export function completedFilename(n: Naming, media: MediaSpecs, marker?: 'HQ' | 
   if (videoCodec) parts.push(videoCodec)
   if (media.audio?.status === 'confirmed' && media.audio.codec && media.audio.channels) {
     const a = media.audio
-    const audioCodec = ({ aac: 'AAC', ac3: 'AC3', eac3: 'DDP', dts: 'DTS', dca: 'DTS', truehd: 'TrueHD', mlp: 'TrueHD', flac: 'FLAC' } as Record<string, string>)[a.codec!.toLowerCase()] || a.codec!.toUpperCase()
-    const channels = ({ 1: '1.0', 2: '2.0', 6: '5.1', 8: '7.1' } as Record<number, string>)[a.channels!] || `${a.channels}.0`
+    const audioCodec = ({ aac: 'AAC', ac3: 'AC3', eac3: 'DDP', dts: 'DTS', dca: 'DTS', dtsx: 'DTS.X', truehd: 'TrueHD', mlp: 'TrueHD', flac: 'FLAC' } as Record<string, string>)[a.codec!.toLowerCase()] || a.codec!.toUpperCase()
+    // A 10-channel DTS:X count does not establish a 10.0 speaker layout.
+    const channels = ({ 1: '1.0', 2: '2.0', 6: '5.1', 8: '7.1' } as Record<number, string>)[a.channels!]
+      || (a.codec === 'dtsx' ? `${a.channels}ch` : `${a.channels}.0`)
     parts.push(`${audioCodec}.${channels}${a.atmos ? '.Atmos' : ''}`)
   }
   const suffix = `${n.group.trim() ? `-${sanitizePath(n.group.trim())}` : ''}.${n.container || 'mkv'}`

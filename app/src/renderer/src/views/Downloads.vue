@@ -320,11 +320,12 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
 .fold[aria-expanded="false"] { transform: rotate(-90deg); }
 .jobs { border-top: 1px solid var(--line); }
 .job {
-  min-height: 58px; padding: 8px 18px; display: grid; grid-template-columns: 72px minmax(0, 1fr) minmax(140px, 240px) max-content;
+  min-height: 58px; padding: 8px 18px; display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) minmax(140px, 240px) max-content;
   grid-template-areas: "lbl st bar ja"; align-items: center; column-gap: 18px; row-gap: 6px; border-top: 1px solid var(--line);
 }
 .job:first-child { border-top: 0; }
-.lbl { grid-area: lbl; font-size: 14px; font-weight: 500; }
+/* 日期集号等长编号按内容扩列，超长编号在列内换行，避免侵入状态栏。 */
+.lbl { grid-area: lbl; min-width: 0; max-width: 16ch; overflow-wrap: anywhere; font-size: 14px; font-weight: 500; }
 .st { grid-area: st; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .status-line { display: flex; align-items: baseline; gap: 8px; }
 .completed-at { font-size: 12px; white-space: nowrap; }
@@ -344,11 +345,11 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
 .del:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
 @media (max-width: 1200px) {
   .gbar { width: 200px; }
-  .job { grid-template-columns: 66px minmax(0, 1fr) minmax(120px, 180px) max-content; column-gap: 12px; }
+  .job { grid-template-columns: minmax(66px, max-content) minmax(0, 1fr) minmax(120px, 180px) max-content; column-gap: 12px; }
 }
 /* 窄窗：进度条换到第二行，按钮列永远不和进度/百分比重叠 */
 @media (max-width: 1080px) {
-  .job { grid-template-columns: 66px minmax(0, 1fr) max-content; grid-template-areas: "lbl st ja" ". bar bar"; }
+  .job { grid-template-columns: minmax(66px, max-content) minmax(0, 1fr) max-content; grid-template-areas: "lbl st ja" ". bar bar"; }
   .gbar { width: 160px; }
 }
 @media (max-width: 900px) { .diag-t { display: none; } }

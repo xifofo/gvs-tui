@@ -133,6 +133,8 @@ withHostProbe('domestic shared runner names the measured default audio, preserve
     expect(first.final.log).toContain('Season 00')
     expect(first.events.some(e => e.status === '命名')).toBe(true)
     expect(first.final.note).toBe('')
+    const tags = JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', first.final.log], { encoding: 'utf8', timeout: 10000 }).stdout).format.tags
+    expect(tags.GROUP).toBe('WF')
     const specs = await probeFinishedMedia(first.final.log)
     expect(specs).toMatchObject({ status: 'probed', width: 320, height: 240, codec: 'h264', fps: 25,
       audio: { status: 'confirmed', codec: 'aac', channels: 2 } })

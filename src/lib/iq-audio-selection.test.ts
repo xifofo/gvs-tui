@@ -14,6 +14,28 @@ const erroneousFrench = () => ({ audios: [
   { id: '6:2:100', lid: 6, lang: '法语', language: 'fra', label: '法语 · AAC', codec: 'aac' },
 ] })
 
+test('IQ Cookie routing keeps corrected Japanese audio through saved selections and refreshed responses', () => {
+  for (const rowSource of [false, true]) {
+    const data = { source: 'domestic', audios: erroneousFrench().audios.map(a => ({ ...a, ...(rowSource ? { source: 'domestic' } : {}) })) }
+    const episode = { title: '硃紅的假面 第2集', audioTracks: data.audios.map(a => ({ ...a, isDefault: a.codec === 'aac' })) }
+    const before = JSON.stringify({ data, episode })
+    const catalog = iqEpisodeAudioCatalog(data, episode.title)
+    expect(catalog.map(a => [a.id, a.language])).toEqual([['6:1:500', 'jpn'], ['6:2:100', 'jpn']])
+    const selected = selectIQEpisodeAudios(data, episode)
+    expect(selected.map(a => [a.id, a.language, a.isDefault])).toEqual([
+      ['6:1:500', 'jpn', false], ['6:2:100', 'jpn', true],
+    ])
+    for (const choice of selected) {
+      expect(iqSelectedAudioResponse({ id: choice.id, source: 'domestic', codec: choice.row.codec, language: 'fra', title: '法语' }, choice))
+        .toMatchObject({ id: choice.id, source: 'domestic', language: 'jpn', title: '日语' })
+      expect(iqSelectedAudioResponse({ codec: choice.row.codec, language: 'fra' }, choice)).toMatchObject({ language: 'jpn' })
+    }
+    expect(JSON.stringify({ data, episode })).toBe(before)
+    expect(() => iqSelectedAudioResponse({ id: '99:1:500', language: 'fra' }, selected[0]!)).toThrow('不同版本')
+    expect(iqEpisodeAudioCatalog(data, '真珠美人魚（中文版）第1集').map(a => a.language)).toEqual(['zho', 'zho'])
+  }
+})
+
 test('IQ Korean ID 5 repairs saved Japanese labels and refreshed audio without changing stream identity or default', () => {
   const data = { source: 'international', audios: [
     { id: '5:1:500', lid: 5, lang: '日语', language: 'jpn', label: '日语 · 杜比 5.1', codec: 'eac3', default: true },

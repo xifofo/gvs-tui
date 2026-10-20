@@ -24,7 +24,7 @@ test('DASH and AMP4 become three unique choices without transport labels', () =>
   expect(new Set(rows.map(row => row.id)).size).toBe(3)
   expect(rows.map(row => row.vid)).toEqual(['aac-amp4', 'dolby-amp4', 'standard-dash'])
   expect(rows.filter(row => row.isDefault)).toHaveLength(1)
-  expect(rows.every(row => row.selected)).toBe(true)
+  expect(rows.map(row => row.selected)).toEqual([true, true, false])
   expect(rows.map(row => row.label).join(' ')).not.toMatch(/DASH|AMP4/i)
   const reversed = iqcnAudios({ audios: [...duplicateCatalog].reverse() })
   for (const row of rows) expect(reversed.find(candidate => candidate.id === row.id)?.vid).toBe(row.vid)
@@ -38,12 +38,52 @@ test('old duplicate selections bind once to current episode sources and keep one
   expect(rows.filter(row => row.isDefault).map(row => row.codec)).toEqual(['DOLBY'])
 })
 
-test('saved queues without audio choices use all tracks and the shared default priority', () => {
+test('queues without audio choices prefer high AAC and retain the shared Dolby default priority', () => {
   const rows = selectIQCNAudios({ audios: duplicateCatalog })
-  expect(rows).toHaveLength(3)
+  expect(rows.map(row => row.id)).toEqual(['iqcn:1:5:300:aac', 'iqcn:1:2:500:dolby'])
   expect(rows.filter(row => row.isDefault).map(row => row.codec)).toEqual(['DOLBY'])
   const manual = selectIQCNAudios({ audios: duplicateCatalog }, rows.map(row => ({ id: row.id, isDefault: row.codec === 'AAC' && row.id.includes(':5:') })))
   expect(manual.filter(row => row.isDefault).map(row => row.id)).toEqual(['iqcn:1:5:300:aac'])
+})
+
+test('standard AAC remains selected when no high counterpart exists', () => {
+  const rows = iqcnAudios({ audios: duplicateCatalog.filter(row => row.ct !== 5) })
+  expect(rows.filter(row => row.selected).map(row => row.codec)).toEqual(['DOLBY', 'AAC'])
+  const standardOnly = iqcnAudios({ audios: duplicateCatalog.filter(row => row.ct === 1) })
+  expect(standardOnly).toHaveLength(1)
+  expect(standardOnly[0]).toMatchObject({ selected: true, isDefault: true })
+})
+
+test('high AAC does not replace another language, channel layout or audio description', () => {
+  const standard = duplicateCatalog[2]!
+  const rows = iqcnAudios({ audios: [duplicateCatalog[0], standard,
+    { ...standard, aid: 'other-language', language_id: 2 },
+    { ...standard, aid: 'other-channel', amt: 1 },
+    { ...standard, aid: 'description', aat: 1 },
+    { ...standard, aid: 'dts', cf: 'dts', ct: 3 },
+  ] })
+  expect(rows.filter(row => row.selected).map(row => row.vid)).toEqual(['aac-dash', 'other-language', 'other-channel', 'description', 'dts'])
+})
+
+test('source default moves off unselected standard AAC, independent of catalog order and codec case', () => {
+  const standard = { ...duplicateCatalog[2], selected: true }
+  const high = { ...duplicateCatalog[0], selected: false, cf: 'AAC', has_independent_files: false }
+  for (const audios of [[standard, high], [high, standard]]) {
+    const rows = iqcnAudios({ audios })
+    expect(rows.filter(row => row.selected).map(row => row.vid)).toEqual(['aac-dash'])
+    expect(rows.filter(row => row.isDefault).map(row => row.vid)).toEqual(['aac-dash'])
+  }
+})
+
+test('standard AAC can still be manually selected alone, together with high AAC, or as playback default', () => {
+  const standard = 'iqcn:1:1:100:aac', high = 'iqcn:1:5:300:aac'
+  const only = selectIQCNAudios({ audios: duplicateCatalog }, [{ id: standard }])
+  expect(only).toHaveLength(1)
+  expect(only[0]).toMatchObject({ id: standard, selected: true, isDefault: true })
+  const both = selectIQCNAudios({ audios: duplicateCatalog }, [{ id: high }, { id: standard, isDefault: true }])
+  expect(both.map(row => row.id)).toEqual([high, standard])
+  expect(both.every(row => row.selected)).toBe(true)
+  expect(both.filter(row => row.isDefault).map(row => row.id)).toEqual([standard])
 })
 
 test('AMP4-only audio remains selectable when the catalog omits the independent-file flag', () => {
@@ -82,12 +122,12 @@ test('audio catalog retains codecs and one source default with stable episode se
   ]
   const rows = iqcnAudios({ audios })
   expect(rows).toHaveLength(3)
-  expect(rows.filter(a => a.selected).map(a => a.vid)).toEqual(['a', 'b', 'c'])
+  expect(rows.filter(a => a.selected).map(a => a.vid)).toEqual(['b', 'c'])
   expect(rows.filter(a => a.isDefault).map(a => a.vid)).toEqual(['c'])
   const ids = rows.filter(a => a.selected).map(a => a.id)
   expect(resolveDefaultAudioId(rows, ids)).toBe(rows[1]!.id)
-  expect(selectAudioTracks(rows, ids).map(a => a.isDefault)).toEqual([false, true, false])
-  expect(selectAudioTracks(rows, ids, rows[2]!.id).map(a => a.isDefault)).toEqual([false, false, true])
+  expect(selectAudioTracks(rows, ids).map(a => a.isDefault)).toEqual([true, false])
+  expect(selectAudioTracks(rows, ids, rows[2]!.id).map(a => a.isDefault)).toEqual([false, true])
   expect(rows[1]!.label).toContain('DOLBY')
   expect(rows[2]!.label).toContain('高码率')
   expect(iqcnAudios({ audios: audios.map(a => ({ ...a, aid: a.aid + '-episode2' })) }).map(a => a.id)).toEqual(rows.map(a => a.id))
@@ -106,7 +146,7 @@ test('domestic DASH and AMP4 duplicates are one selectable track and bind to eac
   expect(rows).toHaveLength(3)
   expect(new Set(rows.map(a => a.id)).size).toBe(3)
   expect(rows.map(a => a.vid)).toEqual(['dolby-amp4', 'standard-dash', 'high-amp4'])
-  expect(rows.every(a => a.selected)).toBe(true)
+  expect(rows.map(a => a.selected)).toEqual([true, false, true])
   expect(rows.filter(a => a.isDefault).map(a => a.vid)).toEqual(['high-amp4'])
   const selected = selectAudioTracks(rows, [rows[0]!.id, rows[2]!.id])
   expect(selected.map(a => a.isDefault)).toEqual([true, false])
