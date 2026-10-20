@@ -78,9 +78,12 @@ test('unknown and legacy errors become readable text without speculative causes'
 })
 
 test('machine code takes precedence and messages are idempotent', () => {
+  // 同一个 code 允许对应多条 pattern（例如 MEMBERSHIP_REQUIRED）；按 code 展示第一条。
+  const firstByCode = new Map<string, string>()
+  for (const rule of errorCatalog) if (!firstByCode.has(rule.code)) firstByCode.set(rule.code, rule.message)
   for (const rule of errorCatalog) {
     const message = userMessage({ errorCode: rule.code, message: 'unrelated diagnostic' })
-    expect(message).toBe(rule.message)
+    expect(message).toBe(firstByCode.get(rule.code))
     expect(userMessage(message)).toBe(message)
     expect(message).not.toMatch(/[A-Z]+_[A-Z_]+|diagnostic|https?:\/\//)
   }

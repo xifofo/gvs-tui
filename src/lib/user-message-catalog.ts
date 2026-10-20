@@ -148,7 +148,7 @@ export const errorCatalog = [
   {
     "pattern": "IQ_TV_MEMBERSHIP_NOT_RECOGNIZED",
     "code": "MEMBERSHIP_REQUIRED",
-    "message": "源站没有认可当前账号在这条内容上的电视端播放权益。同一账号在其它会员内容可用时，差异可能来自该内容的电视端或地区授权；请确认会员是否包含电视端，或换用账号可用的端观看。"
+    "message": "当前账号没有这条内容在电视端的播放权益。同一账号在其它会员内容可用时，差异可能来自该内容的电视端或地区授权；请确认会员是否包含电视端，或换用账号可用的端观看。"
   },
   {
     "pattern": "IQ_DASH_PROGRAM_MISSING|IQ_DASH_REJECTED|DASH_PROGRAM_MISSING",
@@ -359,6 +359,11 @@ export const errorCatalog = [
     "pattern": "(?:http|status)[ :_]*403|FORBIDDEN",
     "code": "REQUEST_REJECTED",
     "message": "本次请求未获允许，请检查账号和使用权限；若原因不明，请联系客服。"
+  },
+  {
+    "pattern": "encoder not found|automatic encoder selection failed",
+    "code": "MEDIA_FORMAT_UNSUPPORTED",
+    "message": "暂时无法处理这个视频版本，请尝试其他画质；若仍失败，请联系客服。"
   },
   {
     "pattern": "(?:http|status)[ :_]*404|NOT_FOUND|not found",
