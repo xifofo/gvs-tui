@@ -42,6 +42,26 @@ test('Apple TV on an old gateway stays unavailable without invented compatibilit
   expect(calls).toEqual(['browse_catalog'])
   expect(discovery.visibleSections).toHaveLength(1)
   expect(discovery.visibleSections[0]?.available).toBe(false)
-  expect(discovery.view.notice).toContain('升级网关')
+  // 目录失败不再说「未接入」，而是提示检查网关代理（直连 Apple 会 404）。
+  expect(discovery.view.notice).toContain('目录暂不可用')
   expect(discovery.view.rows).toEqual([])
+})
+
+test('Apple TV content region drives browse_catalog and browse country', async () => {
+  const calls: Array<{ action: string; input: Record<string, unknown> }> = []
+  const discovery = new Discovery(async (_p, action, input) => {
+    calls.push({ action, input })
+    if (action === 'browse_catalog')
+      return { country: input.country || 'hk', sections: [{ id: 'apple-chart', title: '官方榜单', mode: 'rank', contentType: 'rank', available: true, country: input.country || 'hk' }] }
+    return { contentType: 'rank', items: [{ id: 'umc.cmc.a', title: '作品', rank: 1 }], hasMore: false }
+  }, () => {})
+  await discovery.open('appletvplus', 'rank')
+  expect(calls[0]).toMatchObject({ action: 'browse_catalog' })
+  expect(calls[0]?.input).toEqual({})
+
+  await discovery.setRegion('tr')
+  expect(discovery.catalogRegion).toBe('tr')
+  expect(calls.some((c) => c.action === 'browse_catalog' && c.input.country === 'tr')).toBe(true)
+  const browse = calls.filter((c) => c.action === 'browse').at(-1)
+  expect(browse?.input).toMatchObject({ country: 'tr', sectionId: 'apple-chart' })
 })

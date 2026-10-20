@@ -14,7 +14,7 @@ const appleVerifyID = ref('')
 const dsnpEmail = ref(''), dsnpPassword = ref(''), dsnpSeat = ref('')
 const dsnpSeats = computed(() => [{ value: '', label: '选择席位', disabled: true }, ...(views.dsnp?.profiles ?? []).map((p: { id: string; name?: string }, i: number) => ({ value: String(i + 1), label: p.name || p.id }))])
 const appleCountry = ref('hk')
-const APPLE_COUNTRIES = [['hk', '香港'], ['tw', '台湾'], ['jp', '日本'], ['us', '美国'], ['gb', '英国'], ['au', '澳大利亚'], ['ca', '加拿大']].map(([value, label]) => ({ value, label }))
+const APPLE_COUNTRIES = [['hk', '香港'], ['tw', '台湾'], ['jp', '日本'], ['us', '美国'], ['gb', '英国'], ['au', '澳大利亚'], ['ca', '加拿大'], ['tr', '土耳其']].map(([value, label]) => ({ value, label }))
 const HAMI_MODES = [{ value: 'tv' as const, label: 'TV' }, { value: 'web' as const, label: 'Web' }]
 const mewatchProfiles = computed(() => [{ value: '', label: '选择 profile', disabled: true }, ...(views.mewatch?.profiles ?? []).map((p: { id: string; name?: string }) => ({ value: p.id, label: p.name || p.id }))])
 const accountScope = computed(() => store.state?.accountScope || ((store.state?.settings.host || '') + ':' + (store.state?.settings.keyMasked || '')))
@@ -214,3 +214,4 @@ h3{font-size:14px;margin:0 0 10px} p{font-size:12px;line-height:1.65;opacity:.8;
 .controls{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.controls .input{width:auto;min-width:150px;flex:1}
 textarea{min-height:80px;margin:10px 0} strong{display:block;margin:10px 0}label{display:flex;align-items:center;gap:12px}.controls label.grow{flex:1;min-width:200px}label span{white-space:nowrap;flex-shrink:0}label .ui-select{min-width:0;flex:1}
 </style>
+

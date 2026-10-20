@@ -12,6 +12,8 @@ export type Section = {
   paginated?: boolean
   reason?: string
   sourceTerminal?: 'mobile' | 'tv'
+  /** Apple TV: the storefront (content region) this section came from. */
+  country?: string
   filters?: Array<{
     key: string
     title: string
@@ -118,8 +120,8 @@ export function fallbackSections(provider: string): Section[] {
   ): Section => ({ id, title, mode, contentType, available, reason })
   if (provider === 'appletvplus')
     return [
-      section('apple-upgrade-home', 'Apple TV 推荐待升级', 'home', 'recommendation', false, '当前网关未接入 Apple TV，请升级网关后浏览'),
-      section('apple-upgrade-rank', 'Apple TV 榜单待升级', 'rank', 'rank', false, '当前网关未接入 Apple TV，请升级网关后浏览'),
+      section('apple-home', 'Apple TV 精选推荐', 'home', 'recommendation', false, '目录暂不可用：检查网关 Apple TV 代理（直连 Apple 会 404）后重试'),
+      section('apple-rank', 'Apple TV 十大热门', 'rank', 'rank', false, '目录暂不可用：检查网关 Apple TV 代理（直连 Apple 会 404）后重试'),
     ]
   if (provider === 'youku')
     return [
@@ -189,6 +191,12 @@ export class Discovery {
     string,
     { sections: Section[]; at: number; compatibility: boolean }
   >()
+  /**
+   * Apple TV content storefront ('' follows the account region). The account
+   * region drives the licence service, the content region drives the catalogue —
+   * a TR subscription browses HK titles, so this is a separate knob.
+   */
+  private region = ''
   private lists = new Map<string, List>()
   private selections = new Map<
     string,
@@ -214,12 +222,34 @@ export class Discovery {
       this.view.provider,
       this.view.mode,
       this.section?.id,
+      this.region,
       Object.fromEntries(
         Object.entries(this.view.filters).sort(([a], [b]) =>
           a.localeCompare(b),
         ),
       ),
     ])
+  }
+  /** Apple TV content region currently driving the catalogue ('' = account). */
+  get catalogRegion() {
+    return this.region
+  }
+  /**
+   * Switch the Apple TV content storefront and reload the catalogue.
+   * No-op for providers that have no storefront concept.
+   */
+  async setRegion(region: string) {
+    if (this.view.provider !== 'appletvplus') return
+    const next = (region || '').trim().toLowerCase()
+    if (next === this.region) return
+    this.region = next
+    this.invalidate()
+    this.catalogs.clear()
+    this.lists.clear()
+    this.selections.clear()
+    this.filterSelections.clear()
+    this.activeKey = ''
+    await this.open(this.view.provider, this.view.mode, true)
   }
   private remember() {
     if (this.section)
@@ -266,10 +296,11 @@ export class Discovery {
     })
     this.emit()
     try {
-      let catalog = this.catalogs.get(provider)
+      const catalogKey = provider + '|' + (provider === 'appletvplus' ? this.region : '')
+      let catalog = this.catalogs.get(catalogKey)
       if (!catalog || refresh || this.now() - catalog.at > 300000) {
         try {
-          const data = supportsBrowse(provider) ? await this.invoke(provider, 'browse_catalog', {}) : { sections: [{ id: 'hami-link', title: '粘贴 Hami 产品链接或 ID', mode: 'link', available: false, reason: '当前网关没有 Hami 搜索/榜单接口，请到搜索页输入产品链接或 ID' }] }
+          const data = supportsBrowse(provider) ? await this.invoke(provider, 'browse_catalog', provider === 'appletvplus' && this.region ? { country: this.region } : {}) : { sections: [{ id: 'hami-link', title: '粘贴 Hami 产品链接或 ID', mode: 'link', available: false, reason: '当前网关没有 Hami 搜索/榜单接口，请到搜索页输入产品链接或 ID' }] }
           if (!Array.isArray(data.sections)) throw new Error('INVALID_CATALOG')
           catalog = {
             sections: (data.sections as Section[]).map(s => provider === 'migu' && s.sourceTerminal ? {...s,title:`${s.sourceTerminal === 'tv' ? '咪咕 TV' : '咪咕 App'} · ${s.title}`} : s),
@@ -290,7 +321,7 @@ export class Discovery {
           }
         }
         if (g !== this.generation) return
-        this.catalogs.set(provider, catalog)
+        this.catalogs.set(catalogKey, catalog)
       }
       if (g !== this.generation) return
       this.view.sections = catalog.sections
@@ -402,6 +433,12 @@ export class Discovery {
         ...this.view.filters,
       }
       if (this.view.provider === 'migu' && section.sourceTerminal) input.terminal = section.sourceTerminal
+      // Apple TV: browse with the storefront the section came from (falls back
+      // to the selected content region, then the account region server-side).
+      if (this.view.provider === 'appletvplus') {
+        const country = section.country || this.region
+        if (country) input.country = country
+      }
       if (!this.view.compatibility) input.sectionId = section.id
       else if (this.view.provider === 'hongguo')
         input.sub = section.id.replace('legacy-', '')
