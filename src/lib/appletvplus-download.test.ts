@@ -37,7 +37,28 @@ test('Apple TV probes without decrypt requests and preserves all official qualit
   const cli={invoke:async(_p:string,a:string,input:Record<string,unknown>)=>{expect(a).toBe('probe');expect(input.download).toBeUndefined();return {qualities:[{id:'2160|DV|PQ|24',height:2160,width:3840,codec:'DV',hdr:'PQ',fps:'24',label:'2160p DV PQ'},{id:'1080|H264|SDR|24',height:1080,width:1920,codec:'H264',hdr:'SDR',fps:'24',label:'1080p H264 SDR'}]}}} as unknown as GwClient
   const out=await probeManifest(cli,{} as FileConfig,'appletvplus',id)
   expect(out.qualities.map(q=>q.id)).toEqual(['2160|DV|PQ|24','1080|H264|SDR|24'])
-  expect(out.qualities[0]).toMatchObject({height:2160,codec:'DV',drm:'playready',fps:24})
+  expect(out.qualities[0]).toMatchObject({height:2160,codec:'DV',drm:'playready',fps:24,size:0})
+})
+
+test('Apple TV shows an identified size instead of leaving every rendition unknown', async () => {
+  const cli={invoke:async()=>({qualities:[
+    {id:'2160|DV|PQ|24',height:2160,width:3840,codec:'DV',label:'2160p DV PQ',size:'4000000000'},
+    {id:'1080|H265|PQ|24',height:1080,width:1920,codec:'H265',label:'1080p',bitrate:8_000_000,duration:3600},
+    {id:'720|H264|SDR|24',height:720,width:1280,codec:'H264',label:'720p',averageBitrate:'2000000'},
+    {id:'480|H264|SDR|24',height:480,width:854,codec:'H264',label:'480p',bitrateKbps:1000},
+  ]})} as unknown as GwClient
+  const out=await probeManifest(cli,{} as FileConfig,'appletvplus',id,1800)
+  expect(out.qualities.map(q=>q.size)).toEqual([
+    4_000_000_000,
+    Math.round(8_000_000 * 3600 / 8),
+    Math.round(2_000_000 * 1800 / 8),
+    Math.round(1000 * 1000 * 1800 / 8),
+  ])
+  expect(out.qualities[2]?.title).toContain('估算')
+  for (const rate of [undefined, 0, -1, 'invalid', Infinity]) {
+    const missing=await probeManifest({invoke:async()=>({qualities:[{id:'2160|H265|SDR|24',height:2160,width:3840,codec:'H265',label:'4K',bitrate:rate}]})} as unknown as GwClient,{} as FileConfig,'appletvplus',id,1800)
+    expect(missing.qualities[0]?.size).toBe(0)
+  }
 })
 
 test('Apple TV preserves complete season/episode identity from gateway detail', async () => {

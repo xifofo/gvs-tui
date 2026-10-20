@@ -36,11 +36,33 @@ export async function resolveManifest(cli: Pick<GwClient, 'invoke'>, cfg: Pick<F
   if (!sources.length) throw new Error('网关没有返回可用媒体清单')
   return sources
 }
-export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: string, id: string): Promise<{ qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[] }> {
+const positive = (value: unknown): number => {
+  const n = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/** Catalog bytes win. Otherwise estimate from this rendition's bitrate and a known duration. */
+export function appleTVQualitySize(row: Record<string, unknown>, episodeDuration = 0): { size: number; estimated: boolean } {
+  const bytes = positive(row.size) || positive(row.estimatedSize) || positive(row.fileSize) || positive(row.fs)
+  if (bytes) return { size: bytes <= Number.MAX_SAFE_INTEGER ? Math.round(bytes) : 0, estimated: false }
+  const duration = positive(row.duration) || positive(row.durationSec) || positive(episodeDuration)
+  const kbps = positive(row.bitrateKbps) || positive(row.videoBitrateKbps)
+  const bps = kbps ? kbps * 1000 : positive(row.bitrate) || positive(row.bandwidth) || positive(row.averageBitrate) || positive(row.avgBitrate)
+  if (!bps || !duration) return { size: 0, estimated: false }
+  const estimated = bps * duration / 8
+  if (!Number.isFinite(estimated) || estimated > Number.MAX_SAFE_INTEGER) return { size: 0, estimated: false }
+  return { size: Math.round(estimated), estimated: true }
+}
+
+export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: string, id: string, episodeDuration = 0): Promise<{ qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[] }> {
   if (provider === 'appletvplus') {
     const data = await cli.invoke(provider, 'probe', manifestInput(provider, cfg, id))
     const rows = Array.isArray(data.qualities) ? data.qualities.filter(isObj) : []
-    const qualities: Quality[] = rows.filter(q => str(q.id) && Number(q.height) > 0).map(q => ({ id: str(q.id), label: str(q.label), title: str(q.label), size: 0, width: Number(q.width) || 0, height: Number(q.height), codec: str(q.codec), drm: 'playready', stream: str(q.id), hdr: str(q.hdr), fps: Number(q.fps) || undefined, tier: tierHeight(Number(q.width) || 0, Number(q.height)) }))
+    const qualities: Quality[] = rows.filter(q => str(q.id) && Number(q.height) > 0).map(q => {
+      const sized = appleTVQualitySize(q, episodeDuration)
+      const label = str(q.label)
+      return { id: str(q.id), label, title: sized.estimated ? `${label} · 体积按码率和时长估算` : label, size: sized.size, duration: positive(q.duration) || positive(episodeDuration) || undefined, width: Number(q.width) || 0, height: Number(q.height), codec: str(q.codec), drm: 'playready', stream: str(q.id), hdr: str(q.hdr), fps: Number(q.fps) || undefined, tier: tierHeight(Number(q.width) || 0, Number(q.height)) }
+    })
     if (!qualities.length) throw new Error('Apple TV 没有返回可用画质')
     return { qualities, audios: [] }
   }
