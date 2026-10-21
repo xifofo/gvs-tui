@@ -1137,6 +1137,16 @@ export class Core {
     if (command.provider === 'iq') {
       this.iqStatusCheck = 'checked'
     }
+    if (command.provider === 'crunchyroll') {
+      // 网关不保存 CR 令牌；本机持有，下载时随 resolve 传回。
+      if (command.op === 'import' && command.token?.trim()) {
+        this.cfg.crunchyrollToken = command.token.trim()
+        saveConfig(this.cfg)
+      } else if (command.op === 'logout') {
+        this.cfg.crunchyrollToken = ''
+        saveConfig(this.cfg)
+      }
+    }
     this.providerAccounts.set(command.provider + (command.provider === 'migu' && view.terminal === 'tv' ? ':tv' : command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
     this.emit.state()
     return view

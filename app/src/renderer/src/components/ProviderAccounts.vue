@@ -79,8 +79,16 @@ onBeforeUnmount(() => { revision++ })
     <div class="controls"><button class="btn sm" :disabled="busy || !dsnpEmail.trim()" @click="command({provider:'dsnp',op:'otp_request',email:dsnpEmail.trim()})">发送邮箱验证码</button><input v-model="code" class="input" inputmode="numeric" autocomplete="one-time-code" aria-label="邮箱验证码" placeholder="验证码" /><button class="btn sm" :disabled="busy || !dsnpEmail.trim() || !code.trim()" @click="command({provider:'dsnp',op:'otp_verify',email:dsnpEmail.trim(),code:code.trim()})">验证码登录</button></div>
     <textarea v-model="cookie" class="input" aria-label="本人 Disney+ refresh token 或 Cookie，仅本次提交" autocomplete="off" spellcheck="false" placeholder="或粘贴本人 refresh token / Cookie" />
     <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'dsnp',op:'import',cookie})">导入令牌</button><button class="btn sm" :disabled="busy" @click="command({provider:'dsnp',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'dsnp',op:'logout'})">退出</button></div>
+
     <div v-if="views.dsnp?.profiles?.length" class="controls"><label class="grow"><span>家庭席位</span><UiSelect v-model="dsnpSeat" :options="dsnpSeats" aria-label="Disney+ 家庭席位" /></label><input v-model="pin" class="input" type="password" inputmode="numeric" autocomplete="off" aria-label="席位 PIN（如需要）" placeholder="PIN（如需要）" /><button class="btn sm" :disabled="busy || !dsnpSeat" @click="command({provider:'dsnp',op:'seat',id:dsnpSeat,pin})">切换席位</button></div>
     <p v-if="views.dsnp" aria-live="polite">{{ views.dsnp.summary }}</p>
+  </div>
+  <div v-if="allowed('crunchyroll')" class="provider-account">
+    <h3>Crunchyroll · 账号登录</h3>
+    <p>粘贴本人 Crunchyroll refresh_token（长期有效，等同账号凭据）。网关不保存；下载时仅用于换取约 1 小时的 access token 与内容密钥，媒体由本机直连 CDN。</p>
+    <textarea v-model="cookie" class="input" aria-label="本人 Crunchyroll refresh_token，仅保存在本机" autocomplete="off" spellcheck="false" placeholder="粘贴 refresh_token" />
+    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'crunchyroll',op:'import',token:cookie})">导入令牌</button><button class="btn sm" :disabled="busy" @click="command({provider:'crunchyroll',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'crunchyroll',op:'logout'})">退出</button></div>
+    <p v-if="views.crunchyroll" aria-live="polite">{{ views.crunchyroll.summary }}</p>
   </div>
   <div v-if="allowed('appletvplus')" class="provider-account">
 
