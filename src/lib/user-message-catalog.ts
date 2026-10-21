@@ -296,6 +296,11 @@ export const errorCatalog = [
     "message": "当前服务暂不支持此操作，请更新客户端；若仍无法使用，请联系管理员。"
   },
   {
+    "pattern": "Yk-Sign header or yk_sign param required",
+    "code": "YOUKU_ACCOUNT_UNBOUND",
+    "message": "当前 Key 还没绑定优酷账号：请在设置里扫码登录优酷后再试。"
+  },
+  {
     "pattern": "INVALID_PARAM|INVALID_TVID|INVALID_URL|URL_INVALID|KEYWORD_REQUIRED|ALBUM_ID_REQUIRED|username and password required|verification code required|bad json|invalid login body|POST required",
     "code": "INVALID_PARAM",
     "message": "提交的信息不完整或格式不正确，请检查输入后重试。"
