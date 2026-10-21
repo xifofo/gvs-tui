@@ -1,3 +1,6 @@
+import type { RetentionSettings } from '../../../src/integrations/plutofish/retention-settings.ts'
+import type { ReleaseChoices } from '../../../src/integrations/plutofish/release-selection.ts'
+export type { ReleaseChoices, ReleaseSelection } from '../../../src/integrations/plutofish/release-selection.ts'
 import type { PlutoFishInput, PlutoFishView, PublisherDirectoryPage } from '../../../src/integrations/plutofish/types.ts'
 import type { PublicationDraft, PublicationInput } from '../../../src/integrations/plutofish/publication-types.ts'
 import type { PublicationContext, PublicationPreferences } from '../../../src/integrations/plutofish/publication-preferences.ts'
@@ -251,7 +254,7 @@ export type JobView = {
   /** 开始 / 完成钩子的运行记录 */
   hooks?: HookRun[]
   /** 完成后计算的 ed2k 链接 */
-  ed2k?: { state: 'running' | 'done' | 'failed'; pct: number; link: string; message?: string }
+  ed2k?: PublicationDraft['ed2k']
   /** 对应的下载历史记录 id */
   historyId?: number
 }
@@ -327,6 +330,7 @@ export interface GvsApi {
   detailFromLink(link: LinkTarget, hint?: DetailHint): Promise<DetailView>
   /** accountId：用指定账号探测（空 = 默认）；会员/登录错误时自动换号重试 */
   probe(provider: Provider, episodes: EpisodeView[], accountId?: string): Promise<ProbeResult>
+  publicationReleases(req: EnqueueRequest): Promise<ReleaseChoices>
   namingPreview(req: EnqueueRequest): Promise<NamingPreview>
   publicationPreferences(context: PublicationContext): Promise<PublicationPreferences | null>
   refreshPublicationCategories(): Promise<PlutoFishView>
@@ -410,6 +414,8 @@ export interface GvsApi {
   removeHistory(id: number): Promise<void>
   /** 计算 ed2k（后台线程）；jobId 有值时进度显示在任务上 */
   computeEd2k(historyId: number, jobId?: number): Promise<string>
+  publicationRetention(): Promise<RetentionSettings>
+  savePublicationRetention(value: RetentionSettings): Promise<RetentionSettings>
   hookSettings(): Promise<HookSettings>
   saveHookSettings(s: HookSettings): Promise<HookSettings>
 

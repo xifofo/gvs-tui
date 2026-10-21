@@ -6,6 +6,7 @@ import type { HistoryEntry, HookEvent, HookRun, HookSettings, JobView } from '@s
 import { HistoryDB, type SqlDb } from './history-db'
 import { historyFromJob, migrateJobs, type TaskLike } from './download-history'
 import { normalizeHooks, runHook } from './hooks'
+import type { ED2KResult } from '../../../src/integrations/plutofish/publication-retention.ts'
 
 export type HistoryServiceDeps = {
   dir: string
@@ -13,6 +14,7 @@ export type HistoryServiceDeps = {
   notify: (title: string, body: string) => void
   patchJob: (id: number, fn: (v: JobView) => void) => void
   createWorker: (path: string) => Worker
+  computeFile?: (path: string, signal?: AbortSignal, progress?: (done: number, total: number) => void) => Promise<ED2KResult>
   log: (msg: string) => void
 }
 
@@ -93,6 +95,17 @@ export class HistoryService {
       if (!entry.filePath || !existsSync(entry.filePath)) return reject(new Error('本地文件已不存在，无法计算 ed2k'))
       const set = (s: NonNullable<JobView['ed2k']>) => { if (jobId) this.deps.patchJob(jobId, (v) => { v.ed2k = s }) }
       set({ state: 'running', pct: 0, link: '' })
+      if (this.deps.computeFile) {
+        void this.deps.computeFile(entry.filePath, undefined, (done, total) => set({ state: 'running', pct: done / total, link: '' })).then(result => {
+          this.db.setEd2k(entry.id, result.hash, result.link)
+          set({ state: 'done', pct: 1, link: result.link })
+          resolve(result.link)
+        }).catch(error => {
+          set({ state: 'failed', pct: 0, link: '', message: error instanceof Error ? error.message : 'ED2K 计算失败' })
+          reject(error)
+        })
+        return
+      }
       const w = this.deps.createWorker(entry.filePath)
       w.on('message', (m: { type: string; done?: number; total?: number; hash?: string; link?: string; message?: string }) => {
         if (m.type === 'progress' && m.total) set({ state: 'running', pct: m.done! / m.total, link: '' })

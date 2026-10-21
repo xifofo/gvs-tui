@@ -1,0 +1,72 @@
+import { expect, test } from 'bun:test'
+import { matchRelease, releaseChoices, resolveReleaseSelection, type ReleaseOption } from './release-selection.ts'
+import { preparePublication } from './publication.ts'
+import type { PlutoFishView } from './types.ts'
+import type { DlTask } from '../../lib/jobs.ts'
+
+const firstId = 'a'.repeat(32), secondId = 'b'.repeat(32)
+const option = (patch: Partial<ReleaseOption> = {}): ReleaseOption => ({ id: firstId, name: 'S01.360p.YK.WEB-DL.H265', resolution: '360p', dynamicRange: 'SDR', status: 'published', ...patch })
+const preview = 'S01.360p.YOUKU.WEB-DL.SDR.HEVC.AAC.2.0'
+const connection: PlutoFishView = { url: 'https://example.invalid', hasKey: true, status: 'verified', error: '', identity: {
+  id: 'publisher', name: '发布端', kind: 'publisher', sourceAccount: { id: 'source', alias: 'main', name: '源账号' }, categories: [{ value: 'anime', label: '动漫' }],
+} }
+const task = (episode: number): DlTask => ({ provider: 'youku', sourceWorkId: 'show', title: `第${episode}集`, series: '测试', vid: `ep${episode}`, season: 1, episode,
+  height: 360, quality: '360p', codec: 'hevc', group: 'GVS', tmdbId: 123, nameDots: '', year: 2026, plot: '', kind: 'show' })
+const draft = (episode: number) => preparePublication(task(episode), connection, 'anime')
+const client = (items: ReleaseOption[], boundReleaseId?: string) => ({ request: async <T>() => ({ items, total: items.length, page: 1, pageSize: 100, boundReleaseId }) as T })
+
+test('统一旧别名、缺失音轨信息，唯一匹配才默认选择；绑定优先于重复规格', () => {
+  expect(matchRelease([option()], preview)).toEqual({ matchedId: firstId, match: 'specs' })
+  const duplicates = [option(), option({ id: secondId, name: preview })]
+  expect(matchRelease(duplicates, preview)).toEqual({})
+  expect(matchRelease(duplicates, preview, firstId)).toEqual({ matchedId: firstId, match: 'binding' })
+  for (const name of ['S01.1080p.YOUKU.WEB-DL.HEVC', 'S01.360p.TX.WEB-DL.HEVC', 'S01.360p.YOUKU.WEB-DL.AVC', 'S01.360p.YOUKU.WEB-DL.HEVC.DDP.5.1', 'S01.360p.YOUKU.WEB-DL.HEVC.AAC.5.1', 'S01.360p.YOUKU.WEB-DL.60fps.HEVC']) {
+    expect(matchRelease([option({ name })], preview)).toEqual({})
+  }
+  expect(matchRelease([option({ dynamicRange: 'HDR10' })], preview)).toEqual({})
+  expect(matchRelease([option({ status: 'unpublished' })], preview)).toEqual({})
+})
+
+test('首集允许自动新建；续集和特别篇未匹配时必须明确选择，错误不降级为空列表', async () => {
+  expect(resolveReleaseSelection(await releaseChoices(client([]), [draft(1), draft(2)], preview))).toEqual({})
+  for (const episode of [0, 2, 100]) {
+    const choices = await releaseChoices(client([]), [draft(episode)], preview)
+    expect(choices.needsChoice).toBe(true)
+    expect(() => resolveReleaseSelection(choices)).toThrow('后续集数')
+    expect(resolveReleaseSelection(choices, { context: choices.context, mode: 'new' })).toEqual({ forceNew: true })
+  }
+  await expect(releaseChoices({ request: async () => { throw new Error('offline') } }, [draft(2)], preview)).rejects.toThrow('offline')
+  await expect(releaseChoices(client([]), [draft(1), { ...draft(2), releaseKey: 'another-season' }], preview)).rejects.toThrow('分批')
+})
+
+test('条件变化或版本删除后拒绝旧选择；支持主动选择其他版本', async () => {
+  const choices = await releaseChoices(client([option(), option({ id: secondId })]), [draft(2)], preview)
+  expect(resolveReleaseSelection(choices, { context: choices.context, mode: 'existing', releaseId: secondId })).toEqual({ existingReleaseId: secondId })
+  expect(() => resolveReleaseSelection(choices, { context: 'stale', mode: 'new' })).toThrow('已改变')
+  expect(() => resolveReleaseSelection({ ...choices, items: [] }, { context: choices.context, mode: 'existing', releaseId: secondId })).toThrow('不可用')
+})
+
+test('强制新建按批次隔离；同批多集与重试稳定；显式绑定能保留原发布标识', () => {
+  const release = { nonce: 'batch-one' }
+  const first = preparePublication(task(1), connection, 'anime', '0', '/', release)
+  const next = preparePublication(task(2), connection, 'anime', '0', '/', release)
+  expect(next.releaseKey).toBe(first.releaseKey)
+  expect(next.fileKey).not.toBe(first.fileKey)
+  expect(preparePublication(task(1), connection, 'anime', '0', '/', release).fileKey).toBe(first.fileKey)
+  expect(preparePublication(task(1), connection, 'anime', '0', '/', { nonce: 'batch-two' }).releaseKey).not.toBe(first.releaseKey)
+  const selected = preparePublication(task(2), connection, 'anime', '0', '/', { existingReleaseId: firstId })
+  expect(selected.existingReleaseId).toBe(firstId)
+  expect(preparePublication(task(2), connection, 'anime', '0', '/', { existingReleaseId: firstId, preserveKey: true }).releaseKey).toBe(draft(2).releaseKey)
+})
+
+test('匹配遍历完整分页，重复或截断的分页不产生默认选择', async () => {
+  let calls = 0
+  const reader = { request: async <T>(_binding: unknown, _path: unknown, body: unknown) => {
+    calls++
+    const page = (body as { page: number }).page
+    const items = page === 1 ? Array.from({ length: 100 }, (_, i) => option({ id: i.toString(16).padStart(32, '0'), name: 'other' })) : [option()]
+    return { items, total: 101, page, pageSize: 100 } as T
+  } }
+  expect((await releaseChoices(reader, [draft(3)], preview)).matchedId).toBe(firstId)
+  expect(calls).toBe(2)
+})

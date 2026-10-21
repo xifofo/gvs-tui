@@ -11,6 +11,7 @@ import { PublicationStore, type PublicationState } from './publication-state.ts'
 import type { Dispatch, UploadCheckpoint } from './upload-types.ts'
 import { preparePublication } from './publication.ts'
 import type { DlTask } from '../../lib/jobs.ts'
+import { retryableError } from './retry.ts'
 
 const dirs: string[] = []
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'plutofish-upload-')); dirs.push(dir); return dir }
@@ -18,6 +19,21 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { force: true, r
 const digest = (data: Buffer, algorithm = 'md5') => createHash(algorithm).update(data).digest('hex').toUpperCase()
 const dispatch: Dispatch = { status: 'uploading', pickCode: 'original', bucket: 'fhnfile', object: 'original/object', endpoint: 'https://up-file.115.com', callback: '{"callbackUrl":"https://callback.115.com"}', callbackVar: '{}' }
 const credentials = async () => ({ accessKeyId: 'TEMP-ID', accessKeySecret: 'TEMP-SECRET', securityToken: 'TEMP-TOKEN', endpoint: 'https://up-yunfile.115.com', expiration: new Date(Date.now() + 3600_000).toISOString(), rate: 102400 })
+
+test.each([
+  ['RequestError', 'ECONNRESET', true], ['RequestError', 'ENOTFOUND', true],
+  ['ResponseTimeoutError', undefined, true], ['ConnectionTimeoutError', undefined, true],
+  ['RequestError', 'CERT_HAS_EXPIRED', false], ['RequestError', 'EACCES', false],
+] as const)('真实 OSS SDK 保留网络错误分类：%s / %s', async (name, code, retryable) => {
+  const session = createOSS(dispatch, await credentials(), new AbortController().signal)
+  const sdk = session.client as typeof session.client & { urllib: { request: () => Promise<unknown> } }
+  sdk.urllib = { async request() { throw Object.assign(new Error('private-sdk-detail'), { name, code, status: -1 }) } }
+  try {
+    const failure = await sdk.initMultipartUpload(dispatch.object!).then(() => null, e => e)
+    expect(failure).toBeInstanceOf(Error)
+    expect(retryableError(failure)).toBe(retryable)
+  } finally { session.close() }
+})
 
 test.each([false, true])('真实 OSS SDK 签名及上传域名，旧版区域地址=%s', async legacy => {
   const token = { ...await credentials(), ...(legacy ? { endpoint: 'https://oss-cn-shenzhen.aliyuncs.com' } : {}) }
@@ -186,4 +202,20 @@ test('HTTP 成功但 115 合并回调拒绝不能当作上传成功', async () =
   await expect(uploadParts({ path, dispatch, checkpoint: cp, credentials, factory, signal, save() {}, progress() {} })).rejects.toThrow('115 合并回调未确认成功')
   expect(cp.completing).toBe(true)
   expect(cp.parts).toHaveLength(1)
+})
+
+test('顺序分片合并回执未知且会话已消失时保留断点，等待原文件核验', async () => {
+  const path = join(temp(), 'pending.bin'); writeFileSync(path, Buffer.alloc(150000))
+  const signal = new AbortController().signal
+  const cp: UploadCheckpoint = { file: await fingerprint(path, signal), partSize: 256 * 1024, parts: [], uploadId: 'OLD', sequential: true, completing: true,
+    object: dispatch.object, bucket: dispatch.bucket, pickCode: dispatch.pickCode }
+  const factory: OSSFactory = () => ({ close() {}, client: {
+    async initMultipartUpload() { throw new Error('不得重新初始化') },
+    async listParts() { throw Object.assign(new Error('session gone'), { code: 'NoSuchUpload' }) },
+    async uploadPart() { throw new Error('不得重新上传') },
+    async completeMultipartUpload() { throw new Error('不得重新合并') },
+  } })
+  const error = await uploadParts({ path, dispatch, checkpoint: cp, credentials, factory, signal, save() {}, progress() {} }).then(() => null, e => e)
+  expect(retryableError(error)).toBe(true)
+  expect(cp.uploadId).toBe('OLD'); expect(cp.completing).toBe(true)
 })

@@ -11,7 +11,18 @@ export type TaskSnapshot = {
   attempt: number; sequence: number; stage: 'queued' | 'downloading' | 'processing' | 'uploading' | 'paused' | 'failed' | 'cancelled' | 'completed'
   downloadPercent: number; uploadPercent: number; sizeBytes: number; uploadedBytes: number; errorMessage?: string
 }
-export type PublicationState = { draft: PublicationDraft; snapshot: TaskSnapshot; acknowledged: number; checkpoint?: UploadCheckpoint }
+export type PublicationState = {
+  draft: PublicationDraft; snapshot: TaskSnapshot; acknowledged: number; checkpoint?: UploadCheckpoint
+  /** 首次发布成功的时间不随重试、校验、重启刷新；旧清单首次升级时起算。 */
+  completedAt?: number
+  failure?: { retryable: boolean; retryAfterMs?: number }
+  retention?: {
+    ed2k?: string; sha1?: string; acknowledged?: boolean; retiring?: boolean
+    deletedAt?: number
+    /** 计算 ED2K 时核对同一份内容，清理前要求路径仍是这一个普通文件。 */
+    file?: { size: number; mtimeMs: number; ctimeMs: number; ino: number; dev: number }
+  }
+}
 
 export class PublicationStore {
   private leased = false
@@ -51,6 +62,14 @@ export class PublicationStore {
     const target = join(this.directory, this.name(state.draft.fileKey)), tmp = `${target}.${randomUUID()}.tmp`
     try { writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 }); renameSync(tmp, target) }
     finally { rmSync(tmp, { force: true }) }
+  }
+  /** 仅用于已上报完成且服务端确认清理的成品；先删草稿再删续办状态，失败可重试。 */
+  removeCompleted(state: PublicationState): void {
+    if (state.snapshot.stage !== 'completed' || state.acknowledged < state.snapshot.sequence || !state.checkpoint?.resource) throw new Error('未完成发布不能清理续办记录')
+    this.lease()
+    const name = this.name(state.draft.fileKey)
+    rmSync(join(this.directory, name.replace('.state.json', '.json')), { force: true })
+    rmSync(join(this.directory, name), { force: true })
   }
   close(): void {
     if (this.leased) rmSync(join(this.directory, '.worker-lock'), { recursive: true, force: true })

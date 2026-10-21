@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { AudioView, EnqueueRequest, NamingPreview, PublicationInput, PublicationPreferences, TmdbHit, TmdbSeason } from '@shared/api'
+import ReleasePicker from '../integrations/plutofish/ReleasePicker.vue'
 import PublicationFields from '../integrations/plutofish/PublicationFields.vue'
 import { supportsTmdb } from '@shared/api'
 import { resolveDefaultAudioId } from '@shared/audio-selection'
@@ -42,6 +43,8 @@ function toggleSubtitle(id: string) {
 const preferredAudioId = ref('')
 const tmdb = ref<TmdbHit | null>(null)
 const publication = ref<PublicationInput>({ category: '' })
+const releasePicker = ref<InstanceType<typeof ReleasePicker> | null>(null)
+const releaseBinding = computed(() => JSON.stringify([store.state?.plutofish?.status, store.state?.plutofish?.url, store.state?.plutofish?.identity]))
 const publicationFields = ref<InstanceType<typeof PublicationFields> | null>(null)
 const tmdbHits = ref<TmdbHit[]>([])
 const tmdbLoading = ref(false)
@@ -311,7 +314,7 @@ const request = computed<EnqueueRequest | null>(() => {
     ...(subtitles.value.length ? { subtitleIds: [...subtitleIds.value] } : {}),
     defaultAudioId: preferredAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
-    publication: { category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, episodeNumbers: { ...publication.value.episodeNumbers } },
+    publication: { releaseSelection: publication.value.releaseSelection, category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, episodeNumbers: { ...publication.value.episodeNumbers } },
     tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
     accountId: store.accountPick[v.provider] || undefined,
   }
@@ -340,13 +343,14 @@ const hasDts = computed(() => audios.value.some((a) => audioIds.value.includes(a
 const count = computed(() => store.probeEpisodes.length)
 const noun = computed(() => isMovie.value ? '个版本' : '集')
 const publicationRequired = computed(() => !publicationFields.value?.categoryValid)
-const canStart = computed(() => !publicationRequired.value && !starting.value && !namingLoading.value && !namingInputError.value && !namingError.value && !store.probing && !store.probeError && !!request.value?.episodes.length && !!quality.value && !tmdbLoading.value && !publicationFields.value?.loading)
+const canStart = computed(() => !!releasePicker.value?.valid && !publicationRequired.value && !starting.value && !namingLoading.value && !namingInputError.value && !namingError.value && !store.probing && !store.probeError && !!request.value?.episodes.length && !!quality.value && !tmdbLoading.value && !publicationFields.value?.loading)
 
 async function start() {
   if (!canStart.value || !request.value) return
   starting.value = true
   try {
     await publicationFields.value?.ready()
+    releasePicker.value?.ready()
     const r = request.value
     if (!r) return
     const n = await gvs('enqueue', r)
@@ -461,9 +465,7 @@ async function applyRule() {
           </div>
         </section>
       </div>
-      <aside class="qside">
-        <div class="card side-card"><Skeleton w="72" h="13" /><Skeleton w="100%" h="38" r="8" /><Skeleton w="100%" h="58" r="8" /></div>
-      </aside>
+      <section class="card output-card loading-output"><Skeleton w="72" h="13" /><Skeleton w="100%" h="38" r="8" /><Skeleton w="100%" h="58" r="8" /></section>
     </div>
     <div v-else-if="store.probeError" class="error-box">
       取画质失败：{{ store.probeError }}
@@ -609,18 +611,6 @@ async function applyRule() {
           </template>
         </div>
 
-        <aside class="qside">
-          <div class="card side-card">
-            <h3 class="side-h">发布与保存</h3>
-            <PublicationFields v-if="d" ref="publicationFields" v-model="publication" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @match="selectManualTmdb" @restore="restorePublication" />
-            <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">
-              <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
-            </button>
-            <button type="button" class="dir mono tmp" :title="tmpFull" @click="openSettings('download')">
-              <Icon name="file" :size="16" />临时文件：{{ tmpText }}
-            </button>
-          </div>
-        </aside>
         <section class="card output-card output-options" aria-label="输出与命名">
           <div class="output-heading"><div><h3>输出与命名</h3><span class="small muted">标题 · 年份 · 季集号</span></div>
             <button type="button" class="btn sm" :disabled="!namingChanged || starting" @click="resetNaming">恢复自动</button>
@@ -690,6 +680,27 @@ async function applyRule() {
             </div>
           </div>
         </section>
+        <section class="card output-card publication-card" aria-label="发布与保存">
+          <div class="output-heading"><h3>发布与保存</h3></div>
+          <div class="publication-grid">
+            <div class="publication-settings-group">
+              <PublicationFields v-if="d" ref="publicationFields" v-model="publication" class="publication-settings" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @match="selectManualTmdb" @restore="restorePublication" />
+              <div class="save-paths">
+                <div class="blk"><span class="lab">本地保存目录</span>
+                  <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">
+                    <Icon name="folder" :size="16" />{{ store.state?.settings.outDir }}
+                  </button>
+                </div>
+                <div class="blk"><span class="lab">临时文件</span>
+                  <button type="button" class="dir mono tmp" :title="tmpFull" @click="openSettings('download')">
+                    <Icon name="file" :size="16" />{{ tmpText }}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <ReleasePicker ref="releasePicker" v-model="publication.releaseSelection" :request="request" :binding="releaseBinding" :disabled="starting || tmdbLoading || !!namingInputError" />
+          </div>
+        </section>
       </div>
 
       <Teleport :to="footerTarget || 'body'" :disabled="!footerTarget">
@@ -718,9 +729,8 @@ async function applyRule() {
 .back { margin-bottom: -8px; }
 .small { font-size: 12.5px; font-weight: 400; }
 .row { display: flex; align-items: center; gap: 8px; }
-.qbody { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+.qbody { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
 .qmain { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.qside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .toprow { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .mini { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .mini :deep(.ap > svg), .mini :deep(.ap > .muted:empty) { display: none; }
@@ -789,8 +799,7 @@ async function applyRule() {
 .audio-default:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
 .note { padding: 12px 14px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
 .iqcn { padding: 14px 16px; }
-.side-card { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
-.side-h { font-size: 15px; font-weight: 900; }
+.loading-output { display: flex; flex-direction: column; gap: 14px; }
 .kind-options { display: flex; gap: 8px; }
 .season-select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }
 .season-select:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
@@ -800,6 +809,10 @@ async function applyRule() {
 .output-heading .btn { flex-shrink: 0; }
 .output-grid { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 28px; align-items: start; }
 .output-settings { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.publication-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.publication-settings-group { display: grid; gap: 24px; min-width: 0; }
+.publication-settings { min-width: 0; margin: 0; padding: 0; border: 0; }
+.save-paths { display: flex; flex-direction: column; gap: 20px; min-width: 0; padding-left: 28px; border-left: 1px solid var(--line); }
 .naming-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 .output-preview { min-width: 0; padding: 20px; background: var(--paper-2); border-radius: 12px; border: 1px solid var(--line); }
 .output-preview.pending { opacity: .6; }
@@ -822,6 +835,7 @@ async function applyRule() {
 .hit:hover, .hit.on { background: var(--paper-2); }
 .dir { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--ink-2); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; word-break: break-all; }
 .dir:hover { color: var(--orange-text); }
+.dir :deep(svg) { flex-shrink: 0; }
 .tmp { color: var(--ink-3); font-size: 12px; }
 /* 详情页使用独立底栏；独立画质页沿用吸底操作条。 */
 .actionbar {
@@ -838,14 +852,13 @@ async function applyRule() {
 .sum .mono { font-size: 15px; font-weight: 800; }
 .actionbar .btn.big { flex-shrink: 0; min-width: 200px; border-radius: 11px; }
 @media (max-width: 1180px) {
-  .qbody { grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; }
+  .qbody { gap: 16px; }
   .output-grid { grid-template-columns: minmax(200px, 270px) minmax(0, 1fr); gap: 20px; }
 }
 @media (max-width: 980px) {
-  .qbody { grid-template-columns: 1fr; }
-  .qside { position: static; }
   .actionbar { flex-wrap: wrap; }
-  .output-grid { grid-template-columns: 1fr; }
+  .output-grid, .publication-grid { grid-template-columns: minmax(0, 1fr); }
+  .save-paths { padding: 20px 0 0; border-left: 0; border-top: 1px solid var(--line); }
   .output-card { padding: 18px; }
 }
 </style>

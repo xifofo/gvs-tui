@@ -1,9 +1,11 @@
 /** 生成可跨重启和重试复用的发布身份，只使用任务属性，不使用时间或临时下载 URL。 */
+import { publicationSource } from './sources.ts'
 import { createHash } from 'node:crypto'
 import type { DlTask } from '../../lib/jobs.ts'
 import type { CompletedMedia } from '../../lib/actual-version.ts'
 import type { PlutoFishView } from './types.ts'
 import type { PublicationDraft } from './publication-types.ts'
+import { sourceTag } from '../../lib/name.ts'
 
 const key = (prefix: string, values: unknown[]) => `${prefix}:${createHash('sha256').update(JSON.stringify(values)).digest('hex')}`
 const number = (value: number, field: string, max = 100000): number => {
@@ -12,7 +14,7 @@ const number = (value: number, field: string, max = 100000): number => {
 }
 
 /** 入队时固定绑定和目录身份；同一作品、季、平台及所选版本的分批下载共享 releaseKey。 */
-export function preparePublication(task: DlTask, connection: PlutoFishView, category = '', directoryId = '0', directoryPath = ''): PublicationDraft {
+export function preparePublication(task: DlTask, connection: PlutoFishView, category = '', directoryId = '0', directoryPath = '', release?: { existingReleaseId?: string; nonce?: string; preserveKey?: boolean }, sourceAccountId?: string): PublicationDraft {
   const identity = connection.identity
   if (connection.status !== 'verified' || !identity) throw new Error('请先验证 PlutoFish 发布端')
   const option = identity.categories?.find(c => c.value === category)
@@ -21,7 +23,8 @@ export function preparePublication(task: DlTask, connection: PlutoFishView, cate
   const tmdbId = number(task.tmdbId, 'TMDB ID', 2147483647)
   const season = movie ? undefined : number(task.season, '季号', 10000)
   const episode = movie ? undefined : number(task.episode, '集号')
-  const binding = { url: connection.url, publisherId: identity.id, sourceAccount: identity.sourceAccount ? { id: identity.sourceAccount.id, alias: identity.sourceAccount.alias } : null }
+  const source = publicationSource(connection, sourceAccountId)
+  const binding = { url: connection.url, publisherId: identity.id, sourceAccount: { id: source.id, alias: source.alias } }
   if (!/^(0|[1-9][0-9]{0,39})$/.test(directoryId)) throw new Error('上传目录 ID 无效')
   if (typeof directoryPath !== 'string' || directoryPath.length > 4096 || /[\x00-\x1f\x7f]/.test(directoryPath)) throw new Error('上传目录路径无效')
   const workTarget: PublicationDraft['workTarget'] = { mediaType: movie ? 'movie' as const : 'tv' as const, tmdbId: tmdbId ? String(tmdbId) : '', category }
@@ -44,10 +47,14 @@ export function preparePublication(task: DlTask, connection: PlutoFishView, cate
     task.provider, quality, rendition, task.caption ?? '', task.codec, task.group, movie ? task.edition ?? '' : '', audio]
   // 默认根目录沿用旧标识；显式改目录不能复用已绑定其他目标的上传任务。
   if (directoryId !== '0') versionIdentity.push({ directoryId })
+  if (release?.existingReleaseId && !/^[a-f0-9]{32}$/.test(release.existingReleaseId)) throw new Error('所选版本标识无效')
+  if (release?.existingReleaseId && release.nonce) throw new Error('已有版本与新版本不能同时选择')
+  if (release?.existingReleaseId && !release.preserveKey) versionIdentity.push({ existingReleaseId: release.existingReleaseId })
+  if (release?.nonce) versionIdentity.push({ newRelease: release.nonce })
   const releaseKey = key('gvs-r1', versionIdentity)
   return {
-    schemaVersion: 1, binding, releaseKey, fileKey: key('gvs-f1', [releaseKey, task.provider, task.vid, 'video']),
-    directoryId, directoryPath, workTarget, categoryLabel: option?.label ?? '', title: task.series || task.title, kind: 'video',
+    schemaVersion: 1, binding, releaseKey, ...(release?.existingReleaseId ? { existingReleaseId: release.existingReleaseId } : {}), fileKey: key('gvs-f1', [releaseKey, task.provider, task.vid, 'video']),
+    directoryId, directoryPath, workTarget, categoryLabel: option?.label ?? '', naming: { source: sourceTag(task.provider), group: task.group }, title: task.series || task.title, kind: 'video',
     ...(movie ? {} : { seasonNumber: season, episodeNumber: episode, episodeTitle: task.title }),
     output: '', updatedAt: new Date().toISOString(),
   }

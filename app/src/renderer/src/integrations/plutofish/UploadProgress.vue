@@ -40,7 +40,7 @@ async function control(action: 'pause' | 'resume' | 'setup') {
       <div class="progress" :class="{ done: progress?.stage === 'completed', fail: progress?.stage === 'failed', pause: progress?.stage === 'paused' }" role="progressbar" aria-label="上传" :aria-valuenow="percent" :aria-valuemin="0" :aria-valuemax="100">
         <div :style="{ width: percent + '%' }" />
       </div>
-      <div class="upload-meta"><span>{{ human(progress?.uploadedBytes ?? 0) || '0 B' }} / {{ human(total) || '待检测' }}</span><span :title="draft.directoryPath">{{ draft.directoryPath || '/' }}</span></div>
+      <div class="upload-meta"><span>{{ human(progress?.uploadedBytes ?? 0) || '0 B' }} / {{ human(total) || '待检测' }}</span><span :title="`${draft.binding.sourceAccount?.alias ?? ''} · ${draft.directoryPath || '/'}`">{{ draft.binding.sourceAccount?.alias }} · {{ draft.directoryPath || '/' }}</span></div>
     </template>
     <p v-if="progress?.error" class="err" role="alert">{{ progress.error }}</p>
     <p v-if="!ready && progress?.stage !== 'completed'" class="err">{{ store.state?.plutofish?.error || '等待 PlutoFish 连接恢复' }}</p>

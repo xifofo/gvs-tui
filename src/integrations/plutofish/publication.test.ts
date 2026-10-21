@@ -52,7 +52,7 @@ test('绑定按服务、发布端和源账号隔离，未配信息不会误报�
   const next = preparePublication(task(), { ...connection, identity: { ...connection.identity!, id: 'publisher-2' } }, 'anime')
   expect(first.fileKey).not.toBe(next.fileKey)
   expect(publicationStatus(preparePublication(task({ tmdbId: 0 }), connection))).toContain('平台作品 ID、资源分类')
-  expect(publicationStatus(preparePublication(task(), { ...connection, identity: { ...connection.identity!, kind: 'legacy', sourceAccount: null } }, 'anime'))).toContain('绑定源账号')
+  expect(() => preparePublication(task(), { ...connection, identity: null }, 'anime')).toThrow('请先验证 PlutoFish 发布端')
 })
 
 test('媒体规格只来自成品探测，原子清单重读保留身份和实测值', () => {

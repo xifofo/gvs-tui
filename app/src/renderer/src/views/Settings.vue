@@ -2,6 +2,7 @@
 import HookSettingsCard from '../components/HookSettingsCard.vue'
 import DeviceFilesCard from '../components/DeviceFilesCard.vue'
 import IdentityInfo from '../integrations/plutofish/IdentityInfo.vue'
+import RetentionSettings from '../integrations/plutofish/RetentionSettings.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { PROVIDER_NAME, type Provider, type SettingsPatch } from '@shared/api'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -363,7 +364,10 @@ const plat = (p: Provider) => hasProvider(p)
         <!-- 设备文件 -->
         <DeviceFilesCard v-else-if="store.settingsTab === 'devices'" />
 
-        <IdentityInfo v-else-if="store.settingsTab === 'plutofish'" :connection="store.state?.plutofish" />
+        <div v-else-if="store.settingsTab === 'plutofish'">
+          <IdentityInfo :connection="store.state?.plutofish" />
+          <RetentionSettings />
+        </div>
 
         <!-- 关于 -->
         <section v-else-if="store.settingsTab !== 'download'" class="card">

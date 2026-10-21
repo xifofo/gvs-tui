@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import UploadProgress from '../integrations/plutofish/UploadProgress.vue'
+import RetentionProgress from '../integrations/plutofish/RetentionProgress.vue'
 import { transferState, transferLabel, transferPercent } from '@shared/job-transfer'
 import PublicationDetails from '../integrations/plutofish/PublicationDetails.vue'
 import { actualVersionDetail, actualVersionSummary } from '../../../../../src/lib/actual-version'
@@ -224,13 +225,16 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
               <span v-if="mediaSummary(j)" class="muted sub" :title="mediaDetail(j)">{{ mediaSummary(j) }}</span>
               <UploadProgress v-if="j.state === 'done' && j.publication" :job="j" />
               <PublicationDetails :draft="j.publication" />
+              <RetentionProgress :progress="j.publication?.retention" />
               <span v-if="j.state === 'done' && j.note" class="sub job-note" :title="j.note">{{ j.note }}</span>
               <span v-if="j.hooks?.length || j.ed2k" class="hooks">
                 <span v-for="h in j.hooks" :key="h.event + h.startedAt" class="chip tiny" :class="{ ok: h.state === 'ok', warn: h.state === 'failed' || h.state === 'timeout' }" :title="`${h.command}\n${h.message || ''}\n日志：${h.log}`">
                   <Icon name="terminal" :size="12" />{{ h.event === 'start' ? '开始命令' : '完成命令' }} · {{ HOOK_STATE[h.state] }}
                 </span>
-                <span v-if="j.ed2k?.state === 'running'" class="chip tiny"><span class="spin" style="width: 9px; height: 9px" />ed2k {{ Math.round(j.ed2k.pct * 100) }}%</span>
-                <span v-else-if="j.ed2k?.state === 'failed'" class="chip tiny warn" :title="j.ed2k.message">ed2k 失败</span>
+                <span v-if="j.ed2k?.state === 'queued'" class="chip tiny">ED2K 等待计算</span>
+                <span v-else-if="j.ed2k?.state === 'running'" class="chip tiny"><span class="spin" style="width: 9px; height: 9px" />ED2K {{ Math.floor(j.ed2k.pct * 100) }}%</span>
+                <span v-else-if="j.ed2k?.state === 'done'" class="chip tiny ok">ED2K 已生成</span>
+                <span v-else-if="j.ed2k?.state === 'failed'" class="chip tiny warn" :title="j.ed2k.message">ED2K 计算失败</span>
               </span>
             </div>
             <div class="bar">
@@ -254,7 +258,7 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
               <template v-else-if="j.state === 'done'">
                 <button v-if="j.output" type="button" class="btn sm icon" aria-label="打开所在文件夹" title="打开所在文件夹" @click="call(() => gvs('showItem', j.output))"><Icon name="folder" :size="16" /></button>
                 <button v-if="j.ed2k?.link" type="button" class="btn sm icon" aria-label="复制 ed2k 链接" title="复制 ed2k 链接" @click="copyText(j.ed2k.link, '已复制 ed2k 链接')"><Icon name="copy" :size="15" /></button>
-                <button v-else-if="j.historyId && j.ed2k?.state !== 'running'" type="button" class="btn sm icon" aria-label="计算 ed2k" title="计算 ed2k 链接" @click="call(() => gvs('computeEd2k', j.historyId!, j.id).then(() => {}))"><Icon name="hash" :size="15" /></button>
+                <button v-else-if="j.historyId && !j.publication?.ed2k && j.ed2k?.state !== 'running'" type="button" class="btn sm icon" aria-label="计算 ed2k" title="计算 ed2k 链接" @click="call(() => gvs('computeEd2k', j.historyId!, j.id).then(() => {}))"><Icon name="hash" :size="15" /></button>
               </template>
               <template v-else>
                 <button type="button" class="btn sm icon" aria-label="暂停" title="暂停" :disabled="busy.has(j.id)" @click="call(() => gvs('pauseJob', j.id), [j.id])">

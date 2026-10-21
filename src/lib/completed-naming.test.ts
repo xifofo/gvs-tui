@@ -40,7 +40,7 @@ test('actual lower resolution and regular fps replace the selected 4K/60 specs',
   expect(name).not.toContain('2160p')
   expect(name).not.toContain('fps')
   expect(completedFilename(naming(), media({ fps: 60000 / 1001 }), 'MAXPLUS')).toContain('.WEB-DL.MAXPLUS.SDR.60fps.HEVC.')
-  expect(completedFilename(naming(), media({ fps: 50, dynamicRange: 'HLG' }))).toContain('.WEB-DL.HDR.50fps.')
+  expect(completedFilename(naming(), media({ fps: 50, dynamicRange: 'HLG' }))).toContain('.WEB-DL.HLG.50fps.')
   expect(completedFilename(naming({ episodeTitle: '节目' }), media())).not.toContain('.节目.2026')
 })
 
