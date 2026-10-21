@@ -1,6 +1,11 @@
 // Generated from gateway/internal/usermsg/catalog.json; run scripts/sync-user-messages.mjs.
 export const errorCatalog = [
   {
+    "pattern": "status=-1002",
+    "code": "DRM_SERVICE_REGION_MISMATCH",
+    "message": "账号所在区的服务号与内容区不一致（区域不匹配），网关未能完成换钥；请确认账号地区或稍后重试。"
+  },
+  {
     "pattern": "DRM_CLIENT_DEVICE_LIMIT",
     "code": "DRM_CLIENT_DEVICE_LIMIT",
     "message": "这个系统的设备池已满（每系统最多 8 只）。请先删掉不用的设备文件，再上传新的。"
