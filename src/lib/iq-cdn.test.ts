@@ -69,3 +69,20 @@ test('low-speed failover ignores warmup, brief dips and merging', () => {
   now=61000;expect(guard('download',1000)).toBe(true)
   now=62000;expect(guard('merge',0)).toBe(false)
 })
+
+test('explicit official CDN preference uses only the matching authorized file and fails over when excluded', async () => {
+  const dir=mkdtempSync(join(tmpdir(),'iq-pinned-')), path=join(dir,'preference.json')
+  const zen='https://zenlayercdnoversea.inter.iqiyi.com/file.bbts?key=zen-original-signature'
+  let probes=0
+  const fetcher=async()=>{probes++;return new Response(new Uint8Array(65536))}
+  try {
+    const chosen=await selectIQCDN(playlist,[{path:'/file.bbts',urls:[fast,zen]}],{preferencePath:path,headers:{},preferredHost:'zenlayercdnoversea.inter.iqiyi.com',fetcher})
+    expect(chosen.hosts).toEqual(['zenlayercdnoversea.inter.iqiyi.com'])
+    expect(chosen.playlist).toContain('key=zen-original-signature')
+    expect(probes).toBe(0)
+    const fallback=await selectIQCDN(playlist,[{path:'/file.bbts',urls:[fast,zen]}],{preferencePath:path,headers:{},preferredHost:'zenlayercdnoversea.inter.iqiyi.com',excluded:new Set(['zenlayercdnoversea.inter.iqiyi.com']),fetcher})
+    expect(fallback.hosts).toEqual(['fast.inter.iqiyi.com'])
+    const other=await selectIQCDN(playlist,[{path:'/other.bbts',urls:[zen.replace('file.bbts','other.bbts')]}],{preferencePath:path,headers:{},preferredHost:'zenlayercdnoversea.inter.iqiyi.com',fetcher})
+    expect(other.hosts).toEqual(['data.video.iq.com'])
+  } finally {rmSync(dir,{recursive:true,force:true})}
+})

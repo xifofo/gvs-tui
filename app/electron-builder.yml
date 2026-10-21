@@ -44,7 +44,9 @@ mac:
   target:
     - target: dmg
       arch: [arm64, x64]
-  icon: build/icon.png
+  # macOS 需要在 1024 画布中使用约 824px 的圆角底板；满画布的旧式 PNG
+  # 会在 macOS 26 Tahoe 中被缩进系统灰色底板，显示成“图标没撑满”。
+  icon: build/icon-mac.icns
   category: public.app-category.video
   # 没有 Apple 证书：不签名（首次打开需右键 → 打开；也无法自动更新，只提示新版本）
   identity: null

@@ -65,55 +65,27 @@ const audioPicked = computed(
   () => audios.value.filter((a) => a.selected).length,
 )
 
-/**
- * VIP 徽标要分清三件事：片源要不要 VIP、账号是什么状态、**这次取流到底成不成**。
- * 最后一条来自 `play` 的 `quality_gate`，比会员接口可信——它是真的取到流了。
- */
+/** Content restrictions and account products are separate; a play flag cannot certify SVIP. */
 const vipNotice = computed(() => {
   if (!detail.value?.vip) return null
   const probe = props.state.vipProbe
   const acc = props.state.ykAccount
-  if (acc?.needsScan) return { text: 'VIP · 需重新扫码', color: c.err }
-  if (probe) {
-    if (!probe.canPlay) return { text: 'VIP · 该账号不可播', color: c.err }
-    if (probe.hasTrial) return { text: 'VIP · 仅试看', color: c.warn }
-    return { text: probe.isVip ? 'VIP ✓' : 'VIP · 可播', color: c.ok }
-  }
-  if (!acc) return { text: 'VIP', color: c.violet }
-  if (acc.vipSource === 'api' && !acc.isVip)
-    return { text: 'VIP · 账号无权益', color: c.err }
-  return {
-    text: acc.isVip ? 'VIP ✓' : 'VIP',
-    color: acc.isVip ? c.ok : c.violet,
-  }
+  if (acc?.needsScan) return { text: '需重新登录', color: c.err }
+  if (probe?.hasTrial) return { text: '本片仅试看 · 请检查对应端会员', color: c.warn }
+  if (probe && !probe.canPlay) return { text: '本次播放被拒', color: c.err }
+  if (probe) return { text: '已返回片源 · 完整性下载时检查', color: c.dim }
+  return { text: acc?.membership?.status === 'expired' ? '会员已过期' : '需要对应端权益', color: c.warn }
 })
-/** 画质页右上角：这次取流的实际权益（`play` 给的，不是猜的）。 */
 const rightsChip = computed(() => {
   const probe = props.state.vipProbe
-  if (probe) {
-    const bits = [probe.canPlay ? '可播' : '不可播']
-    if (probe.isVip) bits.push('会员✓')
-    if (probe.hasTrial) bits.push('仅试看')
-    if (probe.note) bits.push(probe.note)
-    return {
-      text: bits.join(' · '),
-      color: !probe.canPlay || probe.hasTrial ? c.warn : c.ok,
-    }
+  if (probe) return {
+    text: probe.hasTrial ? '本片仅试看' : !probe.canPlay ? '本次不可播' : '已返回片源 · 会员权益另查',
+    color: probe.hasTrial || !probe.canPlay ? c.warn : c.dim,
   }
   const acc = props.state.ykAccount
-  if (acc) {
-    if (acc.needsScan) return { text: '登录态不可用', color: c.err }
-    if (acc.vipSource === 'api')
-      return {
-        text: acc.isVip ? '会员✓' : '无会员权益',
-        color: acc.isVip ? c.ok : c.warn,
-      }
-    return {
-      text: acc.isVip ? '会员(登录快照)' : '会员未知',
-      color: acc.isVip ? c.ok : c.dim,
-    }
-  }
-  return { text: '权益未知', color: c.dim }
+  if (acc?.needsScan) return { text:'登录态不可用',color:c.err }
+  if (acc?.membership?.status === 'expired') return { text:'会员已过期',color:c.warn }
+  return { text:'对应端权益未确认',color:c.dim }
 })
 
 /** The badge in the header: the VIP story when the title needs it, else rights. */

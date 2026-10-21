@@ -1,4 +1,5 @@
 import { errorCatalog } from './user-message-catalog'
+import { hasUnsupportedDownloaderFormat } from './downloader-error'
 
 export const defaultErrorMessage = '操作暂时未能完成，请稍后重试；若持续失败，请联系客服并说明操作时间。'
 const rules = errorCatalog.map(row => ({ ...row, re: new RegExp(row.pattern, 'i') }))
@@ -6,6 +7,7 @@ const technical = /[\r\n{}<>]|https?:\/\/|wss?:\/\/|[A-Z][A-Z0-9]*_[A-Z0-9_]+|[A
 const iqAudioMessage = '音轨检查未通过，未生成成品。请继续任务重新下载音轨，已完成的视频会保留。'
 const iqAudioTransferMessage = '音轨分段下载失败，重试后仍未完成。请继续任务重试，已完成的视频和音轨分段会保留。'
 const downloaderCrashMessage = '本机下载组件异常退出，下载未完成。请更新客户端后继续任务重试。'
+const downloaderCompatibilityMessage = '当前视频分片格式暂不受本机下载组件支持，反复重试无法解决。已下载分片已保留，请等待组件兼容更新。'
 const decodeCheckMessage = '音视频检查未通过，未保存成品。请继续任务重试。'
 
 export function errorCode(error: unknown): string {
@@ -14,7 +16,7 @@ export function errorCode(error: unknown): string {
   return typeof row.errorCode === 'string' ? row.errorCode : typeof row.error_code === 'string' ? row.error_code : ''
 }
 
-const deviceFileCodes = new Set(['DRM_CLIENT_DEVICE_REQUIRED', 'DRM_CLIENT_DEVICE_LEVEL', 'DRM_CLIENT_DEVICE_UNREADABLE', 'DRM_CLIENT_DEVICE_REUPLOAD'])
+const deviceFileCodes = new Set(['DRM_CLIENT_DEVICE_REQUIRED', 'DRM_CLIENT_DEVICE_LEVEL', 'DRM_CLIENT_DEVICE_UNREADABLE', 'DRM_CLIENT_DEVICE_REUPLOAD', 'DRM_LICENCE_REJECTED'])
 const deviceFileMessages = new Set(errorCatalog.filter(row => deviceFileCodes.has(row.code)).map(row => row.message as string))
 
 /** 网关要求用户先上传或更换本人设备文件（原始错误或已转换的提示都能识别）。 */
@@ -29,10 +31,12 @@ export function userMessage(error: unknown, fallback = defaultErrorMessage): str
   const code = errorCode(error)
   if (code === 'IQ_AUDIO_VALIDATION_FAILED') return iqAudioMessage
   if (code === 'IQ_AUDIO_TRANSFER_FAILED') return iqAudioTransferMessage
+  if (code === 'DOWNLOADER_UNSUPPORTED_MEDIA') return downloaderCompatibilityMessage
   const coded = rules.find(row => row.code === code)
   if (coded) return coded.message
   const row = error && typeof error === 'object' ? error as Record<string, unknown> : undefined
   const raw = (typeof error === 'string' ? error : error instanceof Error ? error.message : typeof row?.message === 'string' ? row.message : '').trim()
+  if (hasUnsupportedDownloaderFormat(raw)) return downloaderCompatibilityMessage
   if (/IQ 音轨解码检查失败/.test(raw)) return iqAudioMessage
   if (/IQ 音轨分段下载失败/.test(raw)) return iqAudioTransferMessage
   if (/N_m3u8DL-RE 下载失败 \(SIG(?:ABRT|SEGV|BUS|ILL)\)/.test(raw)) return downloaderCrashMessage

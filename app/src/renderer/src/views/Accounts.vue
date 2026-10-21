@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { PROVIDER_NAME, type Provider } from '@shared/api'
-import { accountBucket, METHOD_LABEL, moveProvider, orderProviders, providerMeta } from '@shared/provider-registry'
-import { drmSummary, l1Badge, loadDRMRequirements } from '../drm-reqs'
+import { accountBucket, moveProvider, optionalLast, orderProviders, providerMeta } from '@shared/provider-registry'
+import { loadDRMRequirements } from '../drm-reqs'
+import { loadPlatformMeta, platformMeta } from '../platform-meta'
+import PlatformMetaInfo from '../components/PlatformMetaInfo.vue'
 import AccountDrawer from '../components/AccountDrawer.vue'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
@@ -26,11 +28,11 @@ const counts = computed(() => {
     hidden: ordered.value.length - vis.length,
   }
 })
-const list = computed(() => ordered.value.filter((p) => {
+const list = computed(() => optionalLast(ordered.value.filter((p) => {
   if (filter.value === 'hidden') return hidden.value.has(p)
   if (hidden.value.has(p)) return false
   return filter.value === 'all' || bucket(p) === filter.value
-}))
+})))
 const TABS: Array<{ key: Filter; label: string }> = [{ key: 'all', label: '全部' }, { key: 'attention', label: '需处理' }, { key: 'ok', label: '已登录' }, { key: 'hidden', label: '已隐藏' }]
 const toneClass: Record<string, string> = { ok: 'ok', warn: 'warn', err: 'err', muted: '' }
 
@@ -44,7 +46,7 @@ function move(p: Provider, d: -1 | 1) {
 }
 const open = (p: Provider) => { store.accountDrawer = p }
 // Gateway-provided L1 table (falls back to the static one on older gateways).
-onMounted(() => { void loadDRMRequirements() })
+onMounted(() => { void loadDRMRequirements(); void loadPlatformMeta(true) })
 </script>
 
 <template>
@@ -69,6 +71,7 @@ onMounted(() => { void loadDRMRequirements() })
         <div class="ah">
           <PlatformLogo :provider="p" :size="28" />
           <b class="an">{{ PROVIDER_NAME[p] }}</b>
+          <span v-if="providerMeta(p).optional" class="muted" :title="providerMeta(p).benefit">可选</span>
           <template v-if="reorder">
             <button type="button" class="btn sm icon" :aria-label="`上移 ${PROVIDER_NAME[p]}`" @click="move(p, -1)"><Icon name="up" :size="15" /></button>
             <button type="button" class="btn sm icon" :aria-label="`下移 ${PROVIDER_NAME[p]}`" @click="move(p, 1)"><Icon name="down" :size="15" /></button>
@@ -79,11 +82,9 @@ onMounted(() => { void loadDRMRequirements() })
         </div>
         <div class="chips">
           <span class="chip" :class="toneClass[account(p)?.tone ?? 'muted']">● {{ account(p)?.short ?? (providerMeta(p).methods.includes('none') ? '无需登录' : '未登录') }}</span>
-          <span v-for="m in providerMeta(p).methods.filter((m) => m !== 'none')" :key="m" class="chip">{{ METHOD_LABEL[m] }}</span>
-          <span v-if="l1Badge(p)" class="chip l1" :title="drmSummary(p)">{{ l1Badge(p) }}</span>
         </div>
-        <span class="sum clamp2">{{ account(p)?.summary || providerMeta(p).benefit }}</span>
-        <span v-if="providerMeta(p).region" class="region"><Icon name="globe" :size="13" />{{ providerMeta(p).region }}</span>
+        <PlatformMetaInfo :provider="p" compact />
+        <span class="sum clamp2">{{ account(p)?.summary || platformMeta(p)?.description || '' }}</span>
         <div class="af">
           <button v-if="!hidden.has(p)" type="button" class="btn sm" :class="{ outline: bucket(p) === 'attention' }" @click="open(p)">
             {{ bucket(p) === 'ok' ? '管理' : providerMeta(p).methods.includes('none') ? '查看' : '登录 / 管理' }}

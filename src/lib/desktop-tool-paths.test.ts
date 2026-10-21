@@ -11,19 +11,21 @@ const electron = () => ({ app: {
 } })
 mock.module('electron', electron)
 mock.module(join(import.meta.dir, '../../app/node_modules/electron'), electron)
-const { iqcnLocalPath, tuiBinDir } = await import('../../app/src/main/shims/tool-paths.ts')
+const { iqcnLocalPath, m3u8dlPath, tuiBinDir } = await import('../../app/src/main/shims/tool-paths.ts')
 
-test('development IQCN helper uses the checkout tools', () => {
+test('development managed downloader and IQCN helper use the checkout tools', () => {
   state.isPackaged = false
   expect(iqcnLocalPath()).toBe(join('/fixture/gvs/bin', process.platform === 'win32' ? 'iqcn-local.exe' : 'iqcn-local'))
+  expect(m3u8dlPath()).toBe(join('/fixture/gvs/bin', process.platform === 'win32' ? 'N_m3u8DL-RE.exe' : 'N_m3u8DL-RE'))
 })
 
-test('packaged IQCN helper uses resources, separately from writable media wrappers', () => {
+test('packaged downloader and IQCN helper use resources instead of stale writable caches', () => {
   const previous = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
   Object.defineProperty(process, 'resourcesPath', { value: '/fixture/resources', configurable: true })
   state.isPackaged = true
   try {
     expect(iqcnLocalPath()).toBe(join('/fixture/resources/bin', process.platform === 'win32' ? 'iqcn-local.exe' : 'iqcn-local'))
+    expect(m3u8dlPath()).toBe(join('/fixture/resources/bin', process.platform === 'win32' ? 'N_m3u8DL-RE.exe' : 'N_m3u8DL-RE'))
     expect(tuiBinDir()).toBe(join(process.platform === 'win32' ? '/fixture/resources' : '/fixture/user-data', 'bin'))
   } finally {
     state.isPackaged = false

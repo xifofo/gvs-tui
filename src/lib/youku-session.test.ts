@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { parseYkAccount, shouldRefreshYouku, type YkLogin } from './youku-session.ts'
+import { parseYkAccount, shouldRefreshYouku, ykLoginInfo, accountSummary, type YkLogin } from './youku-session.ts'
 
 const baseLogin: YkLogin = {
   ok: true,
@@ -51,14 +51,15 @@ describe('parseYkAccount', () => {
     expect(acc.vipUntil).toBe('2030-01-01')
   })
 
-  test('treats a successful profile with no active product as authoritative non-member', () => {
+  test('keeps successful but empty member data unknown', () => {
     const acc = parseYkAccount({
       session: { logged_in: true, method: 'web-cookie' },
       summary: { logged_in: true },
       profile: { member_profile_get: { ret: ['SUCCESS::调用成功'], data: {} } },
     })
 
-    expect(acc.vipSource).toBe('api')
+    expect(acc.vipSource).toBe('none')
+    expect(acc.membership?.status).toBe('unknown')
     expect(acc.isVip).toBe(false)
   })
 
@@ -92,4 +93,25 @@ describe('parseYkAccount', () => {
     expect(acc.needsScan).toBe(false)
     expect(acc.vipSource).toBe('none')
   })
+})
+
+test('an explicit signed-out summary wins over an old session snapshot', () => {
+  const account = parseYkAccount({summary:{logged_in:false,is_vip:true},session:{logged_in:true,yktk_vip:true}})
+  expect(account.loggedIn).toBe(false)
+  expect(account.needsScan).toBe(true)
+  expect(accountSummary(account)).toContain('需重新扫码')
+})
+
+test('credential existence and UID cannot override explicit login expiry', async () => {
+  const cli = { invoke:async () => ({logged_in:false,needs_relogin:true,has_stoken:true,uid:'old-uid',yktk_len:400,yktk_fields:{vip:true}}) }
+  const result = await ykLoginInfo(cli as never, '')
+  expect(result.ok).toBe(false)
+  expect(result.needsRelogin).toBe(true)
+  expect(shouldRefreshYouku({...result,ok:true,refreshable:true})).toBe(false)
+})
+
+test('latest preview result overrides the earlier member summary', () => {
+  const account=parseYkAccount({summary:{logged_in:true,membership_known:true,is_vip:true}})
+  expect(accountSummary(account,{canPlay:true,isVip:true,hasTrial:true,download:'',note:''})).toContain('仅能试看')
+  expect(accountSummary(account,{canPlay:true,isVip:true,hasTrial:true,download:'',note:''})).not.toContain('会员到期')
 })

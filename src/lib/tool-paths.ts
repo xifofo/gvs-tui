@@ -16,6 +16,11 @@ export function tuiBinDir(): string {
   return toolDirectoryFrom(fileURLToPath(import.meta.url))
 }
 
+/** Managed downloader follows the checkout, or the desktop app's resources. */
+export function m3u8dlPath(): string {
+  return join(tuiBinDir(), process.platform === 'win32' ? 'N_m3u8DL-RE.exe' : 'N_m3u8DL-RE')
+}
+
 /** Read-only helper bundled with the app; separate from writable media wrappers. */
 export function iqcnLocalPath(): string {
   return join(tuiBinDir(), process.platform === 'win32' ? 'iqcn-local.exe' : 'iqcn-local')

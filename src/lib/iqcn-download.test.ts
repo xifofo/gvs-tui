@@ -8,7 +8,7 @@ import { downloadIQCN } from './iqcn.ts'
 import { ensureFFmpeg } from './tools.ts'
 import type { GwClient } from './client.ts'
 import { JobHub, runTask, type DlTask, type JobEvt } from './jobs.ts'
-import type { IQCNLocalRuntime } from './iqcn-local.ts'
+import { restoreIQCNLocal, type IQCNLocalRuntime } from './iqcn-local.ts'
 import { defaultConfig } from './config.ts'
 import { hostFFprobe, probeFinishedMedia } from './gvs-record.ts'
 import { reserveOutputPath } from './completed-naming.ts'
@@ -40,7 +40,7 @@ function fixtureClient(bytes: Buffer, subtitles = true, onSegment?: () => void, 
     if (action === 'probe') return plan
     if (action === 'streams') {
       expect(input.transport).toBe('local-v1')
-      return { ...plan, planId: 'fixture-plan', transport: 'local-v1', localProcessing: { version: 1, ticket: 'fixture', identity: 'fixture' },
+      return { ...plan, planId: 'fixture-plan', transport: 'local-v1', localProcessing: plan.localProcessing ?? { version: 1, ticket: 'fixture', identity: 'fixture' },
         video: { ...(plan.video as Record<string, unknown>), segments: parts.map(part => ({ contentlength: part.length })) },
         subtitles: subtitles ? [{ index: 0, language_id: 1, formats: ['srt'] }] : [] }
     }
@@ -70,6 +70,33 @@ function fixtureClient(bytes: Buffer, subtitles = true, onSegment?: () => void, 
   }
   return { cli, runtime, released: () => released, peak: () => peak }
 }
+
+withHostProbe('explicit clear domestic video with an empty ticket passes the real local helper and mux', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-clear-'))
+  try {
+    const bytes = await multiAudioFixture(dir), dest = join(dir, 'result.mkv')
+    const fixture = fixtureClient(bytes, false, undefined, {
+      video: { drmType: 1 }, localProcessing: { version: 1, ticket: '', identity: 'fixture' },
+    })
+    fixture.runtime.restore = async (source, destination, material, signal) => {
+      expect(material).toEqual({ version: 1, ticket: '', identity: 'fixture', drmType: 1 })
+      const report = await restoreIQCNLocal(source, destination, material, signal)
+      expect(report).toMatchObject({ restored: false, clearCandidate: true })
+      expect(readFileSync(destination).equals(readFileSync(source))).toBe(true)
+      return report
+    }
+    await downloadIQCN(fixture.cli, { vid: '123', quality: '600|100|25' } as DlTask,
+      dest, join(dir, 'work'), () => {}, undefined, fixture.runtime, 2)
+    expect(fixture.released()).toBe(1)
+    const specs = await probeFinishedMedia(dest)
+    expect(specs).toMatchObject({ status: 'probed', width: 320, height: 240, codec: 'h264' })
+    const ffmpeg = await ensureFFmpeg()
+    const decoded = spawnSync(ffmpeg, ['-nostdin', '-v', 'error', '-i', dest, '-map', '0:v', '-map', '0:a', '-f', 'null', '-'],
+      { windowsHide: true, timeout: 30000 })
+    expect(decoded.status).toBe(0)
+    expect(decoded.stderr.toString().trim()).toBe('')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}, 60000)
 
 withHostProbe('domestic shared runner names the measured default audio, preserves S00 and protects collisions and legacy queues', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-naming-'))
@@ -328,3 +355,52 @@ test('missing or unresolved audio fails before fetching video and preserves down
     expect(existsSync(dest)).toBe(false)
   }
 })
+
+
+test('ticketless cleartext download renews its plan, processes real TS locally and produces a decodable MKV', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-iqcn-cleartext-job-'))
+  try {
+    const bytes = await multiAudioFixture(dir)
+    const split = Math.floor(bytes.length / 188 / 2) * 188
+    const parts = [bytes.subarray(0, split), bytes.subarray(split)]
+    const descriptors: string[] = [], fetched: number[] = [], released: string[] = []
+    let plans = 0, processed = 0
+    const cli = { invoke: async (_p: string, action: string, input: Record<string, unknown>) => {
+      if (action === 'streams') {
+        expect(input.transport).toBe('local-v1')
+        return { planId: `clear-${++plans}`, transport: 'local-v1',
+          localProcessing: { version: 1, ticket: '', identity: 'fixture' },
+          video: { drmType: 1, segments: parts.map(part => ({ contentlength: part.length })) } }
+      }
+      if (action === 'download-finish') { released.push(String(input.planId)); return {} }
+      expect(action).toBe('download-segment')
+      const index = Number(input.index)
+      descriptors.push(`${input.planId}:${index}`)
+      if (index === 1 && input.planId === 'clear-1') throw Object.assign(new Error('expired'), { errorCode: 'PLAN_EXPIRED' })
+      return { transport: 'local-v1', index, bytes: parts[index]!.length, urls: [`https://fixture.ptqy.gitv.tv/${index}`] }
+    } } as unknown as GwClient
+    const dest = join(dir, 'result.mkv')
+    await downloadIQCN(cli, { vid: '123', quality: '600|100|25' } as DlTask, dest, join(dir, 'work'), () => {}, undefined, {
+      fetch: async url => {
+        const index = Number(new URL(url).pathname.slice(1)); fetched.push(index)
+        return new Response(new Uint8Array(parts[index]!))
+      },
+      restore: async (source, destination, material, signal) => {
+        expect(material).toMatchObject({ ticket: '', drmType: 1 })
+        const result = await restoreIQCNLocal(source, destination, material, signal)
+        expect(result).toMatchObject({ restored: false, clearCandidate: true })
+        processed++
+        return result
+      },
+    })
+    expect(plans).toBe(2)
+    expect(descriptors).toEqual(['clear-1:0', 'clear-1:1', 'clear-2:1'])
+    expect(fetched).toEqual([0, 1])
+    expect(processed).toBe(2)
+    expect(released).toEqual(['clear-2'])
+    const ffmpeg = await ensureFFmpeg()
+    const decoded = spawnSync(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-xerror', '-i', dest, '-map', '0:v:0', '-map', '0:a', '-f', 'null', '-'], { windowsHide: true, timeout: 30000 })
+    expect(decoded.status).toBe(0)
+    expect(decoded.stderr.toString()).toBe('')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}, 60000)

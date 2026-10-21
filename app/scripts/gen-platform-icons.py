@@ -29,6 +29,7 @@ E=[
  # worldwide services
  ('netflix','Netflix','#E50914',('si','netflix')),
  ('disneyplus','Disney+','#0E3B8C',('text','D+')),
+ ('dsnp','Disney+','#0E3B8C',('text','D+')),
  ('primevideo','Prime Video','#1399FF',('text','prime')),
  ('max','Max','#002BE7',('si','max')),
  ('hbo','HBO','#000000',('si','hbo')),

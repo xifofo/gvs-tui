@@ -6,6 +6,7 @@ import { truncate } from './util.ts'
 import { tuiBinDir } from './tool-paths.ts'
 import { toolRuns } from './tools.ts'
 import { orderedMuxAudios } from './audio-selection.ts'
+import { isEac3CompatibilityError, validateEac3WithAudioToolbox } from './eac3-validation.ts'
 
 function existsFile(p: string): string {
   if (!p || p === 'ffmpeg' || p === 'ffmpeg.exe') return ''
@@ -196,6 +197,16 @@ export async function validateAudio(ffmpeg: string, path: string, signal?: Abort
   } catch (e) {
     if (signal?.aborted) throw signal.reason ?? e
     const message = e instanceof Error ? e.message : String(e)
+    if (process.platform === 'darwin' && isEac3CompatibilityError(message)) {
+      try {
+        await validateEac3WithAudioToolbox(ffmpeg, path, signal)
+        return
+      } catch (fallbackError) {
+        if (signal?.aborted) throw signal.reason ?? fallbackError
+        const detail = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+        throw new Error(`音轨解码校验失败，未生成成品：${message}；${detail}`, { cause: e })
+      }
+    }
     if (/Stream map.*matches no streams|Failed to set value '0:a' for option 'map'/i.test(message)) {
       throw new Error('音轨校验失败：下载的文件中没有音频轨道，未生成成品；分轨视频需要同时取得独立音轨', { cause: e })
     }

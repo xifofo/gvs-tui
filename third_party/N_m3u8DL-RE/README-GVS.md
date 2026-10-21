@@ -23,3 +23,12 @@ content key is not decrypted with a sample/default key.
 The maintenance workflow publishes six runtime IDs (Windows/macOS/Linux,
 x64/arm64) with the license and source identity. Cross-published binaries still
 need startup verification on their own platform before release acceptance.
+
+The IQ.2 update reads mdcm mode/vector fields from the bounded SDT service name,
+accepts the legacy and a0-first layouts, and reassembles sections split across
+TS packets. Provider names, section CRC bytes and other service descriptors
+cannot supply missing fields. Unsupported explicit patterns fail closed.
+
+IQ.3 additionally recognizes the complete domestic Web legacy a0/vector/e1/content
+layout from the reference implementation. Explicit unknown modes, incomplete
+vectors and conflicting content tags are rejected.

@@ -1,3 +1,4 @@
+import { assertYoukuPlayback } from './youku-playback.ts'
 import { probeManifest } from './manifest-provider.ts'
 import { probeWebVideo } from './web-video-providers'
 import { iqOptions } from './iq.ts'
@@ -16,7 +17,7 @@ import { runLog } from './runlog.ts'
 import { tencentSelectedPlayInput, tencentPersonaKey } from './tencent-quality-selection.ts'
 export { tencentPersonaKey } from './tencent-quality-selection.ts'
 
-export type StreamOptions = { qualities: Quality[]; audios: Audio[]; vip?: VipProbe }
+export type StreamOptions = { qualities: Quality[]; audios: Audio[]; subtitles?: import('../types.ts').Subtitle[]; vip?: VipProbe }
 
 /** Map Youku play payload → TUI audio rows. Gateway catalog is `audios[]`. */
 export function youkuAudiosFromPlay(data: Record<string, unknown>, sourceVid = '', editionLang = ''): Audio[] {
@@ -323,13 +324,13 @@ export async function probeOptions(
   cfg: FileConfig,
   provider: string,
   vid: string,
-  opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: TencentPlayParams } = {},
+  opts: { title?: string; skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: TencentPlayParams } = {},
 ): Promise<StreamOptions> {
   switch (provider) {
     case 'mgtv': case 'bilibili': case 'migu': return probeWebVideo((p,a,input) => cli.invoke(p,a,input),provider,vid)
     case 'iqcn': return iqcnOptions(await cli.invoke('iqcn', 'probe', { tvid: vid }, {}, { timeoutMs: 150000 }), vid)
-    case 'iq': return iqOptions(await cli.invoke('iq','probe',{vid},cli.extra(cfg,'iq'),{timeoutMs:150000}))
-    case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': return probeManifest(cli, cfg, provider, vid)
+    case 'iq': return iqOptions(await cli.invoke('iq','probe',{vid},cli.extra(cfg,'iq'),{timeoutMs:150000}), opts.title)
+    case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp': return probeManifest(cli, cfg, provider, vid)
     case 'hongguo': return probeHongguo(cli, vid)
     case 'huangguo': return probeHuangguo(cli, vid)
     case 'youku': return probeYouku(cli, cfg, vid, opts)
@@ -944,6 +945,7 @@ async function probeYouku(
   opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }> } = {},
 ): Promise<StreamOptions> {
   const data = await cli.invoke('youku', 'play', { vid, tier: 'multi', expand: '0' }, cli.extra(cfg, 'youku', opts.skipSign))
+  assertYoukuPlayback(data)
 
   const names = new Map<string, string>()
   if (Array.isArray(data.video_types)) {
@@ -1104,18 +1106,12 @@ async function probeYouku(
   return { qualities, audios, vip: youkuVipProbe(data) }
 }
 
-/**
- * 从 `play` 的响应里读「这个账号现在到底能不能放」。
- *
- * 这是唯一可信的会员判据：`account` 的那几个 mtop 会员接口要网页 Cookie，
- * 扫码登录后必然报 SESSION_EXPIRED（≠ 掉登录），而 `play` 是真的取到了流，
- * 服务端已经按 能力∩片源∩账号权益 裁过一次（`quality_gate` 就是这么写的）。
- */
+/** Per-title/terminal playback limits; can_play/is_vip never certify an account's SVIP products. */
 export function youkuVipProbe(data: Record<string, unknown>): VipProbe {
   const gate = isObj(data.quality_gate) ? data.quality_gate : {}
   const canPlay = asBool(gate.can_play) || asBool(data.can_play)
   const isVip = asBool(gate.is_vip) || asBool(data.is_vip)
-  const hasTrial = asBool(gate.has_trial)
+  const hasTrial = asBool(gate.has_trial) || asBool(data.has_trial) || isObj(data.trial) && Number(data.trial.time) > 0
   const download = asString(gate.download_status) || asString(data.download_status)
   const notes: string[] = []
   if (hasTrial) notes.push('服务端只给试看档')

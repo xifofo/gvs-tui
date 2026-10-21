@@ -16,6 +16,7 @@ import { assertCencMp4Output, isMpegTsFile } from './media-output.ts'
 import { removeScratch, resumeScratchDir, scratchDir, scratchDirIn } from './scratch.ts'
 import { tencentActualVersion, type ActualVersion } from './actual-version.ts'
 import { tencentCaption } from './tencent-quality-selection.ts'
+import { DownloaderCompatibilityError, hasUnsupportedDownloaderFormat } from './downloader-error.ts'
 
 /** A CDN refused us (403/410 …) — usually the signed URL expired mid-flight. */
 export class CdnDenied extends Error {
@@ -1014,6 +1015,14 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     if (fatal) { reject(fatal); return }
     let file = ''
     try { file = readFileSync(logFile, 'utf8') } catch { /* no log */ }
+    // A parallel worker can report HTTP 502 before another worker exits on an
+    // unsupported media format. Preserve the root error before CDN detection;
+    // refreshing signed URLs cannot resolve an explicit format incompatibility.
+    const compatibilityDetails = cleanRELog(stderrHead + '\n' + file + '\n' + output)
+    if ((code !== 0 || exhausted) && hasUnsupportedDownloaderFormat(compatibilityDetails)) {
+      reject(new DownloaderCompatibilityError(`${compatibilityDetails.slice(0, 2000)}\n${compatibilityDetails.slice(-2000)}`))
+      return
+    }
     // Some RE errors are written only to the log or have no final newline.
     const status = deniedStatus || reHttpFailureMonitor().feed(file + '\n' + output + '\n')
     if (status && (code !== 0 || exhausted)) { reject(new CdnDenied(status, '')); return }
@@ -1063,6 +1072,14 @@ export async function hlsSegmentsEncrypted(src: string, ref: string, signal?: Ab
   return !(b[0] === 0x47 && b[188] === 0x47)
 }
 
+/** RE subtitle selection: all, none, or exact rendition files (regex-escaped, OR-ed). */
+function subtitleSelect(uris?: string[]): string[] {
+  if (!uris) return ['--select-subtitle', 'all']
+  const ok = uris.filter(u => /^[\w.-]+$/.test(u))
+  if (!ok.length) return ['--drop-subtitle', 'all']
+  return ['--select-subtitle', `url=(${ok.map(u => u.replace(/[.-]/g, m => `\\${m}`)).join('|')}):for=all`]
+}
+
 export async function downloadPlaylist(opts: {
   src: string
   dest: string
@@ -1073,10 +1090,16 @@ export async function downloadPlaylist(opts: {
   contentKeys?: string[]
   /** Keep selected provider subtitle groups when muxing a complete HLS master. */
   keepSubtitles?: boolean
+  /** Exact subtitle renditions to keep (playlist file names); [] drops all; undefined keeps all when keepSubtitles. */
+  subtitleUris?: string[]
   /** Already fetched by the gateway before a short-lived MPD signature expires. */
   manifestText?: string
   /** Select an exact pixel height while keeping the best audio. */
   videoHeight?: number
+  /** Extra RE video filter, e.g. codecs (Disney+ DV / HDR10 / SDR share a height). */
+  videoCodecs?: string
+  /** Exact audio renditions to keep (playlist file names); default: RE's best single audio. */
+  audioUris?: string[]
   /** Explicit bounded validation/download range, in segment indices. */
   segmentRange?: string
   /** HLS 密钥算法。默认 CENC（优酷）；黄果是 AES_128。 */
@@ -1185,7 +1208,7 @@ export async function downloadPlaylist(opts: {
       ...(opts.select === 'video' ? ['--select-video'] : opts.contentKeys?.length && opts.select === 'muxed' ? [] : ['--auto-select']),
       ...(opts.select === 'video' ? ['best'] : []),
       ...(opts.select === 'video' ? ['--drop-audio', 'all', '--drop-subtitle', 'all'] : []),
-      ...(opts.select === 'muxed' ? opts.keepSubtitles ? ['--select-subtitle','all'] : ['--drop-subtitle', 'all'] : []),
+      ...(opts.select === 'muxed' ? opts.keepSubtitles ? subtitleSelect(opts.subtitleUris) : ['--drop-subtitle', 'all'] : []),
       '--binary-merge',
       '--del-after-done', 'true',
       // Keep RE's redirected-output detection. Its forced ANSI/NonAnsiWriter
@@ -1205,7 +1228,11 @@ export async function downloadPlaylist(opts: {
     }
     if ((opts.videoHeight || opts.contentKeys?.length) && opts.select === 'muxed') {
       if (opts.videoHeight && (!Number.isInteger(opts.videoHeight) || opts.videoHeight < 1 || opts.videoHeight > 8640)) throw new Error('视频分辨率选择无效')
-      args.push('--select-video', opts.videoHeight ? `res=^[0-9]+x${opts.videoHeight}$:for=best` : 'best', '--select-audio', 'best')
+      if (opts.videoCodecs && !/^[a-z0-9|]+$/i.test(opts.videoCodecs)) throw new Error('视频编码选择无效')
+      const video = opts.videoHeight ? `res=^[0-9]+x${opts.videoHeight}$${opts.videoCodecs ? `:codecs=^(${opts.videoCodecs})`: ''}:for=best` : 'best'
+      const uris = (opts.audioUris || []).filter(u => /^[\w.-]+$/.test(u))
+      const audio = uris.length ? `url=(${uris.map(u => u.replace(/[.-]/g, m => `\\${m}`)).join('|')}):for=all` : 'best'
+      args.push('--select-video', video, '--select-audio', audio)
     }
     if (opts.muxTracks) {
       const mkvmerge = await ensureMkvmerge()
@@ -1637,54 +1664,44 @@ export async function youkuAudioURLs(data: Record<string, unknown>, want: string
   return urls
 }
 
-/** Resolve the requested row, or the actual fallback video, once for URL and delivery. */
+/** Resolve only the selected rendition; a refreshed catalogue cannot silently downgrade it. */
 function youkuVideoSelection(data: Record<string, unknown>, want: string): { playlist: string; streamType: string } {
   const [streamType = '', source = ''] = want.split('|')
-  if (want && Array.isArray(data.streams)) {
-    for (const s of data.streams) {
-      if (!isObj(s)) continue
-      if (asString(s.stream_type) !== streamType) continue
-      if (source && asString(s.source) !== source) continue
-      if (asString(s.media_type).toLowerCase() === 'audio') continue
-      const u = asString(s.playlist_url)
-      if (u) return { playlist: u, streamType: asString(s.stream_type) }
-    }
+  const expectedLane = source || (streamType.toLowerCase().startsWith('cmfv') ? 'frame_xiang' : '')
+  if (expectedLane && asString(data.lane) && asString(data.lane) !== expectedLane) {
+    throw new Error('优酷所选来源端与返回的主响应不一致，已停止下载，避免混用音轨和密钥')
   }
-  // A source-qualified selection must not silently become another lane.
-  if (source) throw new Error('优酷所选来源端没有返回对应档位，请重新取流或选择可用档位')
+  const rows = (Array.isArray(data.streams) ? data.streams.filter(isObj) : [])
+    .filter(s => !['audio', 'subtitle'].includes(asString(s.media_type).toLowerCase()))
+  if (want) {
+    const matches = rows.filter(s => asString(s.stream_type) === streamType && (!source || asString(s.source) === source))
+      .map(s => ({ playlist: asString(s.playlist_url) || asString(s.url), streamType: asString(s.stream_type) }))
+      .filter(s => s.playlist)
+    if (new Set(matches.map(s => s.playlist)).size > 1) throw new Error('优酷所选档位对应多个来源，请重新选择带来源的档位')
+    if (matches.length) return matches[0]!
+  }
   if (isObj(data.video)) {
     const playlist = asString(data.video.playlist_url) || asString(data.video.url)
-    const streamType = asString(data.video.stream_type)
-    if (streamType) return { playlist, streamType }
-    // Some gateways expose the fallback identity only in the URL-bound catalog row.
-    const types = (Array.isArray(data.streams) ? data.streams.filter(isObj) : [])
-      .filter(s => asString(s.media_type).toLowerCase() !== 'audio' && playlist &&
-        (s.playlist_url === playlist || s.url === playlist))
-      .map(s => asString(s.stream_type)).filter(Boolean)
-    return { playlist, streamType: new Set(types).size === 1 ? types[0]! : want }
+    const boundRows = rows.filter(s => playlist && (s.playlist_url === playlist || s.url === playlist))
+    const types = new Set([asString(data.video.stream_type), ...boundRows.map(s => asString(s.stream_type))].filter(Boolean))
+    const actual = types.size === 1 ? [...types][0]! : ''
+    const lane = asString(data.lane) || asString(data.video.source)
+    const sourceMatches = !source || lane === source || boundRows.some(s => asString(s.source) === source)
+    if (playlist && (!want || actual === streamType && sourceMatches)) return { playlist, streamType: actual }
   }
-  return { playlist: '', streamType: want }
+  if (want) throw new Error(source
+    ? '优酷所选来源端没有返回对应档位，请重新取流或选择可用档位'
+    : '优酷未返回所选档位，已停止下载，避免静默换成其他画质')
+  return { playlist: '', streamType: '' }
 }
 
 export function youkuVideoPlaylist(data: Record<string, unknown>, want: string): string {
   return youkuVideoSelection(data, want).playlist
 }
 
-
-/**
- * 帧享 HQ（cmfv + 独立 audio playlist）才分轨下载。依据实际选中的地址，
- * 批量任务可能选了 TV 档位、但当前集只返回 HQ，不能继续按旧档位判断。
- * 酷喵 TV / App 等 HLS：视频 m3u8 自带音轨，不要强拉独立音轨或 --drop-audio。
- */
+/** CMAF video is independent of its audio even when the audio catalogue is missing. */
 export function youkuUsesSeparateAudio(data: Record<string, unknown>, quality = ''): boolean {
-  const delivery = asString(data.audio_delivery).toLowerCase()
-  const st = youkuVideoSelection(data, quality).streamType.toLowerCase()
-  const hq = st.startsWith('cmfv')
-  if (delivery === 'muxed' && !hq) return false
-  if (!hq) return false
-  if (delivery === 'separate') return true
-  const tracks = Array.isArray(data.audio_tracks) ? data.audio_tracks : []
-  return tracks.some((tr) => isObj(tr) && !!asString(tr.playlist_url))
+  return youkuVideoSelection(data, quality).streamType.toLowerCase().startsWith('cmfv')
 }
 
 const YOUKU_LANG_KEYS = new Set(['en', 'zh', 'yue'])

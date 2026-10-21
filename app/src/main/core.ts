@@ -25,7 +25,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { basename, dirname, join, resolve } from 'node:path'
 import QRCode from 'qrcode'
 import { DRM_MAX_BYTES, GwClient, ReloginRequired, GW_DEFAULT_ACCOUNT, type DRMStatus, type DRMSystem, type KeyInfo } from '@tui/client.ts'
+import type { PlatformMetaResponse } from '@tui/drm-types.ts'
 import { selectAudioTracks } from '@tui/audio-selection.ts'
+import { YoukuPlaybackError } from '@tui/youku-playback.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from '@tui/vault-migrate.ts'
 import { fallbackSections } from '@tui/discovery.ts'
@@ -69,7 +71,7 @@ import {
   type YkAccount,
   type YkLogin,
 } from '@tui/youku-session.ts'
-import type { Audio, Episode, Quality, VipProbe } from '../../../src/types.ts'
+import type { Audio, Episode, Quality, Subtitle, VipProbe } from '../../../src/types.ts'
 import {
   PROVIDERS,
   type AccountView,
@@ -200,7 +202,7 @@ function toEpisodeView(e: Episode): EpisodeView {
     group: e.group ?? '',
     collection: e.collection,
     duration: e.duration ?? 0,
-    languages: e.languages ?? [],
+    languages: e.languages ?? [], ...(e.edition !== undefined ? { edition: e.edition } : {}),
   }
 }
 
@@ -316,6 +318,7 @@ export class Core {
   private ykLogin: YkLogin | null = null
   private ykAcct: YkAccount | null = null
   private ykSignMissing = false
+  private ykAccountRevision = 0
   /** 瘦客户端：抖音 Cookie 托管在网关号池（启动探测结果）。 */
   private douyinReady = false
   private ykEnsure: Promise<void> | null = null
@@ -325,7 +328,7 @@ export class Core {
   private readonly jobs = new Map<number, JobRecord>()
   private readonly hub: JobHub
   private probeToken = 0
-  private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[] }>()
+  private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[] }>()
   private readonly publicationPreferenceStore = new PublicationPreferenceStore()
   private readonly seededPreferenceBindings = new Set<string>()
   private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | { kind: 'bilibili' } | null = null
@@ -614,6 +617,7 @@ export class Core {
     if (this.has('friday')) void this.providerSession({ provider: 'friday', op: 'status' }).catch(() => {})
     if (this.has('linetv')) void this.providerSession({ provider: 'linetv', op: 'status' }).catch(() => {})
     if (this.has('appletvplus')) void this.providerSession({ provider: 'appletvplus', op: 'status' }).catch(() => {})
+    if (this.has('dsnp')) void this.providerSession({ provider: 'dsnp', op: 'status' }).catch(() => {})
     for (const p of ['mgtv','bilibili','migu'] as const) if (this.has(p)) void this.providerSession({provider:p,op:'status'}).catch(()=>{})
     if (this.has('migu')) void this.providerSession({provider:'migu',op:'status',terminal:'tv'}).catch(()=>{})
   }
@@ -699,6 +703,19 @@ export class Core {
   setGatewayActive(provider: string, account: string): void {
     if (this.gwActive[provider] === account) return
     this.gwActive[provider] = account
+    if (provider === 'youku') {
+      this.ykAccountRevision++
+      this.ykLogin = null
+      this.ykAcct = null
+      this.ykSignMissing = false
+      this.vipProbe = null
+      this.emit.state()
+      // An older account query may finish later; wait for its scope guard and
+      // then fetch this account rather than displaying the previous product list.
+      if (this.ykEnsure) void this.ykEnsure.finally(() => this.queueEnsureYouku())
+      else this.queueEnsureYouku()
+      return
+    }
     if (this.gwMulti.has(provider) && this.has(provider)) {
       this.providerAccounts.delete(provider)
       void this.providerSession({ provider: provider as SessionCommand['provider'], op: 'status' } as SessionCommand).catch(() => {})
@@ -772,12 +789,12 @@ export class Core {
       tmdbKey: c.tmdbKey,
       tmdbLang: c.tmdbLang,
       threads: c.threads,
-      tencentObservations: !!c.tencentObservations,
       hamiClient: c.hamiClient || 'tv',
       tencentCookie: c.tencentCookie,
       douyinCookie: c.douyinCookie ?? '',
       iqCookie: c.iqCookie ?? '',
       iqProfile: c.iqProfile ?? '',
+      iqCdn: c.iqCdn ?? 'auto',
       hongguoNfo: c.hongguoNfo,
       huangguoNfo: c.huangguoNfo,
       hongguoFmt: c.hongguoFmt,
@@ -803,12 +820,13 @@ export class Core {
         if (this.ykSignMissing || this.ykAcct?.needsScan)
           return { provider: p, short: '需扫码', summary: '登录态失效 · 需要重新扫码', tone: 'warn' }
         if (!this.ykAcct) return { provider: p, short: '检查中', summary: '正在检查登录态…', tone: 'muted' }
-        const vip = this.ykAcct.isVip || (this.vipProbe?.isVip ?? false)
+        if (this.vipProbe?.hasTrial) return { provider:p, short:'仅试看', summary:accountSummary(this.ykAcct, this.vipProbe), tone:'warn' }
+        const vip = this.ykAcct.membership?.status === 'active'
         return {
           provider: p,
-          short: vip ? '会员' : '已登录',
+          short: this.ykAcct.loginUnknown ? '待检查' : this.ykAcct.membership?.status === 'expired' ? '会员已过期' : vip ? '有有效权益' : '已登录',
           summary: accountSummary(this.ykAcct, this.vipProbe ?? undefined),
-          tone: 'ok',
+          tone: this.ykAcct.loginUnknown || this.ykAcct.membership?.status === 'expired' ? 'warn' : 'ok',
         }
       }
       if (p === 'tencent') {
@@ -832,6 +850,10 @@ export class Core {
       if (p === 'iqcn') {
         const account = this.providerAccounts.get(p)
         return { provider:p, short:account?.authenticated?'已登录':'待登录', summary:account?.summary || '到平台账号设置扫码登录爱奇艺国内版', tone:account?.authenticated?'ok':'muted' }
+      }
+      if (p === 'dsnp') {
+        const account = this.providerAccounts.get(p)
+        return { provider: p, short: account?.authenticated ? '已登录' : '待登录', summary: account?.summary || '邮箱密码、邮箱验证码或导入 refresh token；下载需本人 Widevine .wvd', tone: account?.authenticated ? 'ok' : 'muted' }
       }
       if (isManifestProvider(p)) {
         const account = this.providerAccounts.get(p + (p === 'hamivideo' ? ':' + (this.cfg.hamiClient || 'tv') : ''))
@@ -890,8 +912,11 @@ export class Core {
     if (patch.tmdbKey !== undefined) c.tmdbKey = patch.tmdbKey.trim()
     if (patch.tmdbLang !== undefined) c.tmdbLang = patch.tmdbLang.trim() || 'zh-CN'
     if (patch.threads !== undefined) c.threads = clampThreads(patch.threads)
-    if (patch.tencentObservations !== undefined) c.tencentObservations = patch.tencentObservations === true
     if (patch.hamiClient !== undefined) { if (!['tv','web'].includes(patch.hamiClient)) throw new Error('无效 Hami 会话类型'); c.hamiClient = patch.hamiClient }
+    if (patch.iqCdn !== undefined) {
+      if (!['auto','akamai','bscloud','zenlayer'].includes(patch.iqCdn)) throw new Error('无效 IQ CDN 选项')
+      c.iqCdn = patch.iqCdn
+    }
     if (patch.iqProfile !== undefined) c.iqProfile = patch.iqProfile.trim()
     // 瘦客户端：Cookie 粘贴即推给网关托管，tui.json 不再保存副本。
     const pushCred = async (kind: 'tencent' | 'douyin' | 'iq', value: string): Promise<void> => {
@@ -899,7 +924,7 @@ export class Core {
       if (!this.cli) throw new Error('网关未连接，凭证未保存')
       const client = this.cli
       try {
-        await pushLocalCredential(client, kind, v)
+        await pushLocalCredential(client, kind, v, kind === 'iq' ? patch.iqCookieSource : undefined)
         if (client !== this.cli || c !== this.cfg) throw new Error('网关连接已切换，请在当前连接重新导入凭证')
         if (kind === 'douyin') this.douyinReady = true
         runLog(`vault push ${kind} ok`)
@@ -934,28 +959,38 @@ export class Core {
   }
 
   private async ensureYouku(): Promise<void> {
-    const cli = this.client()
-    const sign = this.cfg.youkuSign
-    try {
-      this.ykLogin = await ykLoginInfo(cli, sign)
-    } catch {
-      /* cred info 失败不影响后面 */
-    }
-    this.ykSignMissing = !this.ykLogin?.ok && SIGN_DEAD_RE.test(this.ykLogin?.hint ?? '')
-    if (shouldRefreshYouku(this.ykLogin) && !this.ykSignMissing) {
+    const owner = this.client()
+    const account = this.gatewayAccountFor('youku') || GW_DEFAULT_ACCOUNT
+    const revision = this.ykAccountRevision
+    const cli = owner.fixedAccount('youku', account)
+    const sign = account === GW_DEFAULT_ACCOUNT ? this.cfg.youkuSign : ''
+    const current = () => owner === this.cli && revision === this.ykAccountRevision
+    const login = await ykLoginInfo(cli, sign)
+    if (!current()) return
+    this.ykLogin = login
+    this.ykSignMissing = login.needsRelogin === true || !login.ok && SIGN_DEAD_RE.test(login.hint)
+    if (shouldRefreshYouku(login) && !this.ykSignMissing) {
       try {
         const res = await ykRefresh(cli, sign)
-        if (res.refreshed) this.ykLogin = await ykLoginInfo(cli, sign)
+        if (!current()) return
+        if (res.needsRelogin) {
+          this.ykSignMissing = true
+          this.ykLogin = { ...login, ok: false, needsRelogin: true, hint: '优酷登录已失效，请重新扫码' }
+          this.emit.toast('优酷登录已失效，请到账号设置重新扫码登录。', 'warn')
+        } else if (res.refreshed) {
+          const refreshed = await ykLoginInfo(cli, sign)
+          if (!current()) return
+          this.ykLogin = refreshed
+        }
       } catch (e) {
+        if (!current()) return
         runLog(`yk refresh failed ${errText(e)}`)
       }
     }
-    try {
-      this.ykAcct = await ykAccount(cli, sign)
-      if (this.ykSignMissing) this.ykAcct.needsScan = true
-    } catch (e) {
-      runLog(`yk account failed ${errText(e)}`)
-    }
+    const accountInfo = await ykAccount(cli, sign)
+    if (!current()) return
+    this.ykAcct = accountInfo
+    if (this.ykSignMissing) this.ykAcct.needsScan = true
     this.emit.state()
   }
 
@@ -1131,6 +1166,7 @@ export class Core {
   }
 
   async catalog(provider: Provider, country = ''): Promise<Section[]> {
+    if (provider === 'dsnp') return this.dsnpCatalog()
     if (!supportsBrowse(provider)) return [{ id: 'hami-link', title: '粘贴 Hami 产品链接', mode: 'link', available: false, reason: '当前网关仅支持产品链接/ID，尚无搜索或榜单接口' }]
     let sections: Array<Record<string, unknown>>
     let catalogCountry = ''
@@ -1154,8 +1190,38 @@ export class Core {
     }))
   }
 
+  /** Disney+ 浏览：网关 recommend 的货架即栏目（setId + 原样透传的 params），排行榜单独一栏。 */
+  private async dsnpCatalog(): Promise<Section[]> {
+    const data = await this.invoke('dsnp', 'recommend', { containers: 0, limit: 1 })
+    const shelves = Array.isArray(data.shelves) ? data.shelves.filter(isObj) : []
+    const out: Section[] = [{ id: 'dsnp-rank', title: '排行榜', mode: 'rank', available: true }]
+    for (const s of shelves) {
+      const setId = str(s.setId), title = str(s.title)
+      if (!setId || !title || title === 'hero') continue
+      const params = isObj(s.params) ? Object.fromEntries(Object.entries(s.params).filter(([, v]) => typeof v === 'string')) : {}
+      out.push({ id: 'dsnp-set:' + JSON.stringify({ setId, params }), title, mode: 'set', available: true })
+    }
+    return out
+  }
+
+  private async dsnpBrowse(section: Section): Promise<BrowseResult> {
+    if (section.id === 'dsnp-rank') {
+      const data = await this.invoke('dsnp', 'rank', { limit: 30 })
+      const charts = Array.isArray(data.charts) ? data.charts.filter(isObj) : []
+      const chart = charts.find(c => Array.isArray(c.items) && c.items.length)
+      const items = chart && Array.isArray(chart.items) ? chart.items.filter(isObj) : []
+      return { cards: toCards('dsnp', { items, contentType: 'rank' }), channels: [], more: false, next: '', notice: '' }
+    }
+    let ref: { setId?: string; params?: Record<string, string> } = {}
+    try { ref = JSON.parse(section.id.slice('dsnp-set:'.length)) } catch {}
+    if (!ref.setId) return { cards: [], channels: [], more: false, next: '', notice: '此栏目暂不可用' }
+    const data = await this.invoke('dsnp', 'set', { ...(ref.params ?? {}), setId: ref.setId, limit: 60 })
+    return { cards: toCards('dsnp', data), channels: [], more: false, next: '', notice: '' }
+  }
+
   async browse(provider: Provider, section: Section, cursor = ''): Promise<BrowseResult> {
     if (!section.available) return { cards: [], channels: [], more: false, next: '', notice: section.reason || '此栏目暂不可用' }
+    if (provider === 'dsnp') return this.dsnpBrowse(section)
     const input: Record<string, unknown> = { mode: section.mode }
     if (provider === 'appletvplus' && section.country) input.country = section.country
     if (provider === 'migu' && section.sourceTerminal) input.terminal = section.sourceTerminal
@@ -1237,7 +1303,7 @@ export class Core {
     if (link.kind === 'mgtv' || link.kind === 'bilibili' || link.kind === 'migu') return this.detail(link.kind,link.url,hint)
     if (link.kind === 'iqcn') return this.detail('iqcn', link.url, hint)
     if (link.kind === 'iq') return this.detail('iq', link.url, hint)
-    if (link.kind === 'mewatch' || link.kind === 'hamivideo' || link.kind === 'friday' || link.kind === 'linetv' || link.kind === 'appletvplus') return this.detail(link.kind, link.url, hint)
+    if (link.kind === 'mewatch' || link.kind === 'hamivideo' || link.kind === 'friday' || link.kind === 'linetv' || link.kind === 'appletvplus' || link.kind === 'dsnp') return this.detail(link.kind, link.url, hint)
     if (link.kind === 'youku') {
       let data: Record<string, unknown> = {}
       try {
@@ -1325,6 +1391,7 @@ export class Core {
       }
     const run = (skipSign: boolean) =>
       probeOptions(this.client(), this.cfg, provider, first.vid, {
+        title: first.title,
         tencentPlayParams: first.tencentPlayParams,
         skipSign: skipSign || undefined,
         languages: languages.length ? languages : undefined,
@@ -1334,13 +1401,18 @@ export class Core {
     try {
       opts = await run(false)
     } catch (e) {
-      if (!(e instanceof ReloginRequired) || !this.cfg.youkuSign) throw e
-      // 与 TUI 一致：先让网关续期，再退回网关侧会话，都不改本机配置。
-      if (await this.renewSilently()) opts = await run(false)
-      else {
-        opts = await run(true)
-        warning = '本机优酷登录态不可用，这次用了网关侧会话；建议到设置里重新扫码'
+      if (provider === 'youku' && (e instanceof ReloginRequired || e instanceof YoukuPlaybackError)) {
+        if (e instanceof ReloginRequired || e.errorCode === 'RELOGIN_REQUIRED') {
+          this.ykSignMissing = true
+          if (this.ykAcct) this.ykAcct = { ...this.ykAcct, loggedIn: false, needsScan: true }
+          if (this.ykLogin) this.ykLogin = { ...this.ykLogin, ok: false }
+        } else {
+          this.vipProbe = { canPlay: true, isVip: false, hasTrial: true, download: '', note: e.message }
+        }
+        this.emit.state()
+        this.emit.toast(e instanceof ReloginRequired ? '优酷登录已失效，请到账号设置重新扫码。' : e.message, 'warn')
       }
+      throw e
     }
     if (!opts.qualities.length) throw new Error('没有可用画质')
     if (provider === 'youku') {
@@ -1350,9 +1422,9 @@ export class Core {
       for (const q of opts.qualities) if (q.audios?.length) q.audios = dedupeAudios(q.audios, vidLang)
     }
     if (opts.vip?.canPlay === false) throw new Error(opts.vip.note || '当前账号不能播放这部片')
-    this.vipProbe = opts.vip ?? this.vipProbe
+    if (provider === 'youku') this.vipProbe = opts.vip ?? this.vipProbe
     const token = ++this.probeToken
-    this.probes.set(token, { provider, qualities: opts.qualities, audios: opts.audios })
+    this.probes.set(token, { provider, qualities: opts.qualities, audios: opts.audios, subtitles: opts.subtitles })
     if (this.probes.size > 20) this.probes.delete(Math.min(...this.probes.keys()))
     const qualities: QualityView[] = opts.qualities.map((q, index) => ({
       index,
@@ -1374,6 +1446,7 @@ export class Core {
       token,
       qualities,
       audios: opts.audios.map(audioView),
+      ...(opts.subtitles?.length ? { subtitles: opts.subtitles.map((s) => ({ ...s })) } : {}),
       vip: opts.vip ? { canPlay: opts.vip.canPlay, isVip: opts.vip.isVip, hasTrial: opts.vip.hasTrial, note: opts.vip.note } : null,
       warning,
     }
@@ -1515,7 +1588,7 @@ export class Core {
         year: req.detail.year,
         plot: req.detail.desc ?? '',
         kind: movie ? 'movie' : 'show',
-        edition: movie ? movieEdition(ep.title, req.detail.title) : '',
+        edition: movie ? ep.edition ?? movieEdition(ep.title, req.detail.title) : '',
         languages: ep.languages.filter((l) => l.vid).map((l) => ({ vid: l.vid, lang: l.lang })),
       }
       if (q.height > 0)
@@ -1525,6 +1598,11 @@ export class Core {
             ? tierHeight(q.height, q.width)
             : tierHeight(q.width, q.height))
       t.audioTracks = t.provider === 'youku' ? bindYoukuAudioTracksToTask(tracks, t) : tracks.map((a) => ({ ...a }))
+      if (probe.subtitles?.length) {
+        const want = new Set(req.subtitleIds ?? probe.subtitles.filter((s) => s.selected).map((s) => s.id))
+        // Playlist order (what RE muxes) is kept so flags can be matched by position.
+        t.subtitleTracks = probe.subtitles.filter((s) => want.has(s.id)).map(({ id, label, lang, forced, sdh, isDefault }) => ({ id, label, lang, forced, sdh, isDefault }))
+      }
       if (req.tmdb) {
         t.tmdbId = req.tmdb.id
         t.year = req.tmdb.year || t.year
@@ -1624,6 +1702,16 @@ export class Core {
     if (!rec) return
     const v = rec.view
     const before = v.state
+    if (v.provider === 'youku' && e.requiresReauth) {
+      // Do not mark a different account after the user switches during a download.
+      if ((rec.account || GW_DEFAULT_ACCOUNT) === (this.gatewayAccountFor('youku') || GW_DEFAULT_ACCOUNT)) {
+        this.ykSignMissing = true
+        if (this.ykAcct) this.ykAcct = { ...this.ykAcct, loggedIn: false, needsScan: true }
+        if (this.ykLogin) this.ykLogin = { ...this.ykLogin, ok: false }
+      }
+      this.emit.toast('优酷登录已失效，下载已停止；请到账号设置重新扫码。', 'warn')
+      this.emit.state()
+    }
     // 暂停/取消的收尾事件只带状态，不要把进度和日志清掉。
     if (!e.done) {
       v.actualVersion = undefined
@@ -1942,6 +2030,10 @@ export class Core {
   /** 设备文件：只在用户打开「设置 → 设备文件」时查询，下载前不预检，由网关返回错误。 */
   async drmStatus(): Promise<DRMStatus> {
     return this.client().drmStatus()
+  }
+
+  async platformMeta(): Promise<PlatformMetaResponse | null> {
+    return this.client().platformMeta()
   }
 
   async uploadDRM(system: DRMSystem, filePath: string): Promise<DRMStatus> {

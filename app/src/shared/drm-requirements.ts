@@ -3,10 +3,11 @@
  * required. Mirrors the gateway: dataplane drmWidevineProviders /
  * drmPlayReadyProviders, appletvplus widevineLevelFor (>1080p, HDR, DV need L1)
  * and dsnp requestTier (default tier is L1; an L3 file fails with 412
- * DRM_CLIENT_DEVICE_LEVEL, never a silent downgrade). The gateway exposes no
- * per-platform level metadata yet, so keep this table in sync with it.
+ * DRM_CLIENT_DEVICE_LEVEL, never a silent downgrade). The table comes from the
+ * gateway (GET /v1/drm/devices requirements); there is no client copy.
  */
 import type { DRMGatewayRequirement, DRMLevelRule } from '../../../src/lib/drm-types'
+import { PROVIDER_LABELS } from '../../../src/lib/providers'
 
 export type DRMRequirement = {
   provider: string
@@ -18,13 +19,11 @@ export type DRMRequirement = {
   note?: string
 }
 
-export const DRM_REQUIREMENTS: DRMRequirement[] = [
-  { provider: 'appletvplus', name: 'Apple TV', widevine: true, playready: true, l1: '4K / HDR / 杜比视界', note: '同时上传时优先使用 .prd' },
-  { provider: 'dsnp', name: 'Disney+', widevine: true, playready: false, l1: '默认画质（含 4K / HDR）' },
-  { provider: 'friday', name: 'friDay影音', widevine: true, playready: false },
-  { provider: 'hamivideo', name: 'HamiVideo', widevine: true, playready: false },
-  { provider: 'linetv', name: 'LINE TV', widevine: true, playready: false },
-]
+/**
+ * No client-side copy of the table: the gateway is the source of truth. An old
+ * gateway without `requirements` leaves this empty and the UI asks to update it.
+ */
+export const DRM_REQUIREMENTS: DRMRequirement[] = []
 
 let active: DRMRequirement[] = DRM_REQUIREMENTS
 /** Install the table a gateway returned (null keeps the fallback). */
@@ -54,7 +53,7 @@ export function fromGateway(list: DRMGatewayRequirement[] | undefined): DRMRequi
   const out: DRMRequirement[] = []
   for (const r of list) {
     if (!r || typeof r.provider !== 'string' || !Array.isArray(r.systems)) continue
-    const known = DRM_REQUIREMENTS.find((d) => d.provider === r.provider)
+    const known = { name: PROVIDER_LABELS[r.provider] }
     const l1 = r.widevineL1 ? (r.widevineL1.summary || describeRule(r.widevineL1)) : undefined
     const sl = r.playReadyMin ? `PlayReady SL${r.playReadyMin}${r.playReadyRule?.summary ? `（${r.playReadyRule.summary}）` : ''}` : undefined
     out.push({

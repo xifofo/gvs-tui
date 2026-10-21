@@ -11,6 +11,8 @@ const cookie = ref(''), phone = ref(''), code = ref(''), profile = ref(''), pin 
 const iqUsername = ref(''), iqPassword = ref(''), iqAreaCode = ref('')
 const iqStatusError = ref('')
 const appleVerifyID = ref('')
+const dsnpEmail = ref(''), dsnpPassword = ref(''), dsnpSeat = ref('')
+const dsnpSeats = computed(() => [{ value: '', label: '选择席位', disabled: true }, ...(views.dsnp?.profiles ?? []).map((p: { id: string; name?: string }, i: number) => ({ value: String(i + 1), label: p.name || p.id }))])
 const appleCountry = ref('hk')
 const APPLE_COUNTRIES = [['hk', '香港'], ['tw', '台湾'], ['jp', '日本'], ['us', '美国'], ['gb', '英国'], ['au', '澳大利亚'], ['ca', '加拿大']].map(([value, label]) => ({ value, label }))
 const HAMI_MODES = [{ value: 'tv' as const, label: 'TV' }, { value: 'web' as const, label: 'Web' }]
@@ -34,7 +36,7 @@ async function command(c: SessionCommand) {
     if (current === revision) {
       busy.value = false
       // Read-only status queries must not erase inputs the user is preparing.
-      if (!['status', 'web_status'].includes(c.op)) { cookie.value = ''; code.value = ''; pin.value = ''; iqPassword.value = ''; if (c.op === 'web_send_code') phone.value = '' }
+      if (!['status', 'web_status'].includes(c.op)) { cookie.value = ''; code.value = ''; pin.value = ''; iqPassword.value = ''; dsnpPassword.value = ''; if (c.op === 'web_send_code') phone.value = '' }
     }
   }
 }
@@ -60,6 +62,7 @@ watch(accountScope, () => {
   for (const key of Object.keys(views)) delete views[key]
   cookie.value = ''; phone.value = ''; code.value = ''; pin.value = ''
   iqUsername.value = ''; iqPassword.value = ''; iqAreaCode.value = ''
+  dsnpEmail.value = ''; dsnpPassword.value = ''; dsnpSeat.value = ''
 })
 watch(() => store.state?.configured && !store.state.connecting && allowed('iq') && (!store.state.tunnel.enabled || store.state.tunnel.ok) ? accountScope.value : '', scope => {
   if (scope) void checkIQStatus()
@@ -68,7 +71,19 @@ onBeforeUnmount(() => { revision++ })
 </script>
 
 <template>
+  <div v-if="allowed('dsnp')" class="provider-account">
+    <h3>Disney+ · 账号登录</h3>
+    <p>邮箱 + 密码，或邮箱验证码；也可导入本人 refresh token。密码只提交给网关换取令牌，网关不落盘密码，本机不保存。</p>
+    <div class="controls"><input v-model="dsnpEmail" class="input grow" autocomplete="off" aria-label="Disney+ 邮箱" placeholder="Disney+ 邮箱" /></div>
+    <div class="controls"><input v-model="dsnpPassword" class="input grow" type="password" autocomplete="new-password" aria-label="Disney+ 密码，仅本次提交" placeholder="密码（仅本次提交）" /><button class="btn sm" :disabled="busy || !dsnpEmail.trim() || !dsnpPassword" @click="command({provider:'dsnp',op:'password',email:dsnpEmail.trim(),password:dsnpPassword})">密码登录</button></div>
+    <div class="controls"><button class="btn sm" :disabled="busy || !dsnpEmail.trim()" @click="command({provider:'dsnp',op:'otp_request',email:dsnpEmail.trim()})">发送邮箱验证码</button><input v-model="code" class="input" inputmode="numeric" autocomplete="one-time-code" aria-label="邮箱验证码" placeholder="验证码" /><button class="btn sm" :disabled="busy || !dsnpEmail.trim() || !code.trim()" @click="command({provider:'dsnp',op:'otp_verify',email:dsnpEmail.trim(),code:code.trim()})">验证码登录</button></div>
+    <textarea v-model="cookie" class="input" aria-label="本人 Disney+ refresh token 或 Cookie，仅本次提交" autocomplete="off" spellcheck="false" placeholder="或粘贴本人 refresh token / Cookie" />
+    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'dsnp',op:'import',cookie})">导入令牌</button><button class="btn sm" :disabled="busy" @click="command({provider:'dsnp',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'dsnp',op:'logout'})">退出</button></div>
+    <div v-if="views.dsnp?.profiles?.length" class="controls"><label class="grow"><span>家庭席位</span><UiSelect v-model="dsnpSeat" :options="dsnpSeats" aria-label="Disney+ 家庭席位" /></label><input v-model="pin" class="input" type="password" inputmode="numeric" autocomplete="off" aria-label="席位 PIN（如需要）" placeholder="PIN（如需要）" /><button class="btn sm" :disabled="busy || !dsnpSeat" @click="command({provider:'dsnp',op:'seat',id:dsnpSeat,pin})">切换席位</button></div>
+    <p v-if="views.dsnp" aria-live="polite">{{ views.dsnp.summary }}</p>
+  </div>
   <div v-if="allowed('appletvplus')" class="provider-account">
+
     <h3>Apple TV · 账号登录</h3>
     <p>粘贴官网的媒体令牌或完整 Cookie，选择你的 Apple 账号地区。</p>
     <div class="controls"><label class="grow"><span>账号地区</span><UiSelect v-model="appleCountry" :options="APPLE_COUNTRIES" aria-label="Apple 账号地区" /></label><a class="btn sm" :href="`https://tv.apple.com/${appleCountry}`" target="_blank" rel="noopener noreferrer">打开 Apple TV 官网</a></div>

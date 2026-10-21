@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { PROVIDER_IDS } from '../../../src/lib/providers'
-import { accountBucket, moveProvider, needsAttention, orderProviders, PROVIDER_META, providerMeta, visibleProviders } from './provider-registry'
+import { accountBucket, moveProvider, needsAttention, optionalLast, orderProviders, PROVIDER_META, providerMeta, visibleProviders } from './provider-registry'
 
 // provider registry
 test('every known provider declares at least one login method', () => {
@@ -15,6 +15,21 @@ test('every known provider declares at least one login method', () => {
 test('iq carries the overseas node hint; unknown ids get a safe default', () => {
     expect(providerMeta('iq').region?.includes('海外')).toBe(true)
     expect(providerMeta('nope').methods).toEqual(['none'])
+  })
+
+// 爱奇艺国内版扫码已覆盖 iQ 内容的国内车道，所以 IQ 海外版登录是可选，iqcn 仍是必需。
+test('iqcn is required and iq is an optional login', () => {
+    expect(providerMeta('iqcn').loginOptional).toBe(false)
+    expect(providerMeta('iqcn').optional).toBeFalsy()
+    expect(providerMeta('iq').optional).toBe(true)
+    expect(providerMeta('iq').loginOptional).toBe(true)
+    expect(providerMeta('iq').benefit).toContain('可选')
+    expect(providerMeta('iqcn').benefit).toContain('国内车道')
+  })
+
+test('optionalLogins sort after required ones and keep the user order inside a group', () => {
+    expect(optionalLast(['youku', 'iq', 'tencent', 'iqcn'])).toEqual(['youku', 'tencent', 'iqcn', 'iq'])
+    expect(optionalLast(['iq', 'youku'])).toEqual(['youku', 'iq'])
   })
 
 test('orderProviders applies saved order, ignores unknown ids, appends new ones', () => {

@@ -24,3 +24,22 @@ test('true keyword lists still search and channel cards stay channels', () => {
   expect(cardTarget('tencent', { id: '7', title: '关键词', target: { type: 'search' } }).type).toBe('search')
   expect(cardTarget('tencent', { cid: 'mzc00200gag6dkh', target: { type: 'channel', sectionId: 'tv:page:movie' } }).type).toBe('channel')
 })
+
+for (const key of ['id','meta','target'] as const) {
+  test(`Tencent legacy title-search target retains a valid cover identity in ${key}`, () => {
+    const cid='mzc00200gag6dkh'
+    const raw={title:'嫁金钗',target:{type:'search',query:'嫁金钗'},
+      ...(key==='id'?{id:cid}:key==='meta'?{meta:{id:cid}}:{target:{type:'search',id:cid,query:'嫁金钗'}})}
+    expect(cardTarget('tencent',raw)).toEqual({type:'detail',id:cid})
+  })
+}
+
+test('Tencent media URL stored in target or metadata opens its exact detail', () => {
+  expect(cardTarget('tencent',{title:'嫁金钗',target:{type:'search',id:'https://v.qq.com/x/cover/mzc00200gag6dkh.html'}})).toEqual({type:'detail',id:'mzc00200gag6dkh'})
+  expect(cardTarget('tencent',{title:'嫁金钗',meta:{id:'https://v.qq.com/x/page/g4102f0fkum.html'},target:{type:'search'}})).toEqual({type:'video',id:'g4102f0fkum'})
+})
+
+test('unavailable and numeric keyword targets are not converted into a Tencent show', () => {
+  expect(cardTarget('tencent',{id:'mzc00200gag6dkh',target:{type:'unavailable',reason:'预约'}}).type).toBe('unavailable')
+  expect(cardTarget('tencent',{id:'123',title:'嫁金钗',target:{type:'search'}}).type).toBe('search')
+})

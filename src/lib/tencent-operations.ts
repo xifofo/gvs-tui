@@ -1,10 +1,12 @@
+import { tencentProfileStoppedBinding } from './tencent-profile-binding.ts'
 import { randomUUID } from 'node:crypto'
+import { TencentNativeEventStop } from './tencent-native-events.ts'
 import { errorCode } from './user-message.ts'
-import { tencentRisk } from './tencent-risk.ts'
+import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
 import { writeTencentDiagnostic } from './tencent-diagnostics.ts'
 
 export type ReportCall = (input: Record<string, unknown>) => Promise<Record<string, unknown>>
-type Root = { flow: string; pending?: Promise<string>; binding?: string; rejected?: boolean; observationSources?: string[] }
+type Root = { reportingStopped?: boolean; flow: string; pending?: Promise<string>; binding?: string; rejected?: boolean; observationSources?: string[] }
 export type TencentOperation = {
   root: Root; id: string; action: string; vid?: string; cid?: string
   started: number; cpu: NodeJS.CpuUsage
@@ -31,11 +33,11 @@ export class TencentOperations {
   /** `false` after this gateway rejects `tencent/report`; later calls stay local. */
   private reportSupported?: boolean
 
-  constructor(private readonly call: ReportCall, private readonly log: (s: string) => void, private readonly jobID = '', root?: Root, private readonly scope = '', private readonly source: 'tui_process' | 'electron_process' = 'tui_process') { this.root = root }
+  constructor(private readonly call: ReportCall, private readonly log: (s: string) => void, private readonly jobID = '', root?: Root, private readonly scope = '', private readonly source: 'tui_process' | 'electron_process' = 'tui_process', private readonly native?: (binding: string, call: ReportCall) => Promise<void>) { this.root = root }
 
   fork(jobID: string, vid?: string, call: ReportCall = this.call): TencentOperations {
     const root = (vid && this.byContent.get(vid)) || this.root || { flow: randomUUID() }
-    return new TencentOperations(call, this.log, jobID, root, this.scope, this.source)
+    return new TencentOperations(call, this.log, jobID, root, this.scope, this.source, this.native)
   }
 
   async begin(action: string, input: Record<string, unknown>): Promise<TencentOperation | undefined> {
@@ -51,18 +53,91 @@ export class TencentOperations {
       root.observationSources = Array.isArray(data.observation_sources)
         ? data.observation_sources.filter((value): value is string => typeof value === 'string')
         : ['tui_process']
+      this.profileDiagnostics(root, data.adprofile)
+      if (tencentProfileStoppedBinding(data)) {
+        // Registration owns its no-resend ledger. It cannot deny a catalogue,
+        // detail or playback request that has not even reached Tencent yet.
+        root.reportingStopped = true
+        root.observationSources = []
+        return root.binding
+      }
+      const bindingRisk = tencentRisk(data)
+      if (bindingRisk.stop) { root.rejected = true; throw new TencentRiskStop(bindingRisk) }
       return root.binding
     }).catch(error => {
-      if (!reportUnsupported(error)) throw error
-      this.reportSupported = false
+      // An optional reporting outage must not become a setup requirement.
+      // Account/binding/risk rejections still stop the operation.
+      const httpStatus = error && typeof error === 'object' ? Number((error as Record<string, unknown>).httpStatus) : 0
+      if (tencentRisk(undefined, error).stop || httpStatus === 401) { root.rejected = true; throw error }
+      const unsupported = reportUnsupported(error)
+      if (unsupported) this.reportSupported = false
       root.observationSources = []
-      this.log(`tencent_event action=bind phase=bind flow=${root.flow} status=local_only_gateway_action_unsupported`)
+      const status = unsupported ? 'local_only_gateway_action_unsupported' : 'local_only_reporting_unavailable'
+      this.log(`tencent_event action=bind phase=bind flow=${root.flow} status=${status}`)
+      writeTencentDiagnostic(this.scope, { flow: root.flow, operation: '', job: this.jobID, action, phase: 'binding', status, decision: 'local_observation' })
       return ''
     })
     if (root.pending) await root.pending
     const op: TencentOperation = { root, id: randomUUID(), action, vid: id(input.vid), cid: id(input.cid), started: performance.now(), cpu: process.cpuUsage() }
     await this.record(op, 'start')
     return op
+  }
+
+  /** The gateway generates profiles while binding. Keep only typed status;
+   * never copy profile values, protobuf, credentials or ciphertext to logs. */
+  private profileDiagnostics(root: Root, value: unknown): void {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    const profile = value as Record<string, unknown>
+    const status = profile.generated === true
+      ? profile.complete === true ? 'profile_generated' : 'profile_generated_incomplete'
+      : profile.status === 'observed_profile_retained' ? 'profile_observed_retained' : 'profile_generation_unavailable'
+    writeTencentDiagnostic(this.scope, { flow: root.flow, operation: '', job: this.jobID, action: 'adprofile', phase: 'generation', status, decision: 'local_only' })
+    this.log(`tencent_profile action=adprofile flow=${root.flow} status=${status}`)
+    const registration = profile.qimei_registration
+    if (!registration || typeof registration !== 'object' || Array.isArray(registration)) return
+    const draft = registration as Record<string, unknown>
+    // A cached issued identity is distinct from collector acceptance. Typed
+    // status is the only data kept; unknown/new server values stay unverified.
+    const registered = draft.identity_registered === true && draft.status === 'identity_registered' && draft.acceptance_scope === 'qimei_identity_only'
+    const generated = draft.generated === true
+    const complete = generated && draft.complete === true
+    const prepared = complete && draft.payload_generated === true && draft.cipher_generated === true && draft.ready_to_send === true
+    const qimeiStatus = registered ? 'qimei_identity_registered'
+      : prepared ? 'qimei_profile_prepared'
+      : complete ? 'qimei_profile_generated'
+      : generated ? 'qimei_profile_incomplete' : 'qimei_profile_unavailable'
+    writeTencentDiagnostic(this.scope, { flow: root.flow, operation: '', job: this.jobID, action: 'qimei', phase: 'generation', status: qimeiStatus, decision: registered ? 'local_only' : 'not_acceptance_proof' })
+    this.log(`tencent_profile action=qimei flow=${root.flow} status=${qimeiStatus}`)
+    const delivery = profile.registration_delivery
+    if (delivery && typeof delivery === 'object' && !Array.isArray(delivery)) {
+      const result = delivery as Record<string, unknown>
+      if (result.stop === true) {
+        const uncertain = result.delivery_unknown === true
+        const unverified = result.status === 'registration_response_unverified'
+          || result.status === 'blocked' && String(result.service_code) === '0'
+        const response = result.response_diagnostics
+        const diagnostic = response && typeof response === 'object' && !Array.isArray(response)
+          ? response as Record<string, unknown> : undefined
+        const responseStatuses: Record<string, string> = {
+          invalid_envelope_or_payload: 'qimei_response_invalid',
+          decryption_failed: 'qimei_response_decryption_failed',
+          identity_not_issued: 'qimei_identity_not_issued',
+          identity_ambiguous: 'qimei_identity_ambiguous',
+        }
+        const responseStatus = typeof diagnostic?.failure === 'string' ? responseStatuses[diagnostic.failure] : undefined
+        writeTencentDiagnostic(this.scope, {
+          flow: root.flow, operation: '', job: this.jobID, action: 'qimei', phase: 'delivery',
+          status: uncertain ? 'delivery_unknown' : unverified ? 'qimei_registration_unverified' : 'rejected',
+          decision: 'no_automatic_resend',
+          ...(typeof result.http_status === 'number' ? { httpStatus: result.http_status } : {}),
+          ...(String(result.service_code ?? '').match(/^[0-9.]{1,16}$/) ? { code: String(result.service_code) } : {}),
+        })
+        if (unverified && responseStatus) writeTencentDiagnostic(this.scope, {
+          flow: root.flow, operation: '', job: this.jobID, action: 'qimei', phase: 'response',
+          status: responseStatus, decision: 'no_automatic_resend',
+        })
+      }
+    }
   }
 
   boundInput(op: TencentOperation | undefined, input: Record<string, unknown>): Record<string, unknown> {
@@ -132,6 +207,13 @@ export class TencentOperations {
       this.log(`tencent_event action=${op.action} phase=${phase} flow=${op.root.flow} status=observation_error`)
       if (errorCode(error) === 'ACCOUNT_BINDING_INVALID' || error instanceof Error && /report_binding_/.test(error.message)) { op.root.rejected = true; throw error }
       // Logging failures do not change playback; the main request validates its binding.
+    }
+    if (this.native && op.root.binding && !op.root.rejected && !op.root.reportingStopped) {
+      try { await this.native(op.root.binding, this.call) }
+      catch (error) {
+        if (error instanceof TencentNativeEventStop) op.root.rejected = true
+        throw error
+      }
     }
   }
 }

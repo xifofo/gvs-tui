@@ -1,6 +1,7 @@
 param([string]$Runtime, [string]$Output, [switch]$Install)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$version = (Get-Content -LiteralPath (Join-Path $repoRoot 'third_party/N_m3u8DL-RE/gvs-source.json') -Raw | ConvertFrom-Json).version
 if (-not $Runtime) {
   if ($IsMacOS) { $Runtime = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'osx-arm64' } else { 'osx-x64' } }
   elseif ($IsLinux) { $Runtime = 'linux-x64' }
@@ -8,7 +9,7 @@ if (-not $Runtime) {
 }
 if (-not $Output) { $Output = Join-Path $repoRoot ".build/managed-re/$Runtime" }
 $project = Join-Path $repoRoot 'third_party/N_m3u8DL-RE/src/N_m3u8DL-RE/N_m3u8DL-RE.csproj'
-& dotnet publish $project -c Release -r $Runtime --self-contained true -p:PublishAot=false -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=0.6.0-gvs-iq.1 -o $Output --nologo
+& dotnet publish $project -c Release -r $Runtime --self-contained true -p:PublishAot=false -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$version -o $Output --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Managed RE publish failed' }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'third_party/N_m3u8DL-RE/LICENSE') -Destination (Join-Path $Output 'LICENSE.txt') -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot 'third_party/N_m3u8DL-RE/gvs-source.json') -Destination $Output -Force
@@ -29,7 +30,7 @@ if ($Install) {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     foreach ($tool in $manifest.tools) {
       if ($tool.name -eq $name) {
-        $tool.version = '0.6.0-gvs-iq.1'
+        $tool.version = $version
         $tool.bytes = (Get-Item -LiteralPath $binary).Length
         $tool.sha256 = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
       }

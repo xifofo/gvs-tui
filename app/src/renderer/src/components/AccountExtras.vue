@@ -10,6 +10,7 @@ const props = defineProps<{ provider: string }>()
 const s = computed(() => store.state!.settings)
 const saving = ref('')
 const diagnosticsOpen = ref(false)
+const iqCookieSource = ref<'auto' | 'domestic' | 'international'>('auto')
 const form = ref({ tencentCookie: '', douyinCookie: '', iqCookie: '', iqProfile: '' })
 watch(() => [props.provider, s.value.iqProfile] as const, () => {
   form.value = { tencentCookie: '', douyinCookie: '', iqCookie: '', iqProfile: s.value.iqProfile }
@@ -49,7 +50,6 @@ async function renew() {
     <div class="controls">
       <button type="button" class="btn sm" @click="store.qr = 'tencent'"><Icon name="qr" :size="15" />双扫码</button>
       <button type="button" class="btn sm" @click="diagnosticsOpen = true">风控处理日志</button>
-      <button type="button" class="btn sm" title="向支持的网关记录真实进程指标；不代表已向腾讯发送事件" @click="save({ tencentObservations: !s.tencentObservations }, 'tx-observe')">操作观测：{{ s.tencentObservations ? '开' : '关' }}</button>
     </div>
     <details>
       <summary>粘贴网页 Cookie</summary>
@@ -67,9 +67,24 @@ async function renew() {
 
   <div v-else-if="provider === 'iq'" class="blk">
     <details>
-      <summary>直接保存 IQ Cookie 会话 / 高级设备资料</summary>
-      <textarea v-model="form.iqCookie" class="input" spellcheck="false" placeholder="IQ Cookie Header" />
-      <button type="button" class="btn sm" :disabled="!form.iqCookie.trim() || saving === 'iq'" @click="save({ iqCookie: form.iqCookie }, 'iq')">保存会话</button>
+      <summary>IQ / 国内爱奇艺 Cookie 会话</summary>
+      <label for="iq-cookie-source">Cookie 来源</label>
+      <select id="iq-cookie-source" v-model="iqCookieSource" class="input">
+        <option value="auto">自动识别 Netscape 域名；Header 按海外 IQ</option>
+        <option value="domestic">国内爱奇艺（iqiyi.com）</option>
+        <option value="international">海外 IQ（iq.com）</option>
+      </select>
+      <p>国内与海外会话分别保存。国内 Cookie 用于国内 Web/Puma 取流，是否可播放由源站确认。</p>
+      <textarea v-model="form.iqCookie" class="input" spellcheck="false" placeholder="Cookie Header 或 Netscape 格式内容" />
+      <button type="button" class="btn sm" :disabled="!form.iqCookie.trim() || saving === 'iq'" @click="save({ iqCookie: form.iqCookie, iqCookieSource }, 'iq')">保存会话</button>
+      <label for="iq-cdn">视频 CDN 偏好</label>
+      <select id="iq-cdn" class="input" :value="s.iqCdn || 'auto'" :disabled="saving === 'iq-cdn'" @change="save({ iqCdn: ($event.target as HTMLSelectElement).value as SettingsPatch['iqCdn'] }, 'iq-cdn')">
+        <option value="auto">自动测速</option>
+        <option value="akamai">Akamai</option>
+        <option value="bscloud">BSCloud</option>
+        <option value="zenlayer">Zenlayer</option>
+      </select>
+      <p>优先使用所选节点；源站未提供该文件的节点或节点失败时，自动切换可用节点。</p>
       <textarea v-model="form.iqProfile" class="input" spellcheck="false" placeholder="设备资料 JSON：deviceId、ccsn（网关已配置设备证书时可留空）" />
       <button type="button" class="btn sm" :disabled="saving === 'iq-profile'" @click="save({ iqProfile: form.iqProfile }, 'iq-profile')">保存设备资料</button>
     </details>

@@ -1,11 +1,11 @@
 import { appleTVImportCookie } from './appletvplus-auth'
-export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus'
-export type SessionCommand = { provider: SessionProvider; op: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string; country?: string }
+export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus' | 'dsnp'
+export type SessionCommand = { provider: SessionProvider; op: string; email?: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string; country?: string }
 export type ProviderSessionView = { provider: SessionProvider; terminal?: 'mobile' | 'tv' | 'unified'; state: string; authenticated: boolean; summary: string; qrDataUrl?: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
 const positive = (v: unknown, fallback: number) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback
-const OPS = { appletvplus: new Set(['web','import','status','verify','logout']), mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']), friday: new Set(['import', 'status', 'refresh', 'qr', 'web', 'poll', 'logout']), linetv: new Set(['import', 'status', 'refresh', 'logout']) }
+const OPS = { dsnp: new Set(['status', 'password', 'otp_request', 'otp_verify', 'import', 'seat', 'logout']), appletvplus: new Set(['web','import','status','verify','logout']), mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']), friday: new Set(['import', 'status', 'refresh', 'qr', 'web', 'poll', 'logout']), linetv: new Set(['import', 'status', 'refresh', 'logout']) }
 
 /** Source credentials are transient: never persist or log command inputs. */
 export class ProviderSessions {
@@ -120,7 +120,7 @@ export class ProviderSessions {
       input.profileId = c.profileId
       if (c.pin) input.pin = c.pin
     }
-    const data = await this.invoke(c.provider, 'login', input)
+    const data = c.provider === 'dsnp' ? await this.invoke('dsnp', c.op === 'status' ? 'session' : c.op === 'logout' ? 'logout' : 'login', dsnpInput(c, input)) : await this.invoke(c.provider, 'login', input)
     if (revision !== this.scopeRevision) throw new Error('连接已切换，已丢弃旧登录响应')
     if (c.op === 'web_start') { this.flow = text(data.flowId); this.flowExpires = this.now() + 600000 }
     let state = text(data.state) || text(data.status) || (data.authenticated === true ? 'authenticated' : data.imported === true ? 'imported' : 'unknown')
@@ -216,6 +216,14 @@ export class ProviderSessions {
       }
       view.summary = authenticated ? 'Friday TV 已登录；4K 以会员权益为准' : view.state === 'pending' ? '在台湾出口的浏览器打开官方绑定页（可选旧版入口用 Facebook），完成后点「检查绑定」' : state === 'imported' ? '已导入 TV CK；尚未验证会员' : 'Friday 尚未登录；榜单无需登录，播放需 TV 会话'
     }
+    if (c.provider === 'dsnp') {
+      const sess = (data.session && typeof data.session === 'object' ? data.session : {}) as Record<string, unknown>
+      const signedIn = c.op !== 'logout' && (typeof data.subscriber === 'boolean' || Array.isArray(data.profiles) || (sess.authenticated === true && sess.expired !== true))
+      view.authenticated = signedIn
+      view.state = data.otpSent === true ? 'otp_sent' : data.pinRequired === true ? 'pin_required' : signedIn ? 'authenticated' : 'signed_out'
+      const where = data.inSupportedLocation === false ? ' · 当前出口不在 Disney+ 支持地区' : ''
+      view.summary = data.otpSent === true ? '验证码已发到邮箱，输入后点「验证码登录」' : data.pinRequired === true ? '该席位需要 PIN，请输入后再切换' : signedIn ? `Disney+ 已登录${data.subscriber === true ? ' · 订阅有效' : data.subscriber === false ? ' · 未检测到订阅' : ''}${where}` : '未登录：邮箱密码、邮箱验证码或导入 refresh token'
+    }
     if (c.provider === 'linetv') {
       view.summary = authenticated ? 'LINE TV 已登录；会员 / FHD 以账号权益为准' : '匿名可看 SD；导入本人 Cookie 解锁会员内容'
     }
@@ -241,5 +249,29 @@ export class ProviderSessions {
     if (c.provider === 'mewatch' && (authenticated || c.op === 'logout' || ['expired','cancelled','denied'].includes(state))) this.activation = undefined
     this.views.set(key, view)
     return view
+  }
+}
+
+/** Disney+ gateway params (internal/provider/dsnp/provider.go actionLogin). Credentials are passed through, never stored or logged here. */
+function dsnpInput(c: SessionCommand, input: Record<string, unknown>): Record<string, unknown> {
+  const email = (c.email || '').trim()
+  const needEmail = () => { if (!email || email.length > 256 || !/^[^\s@]+@[^\s@]+$/.test(email)) throw new Error('请输入有效的 Disney+ 邮箱') ; return email }
+  switch (c.op) {
+    case 'status': case 'logout': return {}
+    case 'password':
+      if (!c.password || c.password.length > 256) throw new Error('请输入密码（最多256字符）')
+      return { op: 'password', email: needEmail(), password: c.password }
+    case 'otp_request': return { email: needEmail() }
+    case 'otp_verify':
+      if (!/^[0-9]{4,8}$/.test(c.code || '')) throw new Error('请输入邮箱里的数字验证码')
+      return { email: needEmail(), passcode: c.code }
+    case 'import': return { op: 'import', cookie: input.cookie }
+    case 'seat': {
+      if (!/^[1-9][0-9]?$/.test(c.id || '')) throw new Error('请选择家庭席位')
+      const out: Record<string, unknown> = { seat: c.id }
+      if (c.pin) { if (!/^[0-9]{4,8}$/.test(c.pin)) throw new Error('PIN 为 4–8 位数字'); out.pin = c.pin }
+      return out
+    }
+    default: throw new Error('不支持的登录操作')
   }
 }

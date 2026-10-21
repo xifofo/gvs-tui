@@ -8,3 +8,10 @@ export type DRMLevelRule = { aboveHeight?: number; hdr?: boolean; dolbyVision?: 
 /** Per-platform requirement served by newer gateways with GET /v1/drm/devices. */
 export type DRMGatewayRequirement = { provider: string; systems: DRMSystem[]; widevineL1?: DRMLevelRule; playReadyMin?: number; playReadyRule?: DRMLevelRule; evidence?: string }
 export type DRMStatus = { widevine: DRMFileStatus; playready: DRMFileStatus; requirements?: DRMGatewayRequirement[] }
+
+/** GET /v1/meta/platforms（网关 platformmeta）：每个平台的登录方式、官网、地区与设备文件要求。只读、无密钥。 */
+export type PlatformMethod = { id: string; label: string; note?: string }
+export type PlatformLevel = { system: DRMSystem; level: string; when?: string }
+export type PlatformDevice = { required: boolean; systems?: DRMSystem[]; files?: string[]; levels?: PlatformLevel[]; summary: string; note?: string }
+export type PlatformMeta = { provider: string; name: string; methods: PlatformMethod[]; loginUrl?: string; cookieKeys?: string[]; cookieNote?: string; region?: string; description?: string; anonymous: boolean; device: PlatformDevice; unknown?: string[]; audited: boolean; source: 'code' | 'admin'; updatedAt?: string }
+export type PlatformMetaResponse = { version: number; platforms: PlatformMeta[] }
