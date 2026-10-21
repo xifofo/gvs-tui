@@ -85,6 +85,11 @@ export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: st
     }))
     return { qualities, audios, subtitles }
   }
+  if (provider === 'crunchyroll') {
+    // Crunchyroll 的画质由 RE 在下载时按 DASH 选最佳；这里只给一条入口，
+    // 避免为了列画质去换钥（按次计费）。
+    return { qualities: [{ id: 'auto', label: '自动（最佳画质）', title: 'DASH · 本机直连 CDN', size: 0, width: 0, height: 0, codec: '', drm: 'widevine', stream: 'auto', tier: 0 }], audios: [] }
+  }
   if (provider === 'dsnp') return probeDsnp(cli, cfg, id)
   const sources = await resolveManifest(cli, cfg, provider, id)
   return { qualities: sources.map(s => {
@@ -283,12 +288,19 @@ export function parseContentKeys(value: unknown): string[] {
   return [...keys].map(([kid, key]) => `${kid}:${key}`)
 }
 
-export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient'>, provider: string, id: string, quality = 'auto', selection?: { audio?: string[]; subtitle?: string[] }): Promise<ManifestSource[]> {
+export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient' | 'crunchyrollToken'>, provider: string, id: string, quality = 'auto', selection?: { audio?: string[]; subtitle?: string[] }): Promise<ManifestSource[]> {
   const input = manifestInput(provider, cfg, id, quality)
   if (provider === 'appletvplus' && selection) {
     // 序号取自 probe；网关据此裁剪 master，RE 只需 --select-audio best。
     if (selection.audio?.length) input.audio = selection.audio.join(',')
     if (selection.subtitle?.length) input.subtitle = selection.subtitle.join(',')
+  }
+  if (provider === 'crunchyroll') {
+    // 网关只换钥并发放短期 token；媒体由本机直连 CDN（不过网关带宽）。
+    const token = (cfg.crunchyrollToken || '').trim()
+    if (!token) throw new Error('CRUNCHYROLL_TOKEN_REQUIRED: 请先在设置里导入本人 Crunchyroll refresh_token')
+    input.download = true
+    input.refresh_token = token
   }
   if (provider === 'hamivideo' || provider === 'friday' || provider === 'appletvplus' || provider === 'dsnp') input.download = true
   const sources = manifestSources(await cli.invoke(provider, 'resolve', input, undefined, { timeoutMs: 120_000 }))
@@ -296,7 +308,7 @@ export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg
   for (const source of sources) {
     if (source.live) throw new Error('直播录制尚未接入；不会启动无限下载')
     if (source.clear) continue
-    const supported = provider === 'appletvplus' ? ['playready', 'widevine'].includes(source.drm) && source.format.toLowerCase() === 'hls' : provider === 'dsnp' ? source.drm === 'widevine' && source.format.toLowerCase() === 'hls' : ['hamivideo', 'friday'].includes(provider) && source.drm === 'widevine' && source.format.toLowerCase() === 'dash'
+    const supported = provider === 'appletvplus' ? ['playready', 'widevine'].includes(source.drm) && source.format.toLowerCase() === 'hls' : provider === 'dsnp' ? source.drm === 'widevine' && source.format.toLowerCase() === 'hls' : provider === 'crunchyroll' ? source.drm === 'widevine' && source.format.toLowerCase() === 'dash' : ['hamivideo', 'friday'].includes(provider) && source.drm === 'widevine' && source.format.toLowerCase() === 'dash'
     if (!supported || !source.contentKeys.length) {
       requireClearDownload(source)
     }

@@ -390,7 +390,7 @@ export async function runTask(
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
         break
-      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp':
+      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp': case 'crunchyroll':
         await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
         break
       case 'hongguo':

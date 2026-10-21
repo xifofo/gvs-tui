@@ -109,3 +109,50 @@ test('Apple TV download passes the chosen audio/subtitle indexes to resolve', as
   expect(seen[0]?.audio).toBeUndefined()
   expect(seen[0]?.subtitle).toBeUndefined()
 })
+
+test('Crunchyroll requires a local refresh token and hands it to resolve with download', async () => {
+  await expect(resolveManifestDownload({ invoke: async () => ({}) } as unknown as GwClient, {}, 'crunchyroll', 'G7PU4MZ1G')).rejects.toThrow('CRUNCHYROLL_TOKEN_REQUIRED')
+  const seen: Record<string, unknown>[] = []
+  const cli = {
+    invoke: async (_p: string, _a: string, input: Record<string, unknown>) => {
+      seen.push(input)
+      return {
+        media: [{
+          type: 'video',
+          url: 'https://www.crunchyroll.com/playback/v2/manifest/x.mpd',
+          format: 'dash',
+          headers: { Authorization: 'Bearer short-lived' },
+          drm: { system: 'widevine', clear: false, contentKeys: [{ kid: 'a'.repeat(32), key: 'b'.repeat(32) }] },
+        }],
+      }
+    },
+  } as unknown as GwClient
+  const out = await resolveManifestDownload(cli, { crunchyrollToken: 'rt-value' }, 'crunchyroll', 'G7PU4MZ1G')
+  expect(seen[0]).toMatchObject({ id: 'G7PU4MZ1G', download: true, refresh_token: 'rt-value' })
+  expect(out[0]).toMatchObject({ format: 'dash', drm: 'widevine', headers: { Authorization: 'Bearer short-lived' } })
+  expect(out[0]?.contentKeys).toEqual([`${'a'.repeat(32)}:${'b'.repeat(32)}`])
+})
+
+test('Crunchyroll probe exposes a single auto quality without spending a licence', async () => {
+  const calls: string[] = []
+  const cli = { invoke: async (_p: string, a: string) => { calls.push(a); return {} } } as unknown as GwClient
+  const out = await probeManifest(cli, {} as FileConfig, 'crunchyroll', 'G7PU4MZ1G')
+  expect(out.qualities.map(q => q.id)).toEqual(['auto'])
+  expect(out.qualities[0]?.drm).toBe('widevine')
+  expect(calls).toEqual([])
+})
+
+test('Crunchyroll detail walks series → seasons → episodes for the picker', async () => {
+  const calls: Array<{ action: string; input: Record<string, unknown> }> = []
+  const invoke = async (_p: string, action: string, input: Record<string, unknown>) => {
+    calls.push({ action, input })
+    if (action === 'detail') return { id: 'G6VQ0GQ8W', title: '测试番', type: 'series' }
+    if (action === 'seasons') return { items: [{ id: 'S1', season_number: 1 }, { id: 'S2', season_number: 2 }] }
+    if (action === 'episodes') return { items: input.id === 'S1' ? [{ id: 'EP1', title: '第一集', episode_number: 1 }] : [{ id: 'EP2', title: '第二集', episode_number: 1 }] }
+    return {}
+  }
+  const out = await manifestDetail(invoke as never, 'crunchyroll', 'G6VQ0GQ8W')
+  expect(calls.map(c => c.action)).toEqual(['detail', 'seasons', 'episodes', 'episodes'])
+  expect(out.type).toBe('series')
+  expect((out.episodes as Array<Record<string, unknown>>).map(e => [e.vid, e.season])).toEqual([['EP1', 1], ['EP2', 2]])
+})
