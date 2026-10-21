@@ -26,6 +26,7 @@ const ROWS = computed<Row[]>(() => [
   },
 ])
 
+const entriesOf = (system: DRMSystem) => status.value?.[system].entries ?? []
 const status = ref<DRMStatus | null>(null)
 const loadError = ref('')
 const busy = ref<DRMSystem | null>(null)
@@ -55,6 +56,19 @@ async function upload(row: Row): Promise<void> {
       status.value = next
       toast(`${row.title}已上传`, 'ok')
     }
+  } catch (e) {
+    toast(errText(e), 'err')
+  } finally {
+    busy.value = null
+  }
+}
+
+async function removeOne(row: Row, entry: { id?: string; level?: number }): Promise<void> {
+  if (!entry.id) return
+  busy.value = row.system
+  try {
+    status.value = await gvs('deleteDRMOne', row.system, entry.id)
+    toast(`已删除 ${levelText(row.system, entry.level)} 设备`, 'ok')
   } catch (e) {
     toast(errText(e), 'err')
   } finally {
@@ -100,8 +114,8 @@ async function remove(): Promise<void> {
           <span v-if="status[row.system].name" class="name mono" :title="status[row.system].name">{{ status[row.system].name }}</span>
         </template>
         <span v-else-if="status" class="chip warn">未上传</span>
-        <button type="button" class="btn sm outline" :disabled="busy !== null" @click="upload(row)">
-          <span v-if="busy === row.system" class="spin" />{{ status?.[row.system].configured ? '替换' : '上传' }}
+        <button type="button" class="btn sm outline" :disabled="busy !== null || entriesOf(row.system).length >= 8" @click="upload(row)">
+          <span v-if="busy === row.system" class="spin" />{{ entriesOf(row.system).length ? '继续上传' : '上传' }}
         </button>
         <button
           v-if="status?.[row.system].configured"
@@ -110,6 +124,14 @@ async function remove(): Promise<void> {
           :disabled="busy !== null"
           @click="confirmDelete = row"
         >删除</button>
+      </div>
+      <div v-if="entriesOf(row.system).length" class="pool">
+        <div v-for="d in entriesOf(row.system)" :key="d.id" class="poolrow">
+          <span class="chip ok">{{ levelText(row.system, d.level) }}</span>
+          <span class="name mono" :title="d.name">{{ d.name || '未命名设备' }}</span>
+          <span class="dim">·</span>
+          <button type="button" class="btn sm danger" :disabled="busy !== null" @click="removeOne(row, d)">删除</button>
+        </div>
       </div>
     </div>
     <ConfirmDialog
@@ -131,4 +153,6 @@ async function remove(): Promise<void> {
 .name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink-3); }
 .dim { color: var(--ink-3); font-weight: 500; font-size: 12px; }
 .l1s { margin-top: 4px; }
+.pool { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 0 20px 10px; }
+.poolrow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 </style>

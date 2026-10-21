@@ -340,6 +340,7 @@ export interface GvsApi {
   /** 选文件夹；start 为对话框初始位置（缺省下载目录） */
   chooseDir(start?: string): Promise<string>
   /** 本 Key 的设备文件状态（不含文件内容） */
+  deleteDRMOne(system: DRMSystem, id: string): Promise<DRMStatus>
   drmStatus(): Promise<DRMStatus>
   /** 网关下发的平台账号说明；旧网关返回 null */
   platformMeta(): Promise<PlatformMetaResponse | null>

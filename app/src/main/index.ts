@@ -263,6 +263,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
     return r.canceled ? '' : (r.filePaths[0] ?? '')
   },
   drmStatus: () => core.drmStatus(),
+  deleteDRMOne: (system, id) => core.deleteDRMOne(system, id),
   platformMeta: () => core.platformMeta(),
   uploadDRM: async (system) => {
     const widevine = system === 'widevine'

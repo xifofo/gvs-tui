@@ -1,6 +1,11 @@
 // Generated from gateway/internal/usermsg/catalog.json; run scripts/sync-user-messages.mjs.
 export const errorCatalog = [
   {
+    "pattern": "DRM_CLIENT_DEVICE_LIMIT",
+    "code": "DRM_CLIENT_DEVICE_LIMIT",
+    "message": "这个系统的设备池已满（每系统最多 8 只）。请先删掉不用的设备文件，再上传新的。"
+  },
+  {
     "pattern": "DRM_CLIENT_DEVICE_REQUIRED",
     "code": "DRM_CLIENT_DEVICE_REQUIRED",
     "message": "该平台获取内容密钥需要你本人的设备文件，请在 App「设置 → 设备文件」上传 Widevine .wvd 或 PlayReady .prd 后重试。"
@@ -9,6 +14,16 @@ export const errorCatalog = [
     "pattern": "DRM_CLIENT_DEVICE_LEVEL",
     "code": "DRM_CLIENT_DEVICE_LEVEL",
     "message": "设备文件等级不足或已失效，请在 App「设置 → 设备文件」重新上传更高等级的设备文件后重试。"
+  },
+  {
+    "pattern": "status=-1004|device-limit",
+    "code": "DRM_DEVICE_LIMIT_REACHED",
+    "message": "账号的换钥设备名额已满（Apple 上限 6 台）。请先在 Apple 账号的设备管理里移除不用的设备，再只添加一台重试。"
+  },
+  {
+    "pattern": "status=-1021",
+    "code": "DRM_DEVICE_REJECTED",
+    "message": "平台拒绝了这台设备的换钥请求（设备被吊销或账号受限）。请换一只未被公开过的设备文件；连续失败时先静置 12–24 小时再单次重试。"
   },
   {
     "pattern": "DRM_LICENCE_REJECTED",

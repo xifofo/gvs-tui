@@ -1889,6 +1889,10 @@ export class Core {
   }
 
   /** 设备文件：只在用户打开「设置 → 设备文件」时查询，下载前不预检，由网关返回错误。 */
+  async deleteDRMOne(system: 'widevine' | 'playready', id: string): Promise<DRMStatus> {
+    return this.client().deleteDRMOne(system, id)
+  }
+
   async drmStatus(): Promise<DRMStatus> {
     return this.client().drmStatus()
   }
