@@ -1385,7 +1385,11 @@ async function markSubtitleFlags(dest: string, subs: NonNullable<DlTask['subtitl
 
 /** Media is fetched on this client; gateway traffic is limited to resolve calls. */
 async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, work: string, signal?: AbortSignal): Promise<void> {
-  const sources = await resolveManifestDownload(cli, cfg, t.provider, t.vid, t.quality || 'auto')
+  // Apple TV：把 probe 里选中的音轨/字幕序号传回网关，由它裁剪 master。
+  const selection = t.provider === 'appletvplus'
+    ? { audio: (t.audioTracks || []).map(a => a.id), subtitle: (t.subtitleTracks || []).map(s => s.id) }
+    : undefined
+  const sources = await resolveManifestDownload(cli, cfg, t.provider, t.vid, t.quality || 'auto', selection)
   signal?.throwIfAborted()
   const source = sources[0]!
   // Disney+ serves one HLS master; the chosen quality is a height inside it.
@@ -1402,6 +1406,7 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
     await downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, contentKeys: source.contentKeys,
       keepSubtitles: t.provider === 'appletvplus' || t.provider === 'dsnp',
       subtitleUris: t.provider === 'dsnp' && t.subtitleTracks ? t.subtitleTracks.map(s => s.id) : undefined,
+      // appletvplus: 网关已按序号裁剪 master，不再用 url= 选择（所有配音同名）。
       manifestText: source.manifest, videoHeight: source.height || undefined, videoCodecs, audioUris, threads: cfg.threads,
       select: 'muxed', muxTracks: true, releaseGroup: releaseGroup(t,cfg), transport: 're', workDir: work, workTag: 'manifest', signal,
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
@@ -1412,8 +1417,11 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
       const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
       let lastLogged = 0
       const duration = t.duration ?? 0
+      // 整片逐帧解码在 4K HDR 上要几十分钟；长片改成抽 3 段（开头/中间/结尾）解码，
+      // 仍能抓到解密不完整、花屏、丢音这类问题。
       const errors = await validateVideoDecode(ffmpeg, dest, signal, {
         requireAudio: true,
+        sample: duration > 600 ? { duration, windows: 3 } : undefined,
         onProgress: seconds => {
           const ratio = duration > 0 ? Math.min(0.99, seconds / duration) : 0
           const detail = `完整音视频校验 ${clock(seconds)}${duration > 0 ? ' / ' + clock(duration) : ''}`

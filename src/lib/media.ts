@@ -953,7 +953,12 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     }
     cb(side.ratio, 1, { phase, log })
   }
-  const progress = reProgress((n, total, segments) => cb?.(n, total, { phase: 'download', segments }))
+  const progress = reProgress((n, total, segments) => {
+    // 多流（Apple TV：视频 + 多条配音 + 字幕）时 RE 的控制台行会先被最短的流
+    // 顶到 100%；文件系统分段计数才是整体进度，拿得到就不用控制台的值。
+    if (cwd && reDownloadedSegments(cwd, listedTotal)) return
+    cb?.(n, total, { phase: 'download', segments })
+  })
   // Take the resume baseline before any newly downloaded bytes are reported.
   emitSidecar()
   const collect = (chunk: string) => {
