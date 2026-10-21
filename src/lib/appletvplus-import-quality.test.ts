@@ -30,3 +30,12 @@ test('public quality dispatcher reaches Apple TV probe and never asks for downlo
   expect(result.qualities[0]).toMatchObject({id:'1606|H265|PQ|23.976',codec:'H265',height:1606,title:'4K HDR'})
   expect(result.qualities[0]?.title).not.toContain('PlayReady')
 })
+
+test('identified Apple TV episode duration reaches the size estimate', async () => {
+  const cli = {invoke: async (p:string,a:string,input:Record<string,unknown>) => {
+    expect(p).toBe('appletvplus');expect(a).toBe('probe');expect(input.download).toBeUndefined()
+    return {qualities:[{id:'1080|H264|SDR|24',height:1080,width:1920,codec:'H264',label:'1080p',bandwidth:4_000_000}]}
+  }} as unknown as GwClient
+  const result = await probeOptions(cli, {} as FileConfig, 'appletvplus', 'umc.cmc.episode', {duration:2700})
+  expect(result.qualities[0]?.size).toBe(Math.round(4_000_000 * 2700 / 8))
+})
