@@ -8,7 +8,7 @@ import { asString, isObj } from './util.ts'
 import { cachedIQCNDescriptor, iqcnSegmentDescriptor } from './iqcn-control.ts'
 import { runLog } from './runlog.ts'
 
-export type IQCNProcessing = { version: number; ticket: string; identity: string; drmType?: 1 }
+export type IQCNProcessing = { version: number; ticket: string; identity: string; drmType?: 1; copy?: true }
 export type IQCNSegmentTiming = { index:number; bytes:number; descriptorMs:number; networkMs:number; restoreMs:number; readMs:number; totalMs:number; descriptorRequests:number; fetchAttempts:number }
 type LocalResult = { version: number; bytes: number; restored: boolean; clearCandidate: boolean }
 export type IQCNLocalRuntime = {
@@ -59,7 +59,17 @@ export function iqcnProcessing(plan: Record<string, unknown>): IQCNProcessing {
   const video = isObj(plan.video) ? plan.video : {}
   // Retain compatibility with gateways serializing the selected DRM type as text.
   const cleartext = video.drmType === 1 || video.drmType === '1'
-  if (plan.transport !== 'local-v1' || value.version !== 1 || (!ticket && !cleartext) || !asString(value.identity)) {
+  if (plan.transport !== 'local-v1' || value.version !== 1) {
+    throw new Error('爱奇艺国内版网关未提供本地下载协议，请同步更新网关和 App')
+  }
+  // A whole-file (progressive MP4) rendition hands out plain media ranges, and
+  // the local helper only accepts TS samples. Store the bytes as received, and
+  // only with the gateway's explicit cleartext declaration.
+  if (video.delivery === 'single-file') {
+    if (!cleartext) throw new Error('爱奇艺国内版整文件投放不是明文，请更新网关后重试')
+    return { version: 1, ticket, identity: asString(value.identity), copy: true }
+  }
+  if (!asString(value.identity) || (!ticket && !cleartext)) {
     throw new Error('爱奇艺国内版网关未提供本地下载协议，请同步更新网关和 App')
   }
   // An empty ticket is valid only with the gateway's explicit cleartext DRM type.
@@ -247,6 +257,17 @@ export async function downloadIQCNLocalSegment(cli: GwClient, planId: string, in
     }
     if (!downloaded) throw new Error(firstError || '爱奇艺国内版分片直连失败')
     signal?.throwIfAborted()
+    if (material.copy) {
+      // Whole-file ranges are the media itself, not protected TS samples: keep
+      // them byte-for-byte and never route them through the TS-only helper.
+      const readStart = performance.now()
+      const bytes = readFileSync(raw)
+      timing.readMs = performance.now() - readStart
+      if (bytes.length !== expected) throw new Error('爱奇艺国内版分片长度校验失败')
+      timing.totalMs = performance.now() - started
+      try { runtime.onTiming?.(timing) } catch { /* Diagnostics must not interrupt a download. */ }
+      return bytes
+    }
     let report: LocalResult
     const restoreStart=performance.now()
     try { report = await runtime.restore(raw, clear, material, signal) }

@@ -45,6 +45,8 @@ test.skipIf(process.env.GVS_MEDIA_TESTS !== '1')('Tencent shared runner complete
     expect(final.note).toContain('所选 HDR 未在实际视频中确认')
     expect(events.some(event => event.status === '规格提示')).toBe(true)
     expect(existsSync(final.log)).toBe(true)
+    const tags = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', final.log], { encoding: 'utf8' }))
+    expect(tags.format.tags.GROUP).toBe('WF')
     expect(basename(final.log)).toBe('节目.S01E01.2026.360p.TX.WEB-DL.MAXPLUS.60fps.AVC.AAC.2.0-WF.mkv')
     expect(final.actualVersion?.media?.dynamicRange).toBe('SDR')
   } finally {

@@ -23,6 +23,7 @@ import { isUnknownAudioLanguage } from './audio-language.ts'
 import { iqEpisodeAudioCatalog, iqSelectedAudioResponse, selectIQEpisodeAudios } from './iq-audio-selection.ts'
 import { runLog } from './runlog.ts'
 import { DownloaderCompatibilityError } from './downloader-error.ts'
+import { releaseGroup } from './release-group.ts'
 
 /** IQ's default track identifies the source-preferred language, not its codec tier. */
 function iqAudioLanguage(row: Record<string, unknown>): string {
@@ -223,7 +224,7 @@ export async function downloadIQ(cli: GwClient, cfg: FileConfig, task: DlTask, d
     // The source-preferred language describes the original video. A manually
     // selected dub may change the default audio without changing this language.
     const preferredLanguage = asString(available.find(a => a.default === true)?.language)
-    muxAudio = await muxIQ(await ensureFFmpeg(), {video,videoLanguage:preferredLanguage || undefined,audios:audioFiles,subtitles:subtitleFiles,
+    muxAudio = await muxIQ(await ensureFFmpeg(), {video,videoLanguage:preferredLanguage || undefined,audios:audioFiles,subtitles:subtitleFiles,releaseGroup:releaseGroup(task,cfg),
       dest,reservedOutput:measured,signal,emit})
   } catch (error) {
     if (error instanceof IQAudioValidationError) invalidateIQAudioParts(audioPartPaths)

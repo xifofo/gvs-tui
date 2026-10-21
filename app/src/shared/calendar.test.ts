@@ -65,3 +65,66 @@ test('mgtv calendar ids open as shows (clip:ID), never as bare vids', () => {
   expect(mgtvShowId('clip:912960')).toBe('clip:912960')
   expect(mgtvShowId('vid:1')).toBe('vid:1')
 })
+
+test('titleKey aligns platform schedule rows with subscriptions', async () => {
+  const { titleKey } = await import('./calendar')
+  // 平台排播给的名字 vs 订阅里存的名字，标点/空格/季数不同也要对上
+  expect(titleKey('了不起啊朋友 第一季')).toBe(titleKey('了不起啊朋友'))
+  expect(titleKey('《嫁金钗》')).toBe(titleKey('嫁金钗'))
+  expect(titleKey('美人余（2026）')).toBe(titleKey(' 美人余 2026 '))
+  expect(titleKey('凤栖·第2季')).toBe(titleKey('凤栖'))
+  // 不同剧不能撞
+  expect(titleKey('美人余') === titleKey('美人鱼')).toBe(false)
+  expect(titleKey('')).toBe('')
+})
+
+test('openTarget: subscribed → its detail, platform id → detail, title only → search', async () => {
+  const { openTarget } = await import('./calendar')
+  // 已订阅：即使条目没有平台 id，也用订阅自己的 provider/showId 打开
+  expect(openTarget({ id: '', provider: 'mgtv', title: '凤栖' }, { provider: 'mgtv', showId: 'clip:875855' }))
+    .toEqual({ kind: 'detail', provider: 'mgtv', id: 'clip:875855' })
+  // 订阅在别的平台也要打开订阅那一份
+  expect(openTarget({ id: '', provider: 'tencent', title: '伟大的长征' }, { provider: 'iqcn', showId: 'iq-show-1' }))
+    .toEqual({ kind: 'detail', provider: 'iqcn', id: 'iq-show-1' })
+  // 未订阅但有平台剧集 id（芒果兜底排播）
+  expect(openTarget({ id: 'clip:1', provider: 'mgtv', title: '早间节目' }, null))
+    .toEqual({ kind: 'detail', provider: 'mgtv', id: 'clip:1' })
+  // 未订阅且只有剧名（网关排播）→ 搜索
+  expect(openTarget({ id: '', provider: 'youku', title: ' 嫁金钗 ' }, null))
+    .toEqual({ kind: 'search', query: '嫁金钗' })
+  expect(openTarget({ id: '', provider: 'youku', title: '   ' }, null)).toBe(null)
+})
+
+// 网关 provider=dengta / action=calendar 的真实形状（2026-10-18 实测响应截取）
+const gwSample = {
+  today: '2026-10-18',
+  horizon: 14,
+  days: [
+    { date: '2026-10-19', weekday: '周一', today: false, items: [
+      { title: '美人余', provider: 'tencent', platforms: '腾讯视频', time: '12:00', episodes: '第23-24集', total: 28, poster: 'https://gw.alicdn.com/p.jpg', posterHor: 'https://gw.alicdn.com/h.jpg' },
+      { title: '凤栖', provider: 'mgtv', platforms: '芒果TV', time: '10:00', episodes: '第13-15集', total: 24, poster: '', posterHor: '' },
+      { title: '伟大的长征', provider: 'tencent', platforms: '爱奇艺/腾讯视频', time: '20:00', episodes: '', total: 60, poster: '', posterHor: '' },
+    ] },
+    { date: 'not-a-date', weekday: '周二', today: false, items: [] },
+  ],
+}
+
+test('parseGatewayCalendar maps the gateway payload to CalendarDay[]', async () => {
+  const { parseGatewayCalendar } = await import('./calendar')
+  const now = new Date(2026, 9, 19, 9).getTime()
+  const days = parseGatewayCalendar(gwSample, now)
+  expect(days.map((d) => [d.date, d.weekday, d.today])).toEqual([['2026-10-19', '周一', true]])
+  // 按更新时间排序，平台文案进 info，全 N 集兜底 episodes
+  expect(days[0]!.items.map((i) => [i.title, i.provider, i.info, i.time, i.episodes, i.id, i.source])).toEqual([
+    ['凤栖', 'mgtv', '芒果TV', '10:00', '第13-15集', '', 'platform'],
+    ['美人余', 'tencent', '腾讯视频', '12:00', '第23-24集', '', 'platform'],
+    ['伟大的长征', 'tencent', '爱奇艺/腾讯视频', '20:00', '全60集', '', 'platform'],
+  ])
+  expect(days[0]!.items[1]!.onlineAt).toBe(new Date(2026, 9, 19, 12, 0).getTime())
+  // 封面直链原样带过来（「发现新剧」的卡片用得上）
+  expect([days[0]!.items[1]!.poster, days[0]!.items[1]!.posterHor]).toEqual(['https://gw.alicdn.com/p.jpg', 'https://gw.alicdn.com/h.jpg'])
+  // 没有平台剧集 id → 不能订阅；解析必须容忍包装层与空载荷
+  expect(parseGatewayCalendar({ data: gwSample }, now)).toHaveLength(1)
+  expect(parseGatewayCalendar({ days: [] }, now)).toEqual([])
+  expect(parseGatewayCalendar(null, now)).toEqual([])
+})

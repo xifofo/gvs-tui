@@ -307,7 +307,12 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   setSubscriptionsPaused: (paused) => subs.setPaused(paused),
   setSubscriptionInterval: (minutes) => subs.setInterval(minutes),
   markSubscriptionsSeen: (id) => subs.markSeen(id),
-  calendar: () => fetchCalendar(),
+  // 追剧日历：优先网关（provider=dengta 汇总各平台官方排播）；网关没连上才回落到本地芒果直连。
+  calendar: async () => {
+    const gw = await core.calendar()
+    if (gw) return { days: gw, error: '', fetchedAt: Date.now() }
+    return fetchCalendar()
+  },
   accounts: () => accounts.view(),
   addAccount: async (p, name, cookie) => {
     const r = await accounts.add(p, name, cookie)

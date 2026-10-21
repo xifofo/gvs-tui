@@ -7,6 +7,7 @@ import { mkvmergeMux, mkvmergeRemux, type MuxAudio } from './mkvmerge.ts'
 import { mp4boxMux, readMp4Tracks } from './mp4box.ts'
 import { firstPresentationMs } from './media-timing.ts'
 import { mainlandAudioLanguage } from './audio-language.ts'
+import { youkuAudioLanguage } from './youku-audio.ts'
 
 const mediaTest = process.env.GVS_MEDIA_TESTS === '1' ? test : test.skip
 const run = (bin: string, args: string[]) => {
@@ -14,6 +15,35 @@ const run = (bin: string, args: string[]) => {
   if (result.status !== 0) throw new Error(`${bin}: ${result.error ?? result.stderr}`)
   return result.stdout
 }
+
+mediaTest('Youku original-language correction replaces generic eng in MKV and MP4 while keeping an explicit English dub', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gvs-youku-language-'))
+  try {
+    const video = join(dir, 'video.mp4'), audio = join(dir, 'eng-source.mp4')
+    run('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=64x64:r=25:d=0.3', '-c:v', 'libx264', video])
+    run('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=sample_rate=48000:duration=0.3',
+      '-c:a', 'aac', '-metadata:s:a:0', 'language=eng', audio])
+    const audios = [
+      { path: audio, lang: youkuAudioLanguage('原声', 'zh'), isDefault: true },
+      { path: audio, lang: youkuAudioLanguage('英语', 'zh'), isDefault: false },
+    ]
+    for (const container of ['mp4', 'mkv']) {
+      const out = join(dir, `corrected.${container}`)
+      if (container === 'mp4') {
+        await mp4boxMux('MP4Box', video, audios, out, undefined, undefined, 'zh')
+        expect((await readMp4Tracks('MP4Box', out)).filter(t => t.type === 'soun').map(t => [t.language, t.enabled]))
+          .toEqual([['zho', true], ['eng', false]])
+      } else {
+        await mkvmergeMux('mkvmerge', video, audios, out, undefined, undefined, undefined, 'zh')
+        const tracks = JSON.parse(run('mkvmerge', ['-J', out])).tracks.filter((t: {type: string}) => t.type === 'audio')
+        expect(tracks.map((t: {properties: {language: string; default_track: boolean}}) => [t.properties.language, t.properties.default_track]))
+          .toEqual([['chi', true], ['eng', false]])
+      }
+      expect(JSON.parse(readFileSync(`${out}.timing.json`, 'utf8')).verified).toBe(true)
+    }
+    expect((await readMp4Tracks('MP4Box', audio))[0]!.language).toBe('eng')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}, 60_000)
 
 mediaTest('MKV and MP4 tag unknown video and audio from the same TMDB fallback, preserving defaults, timing and samples', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gvs-audio-language-'))

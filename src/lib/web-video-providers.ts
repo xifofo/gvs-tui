@@ -1,5 +1,6 @@
 import type { Audio, Quality } from '../types'
 import { isObj } from './util'
+import { mgtvEpisodeMetadata, type MgtvMetadataFetch } from './mgtv-episodes'
 
 export type WebVideoProvider = 'mgtv' | 'bilibili' | 'migu'
 export const isWebVideoProvider = (p: string): p is WebVideoProvider => p === 'mgtv' || p === 'bilibili' || p === 'migu'
@@ -24,7 +25,7 @@ export function webVideoLink(input: string): { provider: WebVideoProvider; url: 
   }
 }
 
-export async function webVideoDetail(invoke: Invoke, provider: WebVideoProvider, id: string): Promise<Obj> {
+export async function webVideoDetail(invoke: Invoke, provider: WebVideoProvider, id: string, fetchMgtvMetadata?: MgtvMetadataFetch): Promise<Obj> {
   const input = id.startsWith('http') ? {url:id} : {id}
   const miguSource = provider === 'migu' ? miguCapabilities(id) : undefined
   const data = await invoke(provider,'detail',{...input,pageSize:100,...miguSource})
@@ -42,7 +43,8 @@ export async function webVideoDetail(invoke: Invoke, provider: WebVideoProvider,
       if (!fresh.length && page.hasMore === true) throw new Error('芒果分集分页重复，请重新读取')
       all = [...all,...fresh];more = page.hasMore === true;next = str(page.nextCursor)
     }
-    data.episodes = all.map(e => ({...e,group:e.isIntact === false ? '其他视频' : '正片'}))
+    data.episodes = (await mgtvEpisodeMetadata({...data,episodes:all}, fetchMgtvMetadata))
+      .map(e => ({...e,group:e.isIntact === false ? '其他视频' : '正片'}))
     data.episode_groups = [...new Set(rows(data.episodes).map(e => e.group))]
     data.hasMore = false;data.nextCursor = ''
     const direct = /^(?:vid:)?\d+$/.test(id) || /\/\d+\.html|[?&](?:videoId|vid)=/.test(id)
@@ -109,14 +111,22 @@ export function bilibiliOptions(data: Obj): {qualities:Quality[];audios:Audio[]}
   if (!qualities.length) throw new Error('B 站未返回可下载画质')
   return {qualities,audios}
 }
-export function mgtvOptions(data: Obj): {qualities:Quality[];audios:Audio[]} {
-  const qualities = rows(data.qualities).filter(q => q.selectable === true).map((q): Quality => ({id:str(q.quality),stream:str(q.quality),label:str(q.name)||str(q.standardName)||str(q.quality),title:'目录规格；实际编码和动态范围在下载后确认',size:0,width:0,height:0,tier:num(q.nominalHeight),codec:str(q.catalogCodec),drm:'unknown',fps:num(q.frameRate),hdr:'unknown',audios:[{id:'embedded',label:'随视频内嵌',lang:'原声',codec:'',isDefault:true,selected:true,embedded:true}]}))
+export function mgtvOptions(data: Obj, episodeDuration?: number): {qualities:Quality[];audios:Audio[]} {
+  const positive = (value: unknown) => typeof value === 'number' || typeof value === 'string' ? num(value) : 0
+  const qualities = rows(data.qualities).filter(q => q.selectable === true).map((q): Quality => {
+    const duration = positive(q.duration) || positive(episodeDuration) || positive(data.duration)
+    // The catalog reports kbps, not bytes. Estimate only from this rendition's
+    // bitrate and the probed episode's duration; never guess from its 4K label.
+    const bytes = positive(q.size) || positive(q.estimatedSize) || positive(q.bitrateKbps) * 1000 * duration / 8
+    const size = bytes <= Number.MAX_SAFE_INTEGER ? Math.round(bytes) : 0
+    return {id:str(q.quality),stream:str(q.quality),label:str(q.name)||str(q.standardName)||str(q.quality),title:'目录规格；大小按码率和时长估算，实际编码和动态范围在下载后确认',size,duration:duration || undefined,width:0,height:0,tier:num(q.nominalHeight),codec:str(q.catalogCodec),drm:'unknown',fps:num(q.frameRate),hdr:'unknown',audios:[{id:'embedded',label:'随视频内嵌',lang:'原声',codec:'',isDefault:true,selected:true,embedded:true}]}
+  })
   if (!qualities.length) throw new Error('芒果当前设备和片源没有可选画质')
   return {qualities,audios:[]}
 }
-export async function probeWebVideo(invoke: Invoke, provider: WebVideoProvider, id: string) {
+export async function probeWebVideo(invoke: Invoke, provider: WebVideoProvider, id: string, episodeDuration?: number) {
   if (provider === 'migu') return miguOptions(await invoke(provider,'qualities',{id,...miguCapabilities(id)}))
-  return provider === 'mgtv' ? mgtvOptions(await invoke(provider,'qualities',{vid:id,...mgtvCapabilities})) : bilibiliOptions(await invoke(provider,'resolve',{id}))
+  return provider === 'mgtv' ? mgtvOptions(await invoke(provider,'qualities',{vid:id,...mgtvCapabilities}), episodeDuration) : bilibiliOptions(await invoke(provider,'resolve',{id}))
 }
 export function miguCapabilities(id: string) { return {terminal:id.startsWith('tv:') || id.startsWith('tv-series:') ? 'tv' : 'mobile',devicePreset:'max'} }
 export function miguOptions(data: Obj): {qualities:Quality[];audios:Audio[]} {

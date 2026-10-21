@@ -3,7 +3,7 @@ import { anyInt, firstStr, isObj } from './util.ts'
 import { parseSeriesTitle } from './series-title.ts'
 import { tencentEpisodePlayParams } from './tencent-edition.ts'
 
-function episodeSeconds(value: unknown): number {
+export function episodeSeconds(value: unknown): number {
   if (typeof value === 'string' && value.includes(':')) {
     if (!/^\d+:\d{2}(?::\d{2})?$/.test(value)) return 0
     const parts = value.split(':').map(Number)

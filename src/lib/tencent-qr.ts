@@ -24,19 +24,19 @@ export function tencentPlayInput(cfg: FileConfig, edition?: TencentPlayParams): 
   return {}
 }
 
-/** TV QR defaults: explicit cfg → env TENCENT_TV_FP_PROFILE → virtual_ott_4k. */
+/** Use a complete custom TV identity, or a gateway preset without partial overrides. */
 export function tencentTVLoginInput(cfg: FileConfig): Record<string, string> {
   const input: Record<string, string> = {
-    tvid: cfg.tencentTVDevice || '',
-    qua_info: cfg.tencentTVQUA || '',
-    appver: cfg.tencentTVVersion || '',
+    tvid: cfg.tencentTVDevice?.trim() || '',
+    qua_info: cfg.tencentTVQUA?.trim() || '',
+    appver: cfg.tencentTVVersion?.trim() || '',
   }
+  if (input.tvid && input.qua_info && input.appver) return input
+  // Successful scans persist tvid alone. Sending it on the next login selects
+  // the custom-device path, which requires the rest of the identity as well.
   const profile =
     (process.env.TENCENT_TV_FP_PROFILE || '').trim() || 'virtual_ott_4k'
-  if (!input.tvid && !input.qua_info) {
-    input.tv_fp_profile = profile
-  }
-  return input
+  return { tv_fp_profile: profile }
 }
 
 async function saveOfficialPng(

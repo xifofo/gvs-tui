@@ -63,6 +63,26 @@ test('IQ Japanese audio ID 6 is corrected in the picker and mux metadata without
   expect(normalizeIQAudioLanguage(french)).toBe(french)
 })
 
+test('IQ domestic Cookie route repairs the confirmed ID-6 French mislabel in the quality picker', () => {
+  const data = { source: 'domestic', audios: [
+    { source: 'domestic', id: '6:1:500', lid: 6, language: 'fra', lang: '法语', label: '法语 · 杜比 5.1', codec: 'eac3', default: true },
+    { source: 'domestic', id: '6:2:100', lid: 6, language: 'fra', lang: '法语', label: '法语 · AAC', codec: 'aac', default: false },
+  ] }
+  const before = JSON.stringify(data)
+  const { audios } = iqOptions(data, '硃紅的假面 第2集')
+  expect(audios.map(a => [a.id, a.lang, a.label, a.selected, a.isDefault])).toEqual([
+    ['6:1:500', '日语', '日语 · 杜比 5.1', true, true],
+    ['6:2:100', '日语', '日语 · AAC', true, false],
+  ])
+  expect(JSON.stringify(data)).toBe(before)
+  for (const row of [
+    { source: 'domestic', id: '6:2:100', language: 'zho', lang: '普通话' },
+    { source: 'domestic', id: '6:2:100', language: 'fra', lang: '普通话' },
+    { source: 'domestic', id: '99:2:100', language: 'fra', lang: '法语' },
+    { source: 'domestic', id: '6:2:100' },
+  ]) expect(normalizeIQAudioLanguage(row)).toBe(row)
+})
+
 test('IQ official Thai audio ID 157 overrides an incorrect Mandarin label in picker and resumed audio responses', () => {
   const dolby = { id: '157:1:500', lid: 157, label: '普通话 · 杜比 5.1', lang: '普通话', language: 'zho', codec: 'eac3', default: true }
   const aac = { id: '157:2:100', label: '普通话 · AAC', lang: '普通话', language: 'zho', codec: 'aac' }

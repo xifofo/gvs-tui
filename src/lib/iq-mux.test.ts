@@ -108,12 +108,14 @@ realMediaTest('IQ mux moves the selected default first and publishes measured na
     ff(['-f', 'lavfi', '-i', 'anullsrc=channel_layout=5.1:sample_rate=48000', '-t', '0.3', '-c:a', 'eac3', '-f', 'mp4', ddp])
     writeFileSync(sub, '1\n00:00:00,000 --> 00:00:00,200\n字幕\n')
     const dest = reserveOutputPath(join(root, 'provisional.mkv'))
-    const options = { video, dest, reservedOutput: true, emit: () => {},
+    const options = { video, dest, reservedOutput: true, releaseGroup: 'WF', emit: () => {},
       audios: [{ path: aac, language: 'zho', title: 'AAC' }, { path: ddp, language: 'zho', title: 'Dolby', isDefault: true }],
       subtitles: [{ path: sub, language: 'zho', title: '中文' }] }
     const muxAudio = await muxIQ('ffmpeg', options)
     expect(muxAudio).toEqual({ index: 0, count: 2 })
     expect(statSync(dest).size).toBeGreaterThan(0)
+    const tags = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', dest], { encoding: 'utf8', timeout: 10000 })).format.tags
+    expect(tags.GROUP).toBe('WF')
     expect(readdirSync(root).some(file => file.startsWith('.gvs-iq-mux-'))).toBe(false)
     expect((await probeFinishedMedia(dest)).audio).toMatchObject({ status: 'confirmed', index: 0, codec: 'eac3', channels: 6 })
     const streams = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', dest],

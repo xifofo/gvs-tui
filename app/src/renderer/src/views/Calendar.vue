@@ -8,12 +8,15 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { PROVIDER_NAME, type CalendarDay, type CalendarItem, type Provider, type Subscription } from '@shared/api'
-import { dateKey, subscriptionItems } from '@shared/calendar'
+import { dateKey, openTarget, subscriptionItems, titleKey } from '@shared/calendar'
 import { windowText } from '@shared/subscription'
 import Icon from '../components/Icon.vue'
 import PlatformLogo from '../components/PlatformLogo.vue'
 import Poster from '../components/Poster.vue'
-import { errText, go, gvs, openDetail, store, subscriptionOf, toast } from '../store'
+import { errText, go, gvs, openDetail, runSearch, store, subscriptionByTitle, subscriptionOf, toast } from '../store'
+
+/** 平台排播条目怎么对上订阅：芒果兜底数据带平台剧集 id，网关数据只有剧名 → 按归一剧名找 */
+const subOfItem = (i: CalendarItem) => subscriptionOf(i.provider, i.id) ?? subscriptionByTitle(i.title, i.provider)
 
 const DAY = 86_400_000
 const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
@@ -30,6 +33,7 @@ const foldOpen = ref(false)
 const pf = ref<string>('all')
 const pfMenu = ref(false)
 const dType = ref('all')
+const dPlat = ref('all')
 const onlyUnsub = ref(false)
 const now = ref(Date.now())
 let timer = 0
@@ -68,19 +72,25 @@ function mineItems(from: number, to: number): Row[] {
     let it: CalendarItem = i
     let est = i.status === 'pending'
     if (est) {
-      const p = (platByDay.value.get(dateKey(i.onlineAt)) ?? []).find((x) => x.provider === i.provider && x.id === i.id)
+      // 平台排播能给出确切时间/集数就替换掉推算值（网关条目没有 id，退回按剧名对）
+      const key = titleKey(i.title)
+      const p = (platByDay.value.get(dateKey(i.onlineAt)) ?? []).find((x) =>
+        x.id ? x.provider === i.provider && x.id === i.id : x.provider === i.provider && titleKey(x.title) === key)
       if (p) { it = { ...i, time: p.time || i.time, episodes: p.episodes || i.episodes, onlineAt: p.onlineAt || i.onlineAt }; est = false }
     }
     out.push({ ...it, key: `${i.provider}:${i.id}:${i.onlineAt}`, sub, est })
   }
-  // 芒果排播有、但订阅推算没有的（例如订阅没写更新规律）
+  // 平台排播有、但订阅推算没有的（例如订阅没写更新规律）
   for (const [k, items] of platByDay.value) {
     const t = new Date(`${k}T00:00:00`).getTime()
     if (t < from || t >= to) continue
     for (const p of items) {
-      const sub = subscriptionOf(p.provider, p.id)
-      if (!sub || out.some((r) => r.provider === p.provider && r.id === p.id && dateKey(r.onlineAt) === k)) continue
-      out.push({ ...p, source: 'subscription', status: 'pending', key: `${p.provider}:${p.id}:${p.onlineAt}`, sub, est: false })
+      const sub = subOfItem(p)
+      if (!sub) continue
+      const same = out.some((r) => dateKey(r.onlineAt) === k &&
+        (p.id ? r.provider === p.provider && r.id === p.id : titleKey(r.title) === titleKey(p.title)))
+      if (same) continue
+      out.push({ ...p, provider: sub.provider, id: sub.showId, poster: p.poster || sub.poster, source: 'subscription', status: 'pending', key: `${p.provider}:${p.id}:${p.onlineAt}`, sub, est: false })
     }
   }
   return out
@@ -185,10 +195,20 @@ function editSub(r: Row) {
   store.subFocus = r.sub?.id ?? ''
   go('subscriptions')
 }
+/**
+ * 点日历卡片：去哪由 openTarget 决定——已订阅进详情、有平台 id 进详情、
+ * 都没有（网关排播只有剧名）带着剧名跳搜索。
+ */
 function open(i: CalendarItem) {
-  if (!i.id) return
-  void openDetail(i.provider as Provider, i.id, { title: i.title, poster: i.poster, mediaKind: 'show' })
+  const t = openTarget(i, subOfItem(i))
+  if (!t) return
+  if (t.kind === 'detail') {
+    const sub = subOfItem(i)
+    return void openDetail(t.provider as Provider, t.id, { title: sub?.title || i.title, poster: sub?.poster || i.poster, mediaKind: 'show' })
+  }
+  void runSearch(t.query)
 }
+const openHint = (i: CalendarItem) => subOfItem(i) ? `打开《${i.title}》（已订阅）` : i.id ? `打开《${i.title}》` : `未订阅 · 点击搜索《${i.title}》`
 const progress = (s: Subscription | null) => {
   if (!s) return '—'
   const got = s.episodes.filter((e) => e.downloaded).length
@@ -197,24 +217,35 @@ const progress = (s: Subscription | null) => {
 const rulesText = (s: Subscription | null) => (s?.rules || '默认').replace(/\s*>\s*/g, ' › ').replace(/\s*&\s*/g, '&')
 const estSource = (r: Row) => r.sub?.updateText ? `按「${r.sub.updateText}」推算` : r.sub?.window ? `按检查时间窗推算` : '按以往更新时间推算'
 
-/* ---------- 发现新剧（芒果排播） ---------- */
+/* ---------- 发现新剧（网关排播 + 芒果兜底） ---------- */
 const kindOf = (i: CalendarItem) => (i.info || '').split('/')[0]!.trim()
+/** 平台展示名：网关给的 provider 是 TUI 平台 id */
+const PLATFORM_LABEL: Record<string, string> = { mgtv: '芒果TV', tencent: '腾讯视频', iqcn: '爱奇艺', youku: '优酷', bilibili: '哔哩哔哩' }
+const PLATFORM_LABELS = new Set(Object.values(PLATFORM_LABEL))
 const discoverDays = computed(() => {
   const types = new Set<string>()
+  const plats = new Map<string, string>()
   const days = platform.value
     .filter((d) => new Date(`${d.date}T00:00:00`).getTime() >= today.value)
     .map((d) => {
-      d.items.forEach((i) => i.info && types.add(kindOf(i)))
-      const items = d.items.filter((i) => (dType.value === 'all' || kindOf(i) === dType.value) && (!onlyUnsub.value || !subscriptionOf(i.provider, i.id)))
+      d.items.forEach((i) => {
+        if (i.provider) plats.set(i.provider, PLATFORM_LABEL[i.provider] ?? (kindOf(i) || i.provider))
+        // 网关条目的 info 是多平台文案，别把平台名当成「类型」
+        const k = kindOf(i)
+        if (k && !PLATFORM_LABELS.has(k)) types.add(k)
+      })
+      const items = d.items.filter((i) => (dType.value === 'all' || kindOf(i) === dType.value) && (dPlat.value === 'all' || i.provider === dPlat.value) && (!onlyUnsub.value || !subOfItem(i)))
       const dt = new Date(`${d.date}T00:00:00`)
       const diff = Math.round((dt.getTime() - today.value) / DAY)
       return { key: d.date, items, title: `${diff === 0 ? '今天 · ' : diff === 1 ? '明天 · ' : ''}${dt.getMonth() + 1}月${dt.getDate()}日 ${WD[dt.getDay()]}`, isToday: diff === 0 }
     })
     .filter((d) => d.items.length)
-  return { days, types: [...types].slice(0, 6) }
+  return { days, types: [...types].slice(0, 6), plats: [...plats] as Array<[string, string]> }
 })
 const suggestions = computed(() => (platform.value.find((d) => d.date === todayKey.value)?.items ?? platform.value[0]?.items ?? []).slice(0, 6))
 async function subscribe(i: CalendarItem) {
+  // 网关排播条目只有灯塔自家剧目 id，不是平台剧集 id：带着剧名去搜索页选定节目再订阅
+  if (!i.id) { void runSearch(i.title); return }
   try {
     await gvs('subscribe', { provider: i.provider, showId: i.id, title: i.title, poster: i.poster, kind: 'show', updateText: [i.episodes, i.time && `每周${'日一二三四五六'[new Date(i.onlineAt || Date.now()).getDay()]} ${i.time}更新`].filter(Boolean).join(' ') })
     toast(`已订阅《${i.title}》，之后会出现在「我的追剧」`, 'ok')
@@ -293,7 +324,7 @@ const subline = computed(() => {
       <button v-else-if="tab === 'discover'" type="button" class="btn" @click="go('search')"><Icon name="search" :size="15" />搜索节目</button>
     </header>
 
-    <p v-if="error && tab === 'discover'" class="warn-box">芒果 TV 排播暂时取不到：{{ error }}</p>
+    <p v-if="error && tab === 'discover'" class="warn-box">排播数据暂时取不到：{{ error }}</p>
 
     <!-- ===== 空状态 ===== -->
     <section v-if="tab === 'mine' && !subCount" class="emp">
@@ -305,12 +336,12 @@ const subline = computed(() => {
         <button type="button" class="btn" @click="tab = 'discover'">浏览发现新剧<Icon name="right" :size="14" /></button>
       </div>
       <template v-if="suggestions.length">
-        <span class="muted small">今天芒果TV上新</span>
+        <span class="muted small">近期各平台上新</span>
         <div class="sugg stagger">
           <div v-for="(i, n) in suggestions" :key="i.id + n" class="mc" data-card :style="{ '--i': n }">
-            <button type="button" class="pst lift" @click="open(i)"><Poster :url="i.poster" :provider="i.provider" :title="i.title" :title-size="14" loading="lazy" /><span v-if="i.time" class="bdg l">{{ i.time }}</span></button>
+            <button type="button" class="pst lift" :aria-label="`打开《${i.title}》`" :title="openHint(i)" @click="open(i)"><Poster :url="i.poster" :provider="i.provider" :title="i.title" :title-size="14" loading="lazy" /><span v-if="i.time" class="bdg l">{{ i.time }}</span><span v-if="subOfItem(i)" class="bdg r ok">已订阅</span></button>
             <b class="t">{{ i.title }}</b>
-            <span class="m"><span>{{ [kindOf(i), i.episodes].filter(Boolean).join(' · ') }}</span><button type="button" class="subb" @click="subscribe(i)">+ 订阅</button></span>
+            <span class="m"><span>{{ [kindOf(i), i.episodes].filter(Boolean).join(' · ') }}</span><span v-if="subOfItem(i)" class="subb done">已订阅</span><button v-else type="button" class="subb" @click="subscribe(i)">+ 订阅</button></span>
           </div>
         </div>
       </template>
@@ -428,11 +459,14 @@ const subline = computed(() => {
     <!-- ===== 发现新剧 ===== -->
     <section v-else class="disc">
       <div class="filters">
-        <div class="fl"><b>平台</b><span class="on">芒果TV</span><span class="dis" title="该平台暂未提供排播接口">腾讯视频</span><span class="dis" title="该平台暂未提供排播接口">爱奇艺</span><span class="dis" title="该平台暂未提供排播接口">优酷</span></div>
-        <div class="fl"><b>类型</b>
+        <div class="fl"><b>平台</b>
+          <button type="button" :class="{ on: dPlat === 'all' }" @click="dPlat = 'all'">全部</button>
+          <button v-for="p in discoverDays.plats" :key="p[0]" type="button" :class="{ on: dPlat === p[0] }" @click="dPlat = p[0]">{{ p[1] }}</button>
+          <label class="ou"><input v-model="onlyUnsub" type="checkbox" />只看未订阅</label>
+        </div>
+        <div v-if="discoverDays.types.length" class="fl"><b>类型</b>
           <button type="button" :class="{ on: dType === 'all' }" @click="dType = 'all'">全部</button>
           <button v-for="t in discoverDays.types" :key="t" type="button" :class="{ on: dType === t }" @click="dType = t">{{ t }}</button>
-          <label class="ou"><input v-model="onlyUnsub" type="checkbox" />只看未订阅</label>
         </div>
       </div>
       <template v-if="loading && !platform.length">
@@ -442,14 +476,14 @@ const subline = computed(() => {
         <h2 class="dh" :class="{ today: d.isToday }"><span>{{ d.title }}</span><small>{{ d.items.length }} 部</small><i class="line" /></h2>
         <div class="grid stagger">
           <div v-for="(i, n) in d.items" :key="i.id + n" class="mc" data-card :style="{ '--i': n }">
-            <button type="button" class="pst lift" :aria-label="`打开《${i.title}》`" @click="open(i)">
+            <button type="button" class="pst lift" :aria-label="`打开《${i.title}》`" :title="openHint(i)" @click="open(i)">
               <Poster :url="i.poster" :provider="i.provider" :title="i.title" :title-size="14" loading="lazy" />
               <span v-if="i.time" class="bdg l">{{ i.time }}</span>
-              <span v-if="subscriptionOf(i.provider, i.id)" class="bdg r ok">已订阅</span>
+              <span v-if="subOfItem(i)" class="bdg r ok">已订阅</span>
             </button>
             <b class="t" :title="i.title">{{ i.title }}</b>
             <span class="m"><span>{{ [kindOf(i), i.episodes].filter(Boolean).join(' · ') }}</span>
-              <span v-if="subscriptionOf(i.provider, i.id)" class="subb done">已订阅</span>
+              <span v-if="subOfItem(i)" class="subb done">已订阅</span>
               <button v-else type="button" class="subb" @click="subscribe(i)">+ 订阅</button></span>
           </div>
         </div>

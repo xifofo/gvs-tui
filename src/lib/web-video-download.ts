@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { DlTask } from './jobs'
 import type { FileConfig } from './config'
 import type { GwClient } from './client'
-import { downloadPlaylist, downloadProgress, playlistStatus } from './media'
+import { downloadPlaylist, downloadProgress, headersFor, playlistStatus } from './media'
 import { ensureFFmpeg, ensureMkvmerge } from './tools'
 import { ffmpegConcat, validateAudio, validateVideoDecode } from './ffmpeg'
 import { mkvmergeMux, mkvmergeRemux } from './mkvmerge'
@@ -10,6 +10,7 @@ import { mgtvCapabilities, miguCapabilities, selectedBilibiliMedia, webTracks, a
 import { probeFinishedMedia } from './gvs-record'
 import { verifyMiguManifest } from './migu-manifest'
 import { mgtvDurationCovers, mgtvExpectedDuration, verifyMgtvManifest } from './mgtv-manifest'
+import { releaseGroup } from './release-group.ts'
 
 type Emit = (status: string, pct: number, log: string) => void
 async function verifyCoverage(path: string, expected: number | undefined, signal?: AbortSignal, strict = false) {
@@ -18,7 +19,7 @@ async function verifyCoverage(path: string, expected: number | undefined, signal
   if (media.status !== 'probed' || !media.durationSeconds) throw new Error('未能验证媒体时长，已保留下载文件，请检查媒体工具')
   if (expected && (strict ? !mgtvDurationCovers(media.durationSeconds, expected) : expected > 30 && media.durationSeconds < expected - Math.max(10,expected*.05))) throw new Error('实际视频明显短于分集时长，可能是试看；已停止生成成品')
 }
-export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileConfig, task: DlTask, dest: string, work: string, emit: Emit, signal?: AbortSignal): Promise<void> {
+export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileConfig, task: DlTask, dest: string, work: string, emit: Emit, signal?: AbortSignal, audioLanguageFallback = ''): Promise<void> {
   signal?.throwIfAborted()
   if (task.provider === 'migu') {
     const data = await cli.invoke('migu','resolve',{id:task.vid,quality:task.quality,...miguCapabilities(task.vid)})
@@ -31,7 +32,7 @@ export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileCo
       emit('校验', .03, '本机核对咪咕清单的加密声明')
       await verifyMiguManifest(source.url, source.headers, signal)
     }
-    await downloadPlaylist({src:source.url,dest,ref:'https://www.miguvideo.com/',headers:source.headers,threads:cfg.threads,select:'muxed',muxTracks:true,transport:'re',workDir:work,workTag:'migu',signal,cb:(n,total,info)=>emit(playlistStatus('下载',info?.phase||'download'),.05+.85*(total>1?n/total:n),info?.log||'咪咕 CDN → 本机')})
+    await downloadPlaylist({src:source.url,dest,ref:'https://www.miguvideo.com/',headers:source.headers,threads:cfg.threads,select:'muxed',muxTracks:true,releaseGroup:releaseGroup(task,cfg),transport:'re',workDir:work,workTag:'migu',signal,cb:(n,total,info)=>emit(playlistStatus('下载',info?.phase||'download'),.05+.85*(total>1?n/total:n),info?.log||'咪咕 CDN → 本机')})
     // Existing queued tasks may contain the old minute-prefix duration (45:25 → 45).
     const resolvedDuration = Number(source.source.duration)
     const expected = Math.max(task.duration || 0, Number.isFinite(resolvedDuration) ? resolvedDuration : 0)
@@ -46,10 +47,14 @@ export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileCo
     if (!source) throw new Error('芒果没有返回可用播放地址')
     emit('校验', .03, data.preview === true || Number(data.preview) === 1 ? '核对芒果播放清单是否为完整内容' : '核对芒果播放清单')
     const expected = mgtvExpectedDuration(task.duration, data.duration, source.source.duration)
-    const headers = new Headers(source.headers)
-    if (!headers.has('Referer')) headers.set('Referer', 'https://www.mgtv.com/')
-    const checked = await verifyMgtvManifest(source.url, Object.fromEntries(headers), expected, signal)
-    await downloadPlaylist({src:checked.url,dest,ref:'https://www.mgtv.com/',headers:source.headers,threads:cfg.threads,select:'muxed',muxTracks:true,transport:'re',workDir:work,workTag:'mgtv',signal,cb:(n,total,info)=>emit(playlistStatus('下载',info?.phase || 'download'),.05+.85*(total>1?n/total:n),info?.log || '芒果 CDN → 本机')})
+    // Some TV CDN endpoints reject a web Referer with HTTP 405. Keep only
+    // provider-supplied Referer/UA and use identical headers for probe and RE.
+    const headers = headersFor('', 0, source.headers)
+    const checked = await verifyMgtvManifest(source.url, headers, expected, signal)
+    await downloadPlaylist({src:checked.url,dest,ref:'',headers,threads:cfg.threads,select:'muxed',muxTracks:true,releaseGroup:releaseGroup(task,cfg),
+      // RE can synthesize an English language tag for an unlabeled TS audio
+      // stream. A matched original language must be applied during our mux.
+      muxOriginalAudioLanguage: audioLanguageFallback,transport:'re',workDir:work,workTag:'mgtv',signal,cb:(n,total,info)=>emit(playlistStatus('下载',info?.phase || 'download'),.05+.85*(total>1?n/total:n),info?.log || '芒果 CDN → 本机')})
     // A changed CDN playlist must not silently produce a short output after preflight.
     await verifyCoverage(dest,Math.max(expected || 0, checked.durationSeconds),signal,true)
     return
@@ -86,15 +91,15 @@ export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileCo
   for (const path of paths.slice(plan.videos.length)) await validateAudio(ffmpeg,path,signal)
   emit('封装',.9,'本机合并视频和音频')
   if (!plan.videos[0]!.separate) {
-    if (paths.length===1) await mkvmergeRemux(mkvmerge,paths[0]!,dest,undefined,signal)
+    if (paths.length===1) await mkvmergeRemux(mkvmerge,paths[0]!,dest,undefined,signal,'',releaseGroup(task,cfg))
     else {
       const combined = join(work,'bili-combined.mkv')
       await ffmpegConcat(ffmpeg,paths,combined,signal)
-      await mkvmergeRemux(mkvmerge,combined,dest,undefined,signal)
+      await mkvmergeRemux(mkvmerge,combined,dest,undefined,signal,'',releaseGroup(task,cfg))
     }
   } else {
     const audios = plan.audios.map((track:WebTrack,i:number) => ({path:paths[plan.videos.length+i]!,lang:'und',isDefault:task.audioTracks?.find(a=>a.id === audioChoice(track))?.isDefault}))
-    await mkvmergeMux(mkvmerge,paths[0]!,audios,dest,undefined,signal)
+    await mkvmergeMux(mkvmerge,paths[0]!,audios,dest,undefined,signal,undefined,'',releaseGroup(task,cfg))
   }
   await verifyCoverage(dest,task.duration,signal)
 }

@@ -224,7 +224,27 @@ export async function validateAudio(ffmpeg: string, path: string, signal?: Abort
 export function validateVideoDecode(ffmpeg: string, path: string, signal?: AbortSignal, options: {
   requireAudio?: boolean
   onProgress?: (seconds: number) => void
+  /** Decode only a few windows instead of the whole file (long 4K episodes). */
+  sample?: { duration: number; windows?: number; secondsPerWindow?: number }
 } = {}): Promise<string[]> {
+  if (options.sample && options.sample.duration > 0) {
+    const windows = Math.max(1, options.sample.windows ?? 3)
+    const seconds = Math.min(30, Math.max(5, options.sample.secondsPerWindow ?? 20))
+    const total = options.sample.duration
+    return (async () => {
+      const errors: string[] = []
+      const step = windows === 1 ? 0 : (total - seconds) / (windows - 1)
+      for (let i = 0; i < windows; i++) {
+        signal?.throwIfAborted()
+        const at = Math.max(0, Math.min(total - seconds, Math.round(i * step)))
+        const found = await validateDecodeWindow(ffmpeg, path, signal, at, seconds, options.requireAudio)
+        options.onProgress?.(at + seconds)
+        errors.push(...found)
+        if (errors.length) return errors
+      }
+      return errors
+    })()
+  }
   const { promise, resolve, reject } = Promise.withResolvers<string[]>()
   const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error',
     ...(options.requireAudio ? ['-xerror', '-err_detect', 'explode'] : []),
@@ -249,6 +269,28 @@ export function validateVideoDecode(ffmpeg: string, path: string, signal?: Abort
   let errs = ''
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (s: string) => { errs = (errs + s).slice(-262144) })
+  child.once('error', (e) => reject(signal?.aborted ? (signal.reason ?? e) : e))
+  child.once('close', (code) => {
+    if (signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }
+    const lines = errs.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    if (lines.length) resolve(lines.slice(0, 8))
+    else if (code === 0) resolve([])
+    else resolve([`ffmpeg exit ${code}`])
+  })
+  return promise
+}
+
+/** Decode one short window; returns ffmpeg's error lines (empty when clean). */
+function validateDecodeWindow(ffmpeg: string, path: string, signal: AbortSignal | undefined, at: number, seconds: number, requireAudio?: boolean): Promise<string[]> {
+  const { promise, resolve, reject } = Promise.withResolvers<string[]>()
+  const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-loglevel', 'error',
+    ...(requireAudio ? ['-xerror', '-err_detect', 'explode'] : []),
+    '-ss', String(at), '-t', String(seconds),
+    '-i', path, '-map', '0:v', '-map', requireAudio ? '0:a' : '0:a?', '-f', 'null', '-'],
+    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
+  let errs = ''
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (s: string) => { errs = (errs + s).slice(-65536) })
   child.once('error', (e) => reject(signal?.aborted ? (signal.reason ?? e) : e))
   child.once('close', (code) => {
     if (signal?.aborted) { reject(signal.reason ?? new Error('已停止')); return }

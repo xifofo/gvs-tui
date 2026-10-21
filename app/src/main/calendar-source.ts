@@ -1,8 +1,9 @@
 import { MGTV_CALENDAR_URL, parseMgtvConf, type CalendarDay } from '../shared/calendar'
 
 /**
- * 芒果 TV 排播：GET playbill.api.mgtv.com/broadcost/conf，免签名免登录，约 15 天。
- * 不经过网关（网关目前没有 op=calendar；以后有了就在这里优先走网关，解析不变）。
+ * 芒果 TV 排播兜底：GET playbill.api.mgtv.com/broadcost/conf，免签名免登录，约 15 天。
+ * 主路径是网关（Core.calendar → provider=dengta，多平台官方排播）；这里只在网关
+ * 未连接或上游失败时接手，保证「发现新剧」至少还有芒果一家的排期。
  * 结果缓存 30 分钟，失败时退回上次成功的数据。
  */
 type Result = { days: CalendarDay[]; error: string; fetchedAt: number }

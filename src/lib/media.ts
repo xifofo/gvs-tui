@@ -953,7 +953,12 @@ export function runM3u8dl(bin: string, args: string[], logFile: string, cb?: Pro
     }
     cb(side.ratio, 1, { phase, log })
   }
-  const progress = reProgress((n, total, segments) => cb?.(n, total, { phase: 'download', segments }))
+  const progress = reProgress((n, total, segments) => {
+    // 多流（Apple TV：视频 + 多条配音 + 字幕）时 RE 的控制台行会先被最短的流
+    // 顶到 100%；文件系统分段计数才是整体进度，拿得到就不用控制台的值。
+    if (cwd && reDownloadedSegments(cwd, listedTotal)) return
+    cb?.(n, total, { phase: 'download', segments })
+  })
   // Take the resume baseline before any newly downloaded bytes are reported.
   emitSidecar()
   const collect = (chunk: string) => {
@@ -1114,6 +1119,11 @@ export async function downloadPlaylist(opts: {
   select?: 'video' | 'audio' | 'muxed'
   /** Combine separate audio/video from a clear master HLS or DASH into MKV. */
   muxTracks?: boolean
+  /** Matched original language for a single embedded audio track. Use our mux
+   * so RE's generic English tag cannot override confirmed title metadata. */
+  muxOriginalAudioLanguage?: string
+  /** Release group written as a global MKV tag by the local mux. */
+  releaseGroup?: string
   /** Use the original JS CDN transport while RE handles HLS/merge/decryption. */
   transport?: 'node' | 're'
   refreshSource?: () => Promise<{ src: string; key?: string }>
@@ -1234,7 +1244,7 @@ export async function downloadPlaylist(opts: {
       const audio = uris.length ? `url=(${uris.map(u => u.replace(/[.-]/g, m => `\\${m}`)).join('|')}):for=all` : 'best'
       args.push('--select-video', video, '--select-audio', audio)
     }
-    if (opts.muxTracks) {
+    if (opts.muxTracks && !opts.muxOriginalAudioLanguage && !opts.releaseGroup?.trim()) {
       const mkvmerge = await ensureMkvmerge()
       args.push('--mux-after-done', `format=mkv:muxer=mkvmerge:bin_path="${mkvmerge.replaceAll(':', '\\:')}"`)
     }
@@ -1301,17 +1311,17 @@ export async function downloadPlaylist(opts: {
     opts.signal?.throwIfAborted()
     let found = pickREOutput(workDir, opts.muxTracks)
     if (!found && opts.muxTracks) {
-      // RE explicitly disables its mux when it detects Dolby Vision. Its
-      // successful exit still leaves complete, decrypted tracks at the root.
+      // Use our mux for language correction, or when RE disables its own mux
+      // for Dolby Vision. Complete downloaded tracks remain at the root.
       const inputs = readdirSync(workDir).filter(name => /^download(?:\.[\w-]+)*\.(?:mp4|m4a|aac|ac3|eac3|ts|webm|srt|vtt|ass)$/i.test(name))
         .map(name => join(workDir,name)).filter(path=>fileSize(path)>0)
       if (inputs.length) {
         const merged = join(workDir,'download.MUX.mkv')
         runLog(`playlist work=${workDir} fallback=mkvmerge tracks=${inputs.length}`)
-        report(0,1,{phase:'merge',log:'下载器保留独立轨道；本机封装 MKV'})
+        report(0,1,{phase:'merge',log:'下载完成；本机封装 MKV'})
         await mkvmergeTrackFiles(await ensureMkvmerge(),inputs,merged,(n,total)=>{
           report(Math.min(0.99,n/Math.max(1,total)),1,{phase:'merge',log:`封装 MKV ${human(n)}/${human(total)}`})
-        },opts.signal)
+        },opts.signal,opts.muxOriginalAudioLanguage,opts.releaseGroup)
         found = merged
       }
     }

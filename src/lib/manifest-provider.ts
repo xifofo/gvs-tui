@@ -1,7 +1,7 @@
 import type { Audio, Quality, Subtitle } from '../types.ts'
 import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
-import { isObj } from './util.ts'
+import { asBool, isObj } from './util.ts'
 import { tierHeight } from './name.ts'
 
 export type ManifestSource = { url: string; headers: Record<string, string>; format: string; height: number; quality: string; clear: boolean; drm: string; live: boolean; contentKeys: string[]; manifest?: string }
@@ -42,7 +42,26 @@ export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: st
     const rows = Array.isArray(data.qualities) ? data.qualities.filter(isObj) : []
     const qualities: Quality[] = rows.filter(q => str(q.id) && Number(q.height) > 0).map(q => ({ id: str(q.id), label: str(q.label), title: str(q.label), size: 0, width: Number(q.width) || 0, height: Number(q.height), codec: str(q.codec), drm: 'playready', stream: str(q.id), hdr: str(q.hdr), fps: Number(q.fps) || undefined, tier: tierHeight(Number(q.width) || 0, Number(q.height)) }))
     if (!qualities.length) throw new Error('Apple TV 没有返回可用画质')
-    return { qualities, audios: [] }
+    // Apple TV 一片多配音、多字幕；网关按 1-based 序号标识，下载时原样传回，
+    // 由网关只把选中的渲染写进 master（它们的 URI 都叫 stream/playlist.m3u8）。
+    const audios: Audio[] = (Array.isArray(data.audios) ? data.audios : []).filter(isObj).map((a, i) => ({
+      id: str(a.id) || String(i + 1),
+      label: str(a.name) || str(a.language) || `音轨 ${i + 1}`,
+      lang: str(a.language),
+      codec: '',
+      isDefault: asBool(a.default),
+      selected: asBool(a.default) || i === 0,
+    }))
+    const subtitles: Subtitle[] = (Array.isArray(data.subtitles) ? data.subtitles : []).filter(isObj).map((s, i) => ({
+      id: str(s.id) || String(i + 1),
+      label: str(s.name) || str(s.language) || `字幕 ${i + 1}`,
+      lang: str(s.language),
+      forced: false,
+      sdh: false,
+      isDefault: asBool(s.default),
+      selected: asBool(s.default),
+    }))
+    return { qualities, audios, subtitles }
   }
   if (provider === 'dsnp') return probeDsnp(cli, cfg, id)
   const sources = await resolveManifest(cli, cfg, provider, id)
@@ -242,8 +261,13 @@ export function parseContentKeys(value: unknown): string[] {
   return [...keys].map(([kid, key]) => `${kid}:${key}`)
 }
 
-export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient'>, provider: string, id: string, quality = 'auto'): Promise<ManifestSource[]> {
+export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient'>, provider: string, id: string, quality = 'auto', selection?: { audio?: string[]; subtitle?: string[] }): Promise<ManifestSource[]> {
   const input = manifestInput(provider, cfg, id, quality)
+  if (provider === 'appletvplus' && selection) {
+    // 序号取自 probe；网关据此裁剪 master，RE 只需 --select-audio best。
+    if (selection.audio?.length) input.audio = selection.audio.join(',')
+    if (selection.subtitle?.length) input.subtitle = selection.subtitle.join(',')
+  }
   if (provider === 'hamivideo' || provider === 'friday' || provider === 'appletvplus' || provider === 'dsnp') input.download = true
   const sources = manifestSources(await cli.invoke(provider, 'resolve', input, undefined, { timeoutMs: 120_000 }))
   if (!sources.length) throw new Error('网关没有返回可用媒体清单')

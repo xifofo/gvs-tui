@@ -309,7 +309,7 @@ const request = computed<EnqueueRequest | null>(() => {
     quality: qIndex.value,
     audioIds: [...audioIds.value],
     ...(subtitles.value.length ? { subtitleIds: [...subtitleIds.value] } : {}),
-    defaultAudioId: defaultAudioId.value || undefined,
+    defaultAudioId: preferredAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
     publication: { category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, episodeNumbers: { ...publication.value.episodeNumbers } },
     tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
@@ -583,6 +583,7 @@ async function applyRule() {
               <div v-if="d?.provider === 'iq'" class="muted small">初始只选平台默认语言的音轨，其他配音可手动选择。</div>
               <div v-if="!embeddedOnly && audios.length" class="muted small">已选音轨默认优先 DTS，其次杜比 / 全景声，再选 AAC；也可手动指定，整批下载沿用此选择。</div>
               <div v-if="hasDts" class="muted small">选了 DTS 音轨，会用 MP4Box 封装成 MP4</div>
+              <div v-if="hasDts && d?.provider === 'youku' && !preferredAudioId" class="muted small">封装时若确认 DTS:X 为 10 声道，会优先将已选的 DDP 5.1 设为默认播放。</div>
             </section>
 
             <section class="qsec">

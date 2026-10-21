@@ -11,6 +11,21 @@ export const errorCatalog = [
     "message": "设备文件等级不足或已失效，请在 App「设置 → 设备文件」重新上传更高等级的设备文件后重试。"
   },
   {
+    "pattern": "DRM_LICENCE_REJECTED",
+    "code": "DRM_LICENCE_REJECTED",
+    "message": "平台拒绝为该设备文件发放许可证（设备可能已被吊销或等级不足），本次未计费；可查看诊断里的拒绝码。"
+  },
+  {
+    "pattern": "LICENCE_REQUIRES_PLAY",
+    "code": "LICENCE_REQUIRES_PLAY",
+    "message": "请先用同一个 API Key 获取该内容的播放地址，再请求许可证。"
+  },
+  {
+    "pattern": "PLAN_EXPIRED",
+    "code": "PLAN_EXPIRED",
+    "message": "下载计划已过期或不存在，请重新获取播放流后从断点继续；本次未计费。"
+  },
+  {
     "pattern": "DRM_CLIENT_DEVICE_UNREADABLE",
     "code": "DRM_CLIENT_DEVICE_UNREADABLE",
     "message": "已保存的设备文件无法读取，请在「设置 → 设备文件」删除后重新上传。"
@@ -131,6 +146,11 @@ export const errorCatalog = [
     "message": "代理地址格式不正确，请填写 HTTP/HTTPS 代理地址后重试；不使用代理时可留空。"
   },
   {
+    "pattern": "IQ_TV_MEMBERSHIP_NOT_RECOGNIZED",
+    "code": "MEMBERSHIP_REQUIRED",
+    "message": "当前账号没有这条内容在电视端的播放权益。同一账号在其它会员内容可用时，差异可能来自该内容的电视端或地区授权；请确认会员是否包含电视端，或换用账号可用的端观看。"
+  },
+  {
     "pattern": "IQ_DASH_PROGRAM_MISSING|IQ_DASH_REJECTED|DASH_PROGRAM_MISSING",
     "code": "MEDIA_UNAVAILABLE",
     "message": "视频平台暂未提供可用的播放内容，请稍后重试；若持续失败，请联系客服。"
@@ -209,6 +229,11 @@ export const errorCatalog = [
     "pattern": "REGION_RESTRICTED|REGION_BLOCKED|GEO_BLOCKED|AREA_LIMIT|地域限制|地区限制",
     "code": "REGION_RESTRICTED",
     "message": "平台明确限制了当前地区的访问，暂时无法获取此内容。"
+  },
+  {
+    "pattern": "UPS_PAYWALL|本节目是付费节目|已购买用户请:?登录",
+    "code": "MEMBERSHIP_REQUIRED",
+    "message": "当前账号在该端没有此节目的播放权益。酷喵TV、帧享、大屏是相互独立的产品线，请在对应端开通会员或换用已有权益的端后重试。"
   },
   {
     "pattern": "VIP_REQUIRED|MEMBERSHIP_REQUIRED|PAYMENT_REQUIRED|PAYWALL|需要会员|会员权限不足",
@@ -311,6 +336,21 @@ export const errorCatalog = [
     "message": "服务返回的数据暂时无法处理，请稍后重试；若持续失败，请联系客服。"
   },
   {
+    "pattern": "empty response|上游返回空包",
+    "code": "UPSTREAM_EMPTY_BODY",
+    "message": "视频平台本次没有返回播放数据，请稍后重试；若持续失败，请联系客服。"
+  },
+  {
+    "pattern": "did not return requested video",
+    "code": "UPSTREAM_NO_MEDIA",
+    "message": "视频平台本次没有返回这一集的播放数据，请稍后重试；若持续失败，请联系客服。"
+  },
+  {
+    "pattern": "CONTENT_NOT_IN_STOREFRONT",
+    "code": "CONTENT_NOT_IN_STOREFRONT",
+    "message": "该作品在你账号所在地区暂未上架，请在客户端切换地区后重试；若仍失败，请联系客服。"
+  },
+  {
     "pattern": "UNAVAILABLE|UPSTREAM_HTTP|(?:http|status|github)[ :_]*5[0-9][0-9]|service unavailable|bad gateway",
     "code": "SERVICE_UNAVAILABLE",
     "message": "服务暂时不可用，请稍后重试；若持续失败，请联系客服。"
@@ -321,8 +361,13 @@ export const errorCatalog = [
     "message": "本次请求未获允许，请检查账号和使用权限；若原因不明，请联系客服。"
   },
   {
-    "pattern": "(?:http|status)[ :_]*404|NOT_FOUND|(?<!encoder )not found",
+    "pattern": "encoder not found|automatic encoder selection failed",
+    "code": "MEDIA_FORMAT_UNSUPPORTED",
+    "message": "暂时无法处理这个视频版本，请尝试其他画质；若仍失败，请联系客服。"
+  },
+  {
+    "pattern": "(?:http|status)[ :_]*404|NOT_FOUND|not found",
     "code": "NOT_FOUND",
     "message": "未找到所需内容，请刷新页面或检查链接后重试。"
   }
-] as const
+]
