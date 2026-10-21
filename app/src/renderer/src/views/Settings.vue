@@ -312,7 +312,7 @@ const plat = (p: Provider) => hasProvider(p)
           <h2 class="h2s">命名与刮削</h2>
 
           <div class="srow">
-            <div class="sl"><span class="st">发布组</span><span class="sd">文件名结尾的组名后缀。</span></div>
+            <div class="sl"><span class="st">发布组</span><span class="sd">文件名结尾的组名后缀；新下载的 MKV 同步写入 GROUP 标签。</span></div>
             <div class="sc"><input v-model="form.releaseGroup" class="input" style="width: 200px" @change="save({ releaseGroup: form.releaseGroup }, 'rg')" /></div>
           </div>
 

@@ -1,4 +1,5 @@
 import { fetchMediaProbe } from './proxy'
+import { runLog } from './runlog'
 
 type ManifestResult = { url: string; durationSeconds: number; segmentCount: number }
 
@@ -50,8 +51,10 @@ export async function verifyMgtvManifest(
     const readSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
     let response: Response
     let text: string
+    let httpStatus: number | undefined
     try {
       response = await fetchMediaProbe(url, { headers, signal: readSignal })
+      httpStatus = response.status
       if (!response.ok || !response.body) {
         await response.body?.cancel().catch(() => {})
         throw new Error(`HTTP ${response.status}`)
@@ -72,7 +75,11 @@ export async function verifyMgtvManifest(
     } catch (error) {
       signal?.throwIfAborted()
       if (error instanceof Error && error.message.startsWith('芒果播放清单过大')) throw error
-      throw new Error('芒果播放清单读取失败，无法确认完整内容；请刷新画质后重试', { cause: error })
+      const rejected = httpStatus !== undefined && (httpStatus < 200 || httpStatus >= 300)
+      const reason = rejected ? `http_${httpStatus}` : readSignal.aborted ? 'timeout' : 'network'
+      // Keep the CDN host and status, never the signed path, query or headers.
+      runLog(`mgtv manifest read failed host=${new URL(url).host} http=${httpStatus ?? '-'} reason=${reason}`)
+      throw new Error(`芒果播放清单读取失败${rejected ? `（HTTP ${httpStatus}）` : ''}，无法确认完整内容；请刷新画质后重试`, { cause: error })
     }
     const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
     if (lines[0] !== '#EXTM3U') throw new Error('芒果返回的内容不是有效播放清单')

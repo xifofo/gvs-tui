@@ -40,6 +40,9 @@ function fixtureClient(bytes: Buffer, subtitles = true, onSegment?: () => void, 
     if (action === 'probe') return plan
     if (action === 'streams') {
       expect(input.transport).toBe('local-v1')
+      // Every plan declares that this client stores whole-file (progressive MP4)
+      // ranges directly; gateways without the declaration refuse such plans.
+      expect(input['local-copy']).toBe('1')
       return { ...plan, planId: 'fixture-plan', transport: 'local-v1', localProcessing: plan.localProcessing ?? { version: 1, ticket: 'fixture', identity: 'fixture' },
         video: { ...(plan.video as Record<string, unknown>), segments: parts.map(part => ({ contentlength: part.length })) },
         subtitles: subtitles ? [{ index: 0, language_id: 1, formats: ['srt'] }] : [] }
@@ -130,6 +133,14 @@ withHostProbe('domestic shared runner names the measured default audio, preserve
     expect(first.final.log).toContain('Season 00')
     expect(first.events.some(e => e.status === '命名')).toBe(true)
     expect(first.final.note).toBe('')
+    // Use the resolved host path (Windows CI has bin/ffprobe.exe but not PATH 'ffprobe').
+    const probe = hostFFprobe()
+    expect(probe).toBeTruthy()
+    const probed = spawnSync(probe!, ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', first.final.log], { encoding: 'utf8', timeout: 10000 })
+    expect(probed.status).toBe(0)
+    expect(probed.stdout).toBeTruthy()
+    const tags = JSON.parse(probed.stdout!).format.tags
+    expect(tags.GROUP).toBe('WF')
     const specs = await probeFinishedMedia(first.final.log)
     expect(specs).toMatchObject({ status: 'probed', width: 320, height: 240, codec: 'h264', fps: 25,
       audio: { status: 'confirmed', codec: 'aac', channels: 2 } })
@@ -218,6 +229,7 @@ withHostProbe('domestic job preflights audio and muxes restored media without ru
     }
     if (action === 'streams') {
       expect(input.transport).toBe('local-v1')
+      expect(input['local-copy']).toBe('1')
       expect(input.vid).toBe('currentDV')
       return { planId: 'fixture-plan', transport: 'local-v1', localProcessing: { version: 1, ticket: 'fixture', identity: 'fixture' }, video: { segments: parts.map(p => ({ contentlength: p.length })) }, audios: audioCatalog, subtitles: [{ index: 0, language_id: 1, formats: ['srt'] }] }
     }

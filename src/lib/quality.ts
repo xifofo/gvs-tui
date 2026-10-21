@@ -324,10 +324,10 @@ export async function probeOptions(
   cfg: FileConfig,
   provider: string,
   vid: string,
-  opts: { title?: string; skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: TencentPlayParams } = {},
+  opts: { title?: string; duration?: number; skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: TencentPlayParams } = {},
 ): Promise<StreamOptions> {
   switch (provider) {
-    case 'mgtv': case 'bilibili': case 'migu': return probeWebVideo((p,a,input) => cli.invoke(p,a,input),provider,vid)
+    case 'mgtv': case 'bilibili': case 'migu': return probeWebVideo((p,a,input) => cli.invoke(p,a,input),provider,vid,opts.duration)
     case 'iqcn': return iqcnOptions(await cli.invoke('iqcn', 'probe', { tvid: vid }, {}, { timeoutMs: 150000 }), vid)
     case 'iq': return iqOptions(await cli.invoke('iq','probe',{vid},cli.extra(cfg,'iq'),{timeoutMs:150000}), opts.title)
     case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp': return probeManifest(cli, cfg, provider, vid)

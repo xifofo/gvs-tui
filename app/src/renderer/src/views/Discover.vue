@@ -175,7 +175,7 @@ onBeforeUnmount(() => io?.disconnect())
     <label v-if="provider?.provider === 'appletvplus'" class="sections">
       <span>榜单地区</span>
       <select v-model="appleRegion" class="input" :disabled="loading" @change="pick(provider)">
-        <option value="">跟随账号（未登录为美国）</option><option value="us">美国</option><option value="hk">香港</option><option value="tw">台湾</option><option value="jp">日本</option><option value="gb">英国</option><option value="au">澳大利亚</option><option value="ca">加拿大</option>
+        <option value="">跟随账号（未登录为美国）</option><option value="us">美国</option><option value="hk">香港</option><option value="tw">台湾</option><option value="jp">日本</option><option value="gb">英国</option><option value="au">澳大利亚</option><option value="ca">加拿大</option><option value="tr">土耳其</option>
       </select>
     </label>
     <div v-if="visibleSections.length > 1" class="sections">

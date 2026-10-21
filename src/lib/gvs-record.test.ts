@@ -113,6 +113,22 @@ test('default audio selection follows container/mux evidence instead of highest 
   expect(mediaSpecsFromProbe(payload(aac, { ...dts, disposition: { default: 1 } })).audio?.status).toBe('ambiguous')
 })
 
+test('DTS:X uses its actual MP4 sample entry when ffprobe has no decoder name', () => {
+  const video = { codec_type: 'video', codec_name: 'hevc', width: 3840, height: 1608 }
+  const dtsx = { codec_type: 'audio', id: '0x2', codec_tag_string: 'dtsx', channels: 10, disposition: { default: 1 } }
+  const ddp = { codec_type: 'audio', id: '0x3', codec_name: 'eac3', channels: 6, profile: 'Dolby Digital Plus + Dolby Atmos' }
+  const payload = JSON.stringify({ streams: [video, dtsx, ddp] })
+  expect(mediaSpecsFromProbe(payload).audio).toMatchObject({ codec: 'dtsx', channels: 10, trackId: 2 })
+  expect(mediaSpecsFromProbe(payload, { enabledAudioTrackIds: [3] }).audio)
+    .toMatchObject({ codec: 'eac3', channels: 6, atmos: true, trackId: 3 })
+  const boxTrack = { id: 2, type: 'soun', codec: 'dtsx', channels: 10, scale: 48000,
+    movieScale: 1000, edits: [], language: 'eng', name: '', duration: 48000 }
+  const missing = JSON.stringify({ streams: [video, { ...dtsx, codec_tag_string: 'unknown', channels: 0 }] })
+  expect(mediaSpecsFromProbe(missing, { mp4AudioTracks: [boxTrack], enabledAudioTrackIds: [2] }).audio)
+    .toMatchObject({ codec: 'dtsx', channels: 10, evidence: 'mp4_enabled' })
+  expect(mediaSpecsFromProbe(missing, { mp4AudioTracks: [{ ...boxTrack, id: 3 }] }).audio?.codec).toBeUndefined()
+})
+
 test('cover art is ignored and unreadable/absent audio never fabricates AAC or stereo', () => {
   const video = { codec_type: 'video', codec_name: 'hevc', width: 3840, height: 1600 }
   const cover = { codec_type: 'video', codec_name: 'mjpeg', width: 200, height: 200, disposition: { attached_pic: 1 } }

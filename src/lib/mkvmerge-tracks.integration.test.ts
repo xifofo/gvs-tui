@@ -32,3 +32,39 @@ mediaTest('independent RE tracks preserve audio and subtitle language when RE pr
     expect(existsSync(missing)).toBe(false)
   } finally {rmSync(root,{recursive:true,force:true})}
 },30000)
+
+mediaTest('matched original language corrects only single unknown or generic English embedded audio, without changing packets',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'gvs-original-audio-mux-'))
+  try {
+    const ff=await ensureFFmpeg(),mkv=await ensureMkvmerge()
+    const identify=(path:string)=>{
+      const p=spawnSync(mkv,['-J',path],{windowsHide:true,encoding:'utf8',timeout:10000})
+      if(p.status!==0)throw new Error(p.stderr)
+      return JSON.parse(p.stdout).tracks as Array<{type:string;properties:{language_ietf:string;default_track:boolean}}>
+    }
+    const hashes=(path:string)=>{
+      const p=spawnSync(ff,['-nostdin','-v','error','-i',path,'-map','0:v','-map','0:a','-c','copy','-f','streamhash','-hash','sha256','-'],{windowsHide:true,encoding:'utf8',timeout:10000})
+      if(p.status!==0)throw new Error(p.stderr)
+      return p.stdout.trim()
+    }
+    for(const [language,count,fallback,expected] of [
+      ['eng',1,'zh',['zh']],['und',1,'zh',['zh']],
+      ['jpn',1,'zh',['ja']],['eng',1,'',['en']],
+      ['eng',2,'zh',['en','en']],
+    ] as const){
+      const input=join(root,`source-${language}-${count}-${fallback}.mkv`),out=input+'.out.mkv'
+      const args=['-nostdin','-v','error','-f','lavfi','-i','testsrc2=s=64x64:r=12:d=0.4','-f','lavfi','-i','sine=sample_rate=48000:duration=0.4','-map','0:v','-map','1:a']
+      if(count===2)args.push('-map','1:a')
+      args.push('-c:v','libx264','-c:a','aac','-metadata:s:a',`language=${language}`,input)
+      const made=spawnSync(ff,args,{windowsHide:true,encoding:'utf8',timeout:10000})
+      if(made.status!==0)throw new Error(made.stderr)
+      const before=hashes(input)
+      await mkvmergeTrackFiles(mkv,[input],out,undefined,undefined,fallback)
+      const tracks=identify(out),audio=tracks.filter(t=>t.type==='audio')
+      expect(tracks.filter(t=>t.type==='video')).toHaveLength(1)
+      expect(audio.map(t=>t.properties.language_ietf)).toEqual([...expected])
+      expect(audio.filter(t=>t.properties.default_track)).toHaveLength(1)
+      expect(hashes(out)).toBe(before)
+    }
+  } finally {rmSync(root,{recursive:true,force:true})}
+},30000)

@@ -13,6 +13,7 @@ import type { GwClient } from '../src/lib/client'
 // No account, upstream CDN or external network is used.
 let dir: string, base: string, server: Server
 const requests: string[] = []
+const mgtvHeaders: Array<{path:string;referer?:string;ua?:string}> = []
 const ffmpeg = lookBundledFFmpeg()
 function generate(args: string[]) {
   const out = spawnSync(ffmpeg,['-nostdin','-hide_banner','-loglevel','error','-y',...args],{windowsHide:true,encoding:'utf8'})
@@ -27,10 +28,21 @@ beforeAll(async()=>{
   generate(['-i',join(dir,'muxed.mp4'),'-c','copy','-hls_time','1','-hls_list_size','0','-hls_segment_filename',join(dir,'part%d.ts'),join(dir,'index.m3u8')])
   writeFileSync(join(dir,'mgtv-master.m3u8'),'#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nindex.m3u8\n')
   writeFileSync(join(dir,'mgtv-misleading-duration.m3u8'),readFileSync(join(dir,'index.m3u8'),'utf8').replace(/#EXTINF:[^,]+,/g,'#EXTINF:60,'))
+  for(const name of ['mgtv-no-referer','mgtv-explicit-headers']) {
+    writeFileSync(join(dir,name+'.m3u8'),readFileSync(join(dir,'index.m3u8'),'utf8').replace(/part\d+\.ts/g,part=>`${name}-${part}`))
+    for(const part of readdirSync(dir).filter(p=>/^part\d+\.ts$/.test(p)))
+      writeFileSync(join(dir,`${name}-${part}`),readFileSync(join(dir,part)))
+  }
   const allowed=new Set(readdirSync(dir))
   server=createServer((req,res)=>{
     const name=new URL(req.url||'/',base).pathname.slice(1)
     requests.push(name)
+    if(name.startsWith('mgtv-no-referer') || name.startsWith('mgtv-explicit-headers')) {
+      mgtvHeaders.push({path:name,referer:req.headers.referer,ua:req.headers['user-agent']})
+      const rejected=name.startsWith('mgtv-no-referer') ? Boolean(req.headers.referer)
+        : req.headers.referer!=='https://www.mgtv.com/player' || req.headers['user-agent']!=='MGTV-fixture'
+      if(rejected){res.writeHead(405);res.end('wrong CDN headers');return}
+    }
     if(!allowed.has(name)){res.writeHead(404);res.end();return}
     const raw=readFileSync(join(dir,name))
     res.setHeader('Content-Type',name.endsWith('.m3u8')?'application/vnd.apple.mpegurl':'application/octet-stream')
@@ -45,7 +57,7 @@ beforeAll(async()=>{
 afterAll(async()=>{await new Promise<void>(resolve=>server?.close(()=>resolve()))})
 const cfg={threads:1} as FileConfig
 function task(provider:string,quality:string):DlTask {return {provider,vid:provider==='bilibili'?'BV17x411w7KC?p=2':'3660147',quality,duration:2,height:0,title:'合成测试',series:'合成测试',season:1,episode:2,group:'TEST',codec:'',tmdbId:0,nameDots:'',year:0,plot:''}}
-function inspect(output:string){const p=spawnSync(lookMkvmerge(),['-J',output],{windowsHide:true,encoding:'utf8'});if(p.status!==0)throw new Error(p.stderr);return JSON.parse(p.stdout) as {tracks:Array<{type:string;properties:{default_track:boolean;audio_channels?:number}}>}}
+function inspect(output:string){const p=spawnSync(lookMkvmerge(),['-J',output],{windowsHide:true,encoding:'utf8'});if(p.status!==0)throw new Error(p.stderr);return JSON.parse(p.stdout) as {tracks:Array<{type:string;properties:{default_track:boolean;audio_channels?:number;language_ietf?:string}}>}}
 
 test('Bilibili downloads freshly resolved page-specific tracks and muxes the chosen default audio',async()=>{
   const t=task('bilibili','80|avc');t.audioTracks=[{id:'30280|aac|mp4a.40.2|dash',label:'AAC',lang:'原声',isDefault:false},{id:'30232|aac|mp4a.40.2|dash',label:'AAC',lang:'原声',isDefault:true}]
@@ -81,6 +93,37 @@ test('MGTV downloads and remuxes a clear HLS fixture through the shared local me
   await downloadWebVideo(cli,cfg,t,output,work,()=>{})
   expect(inspect(output).tracks.map(t=>t.type)).toEqual(['video','audio'])
   expect(requests.some(p=>p.endsWith('.ts'))).toBe(true)
+},60000)
+
+test('MGTV applies the matched Chinese original language while muxing embedded HLS audio',async()=>{
+  const t=task('mgtv','9')
+  const cli={invoke:async()=>({vid:t.vid,actualQuality:'9',preview:false,
+    media:[{type:'video',url:base+'/index.m3u8',quality:'9',format:'hls',drm:false}]})} as unknown as Pick<GwClient,'invoke'>
+  const work=join(dir,'mgtv-chinese');mkdirSync(work)
+  const output=join(dir,'mgtv-chinese-output.mkv')
+  await downloadWebVideo(cli,cfg,t,output,work,()=>{},undefined,'zh')
+  const tracks=inspect(output).tracks
+  expect(tracks.map(t=>t.type)).toEqual(['video','audio'])
+  const audio=tracks.find(t=>t.type==='audio')!
+  expect(audio.properties.language_ietf).toBe('zh')
+  expect(audio.properties.default_track).toBe(true)
+},60000)
+
+test('MGTV keeps provider header requirements for both the preflight playlist and downloaded segments',async()=>{
+  for(const name of ['mgtv-no-referer','mgtv-explicit-headers']) {
+    const headers=name==='mgtv-no-referer' ? {} : {Referer:'https://www.mgtv.com/player','User-Agent':'MGTV-fixture'}
+    const t=task('mgtv','9')
+    const cli={invoke:async()=>({vid:t.vid,actualQuality:'9',preview:false,
+      media:[{type:'video',url:`${base}/${name}.m3u8`,headers,quality:'9',format:'hls',drm:false}]})} as unknown as Pick<GwClient,'invoke'>
+    const work=join(dir,name);mkdirSync(work)
+    const output=join(dir,name+'-output.mkv')
+    await downloadWebVideo(cli,cfg,t,output,work,()=>{},undefined,'zh')
+    expect(inspect(output).tracks.map(t=>t.type)).toEqual(['video','audio'])
+    const seen=mgtvHeaders.filter(row=>row.path.startsWith(name))
+    expect(seen.filter(row=>row.path.endsWith('.m3u8')).length).toBeGreaterThanOrEqual(2)
+    expect(seen.some(row=>row.path.endsWith('.ts'))).toBe(true)
+    expect(seen.every(row=>name==='mgtv-no-referer' ? !row.referer : row.referer===headers.Referer && row.ua===headers['User-Agent'])).toBe(true)
+  }
 },60000)
 
 test('MGTV accepts a complete stream with a wrong preview flag and resolves duration for an old task',async()=>{

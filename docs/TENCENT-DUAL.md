@@ -4,6 +4,8 @@
 
 设置 → **腾讯双扫码**：同时向网关请求 `method=app` 与 `method=tv`（TV 默认 `tv_fp_profile=virtual_ott_4k`，可用环境变量 `TENCENT_TV_FP_PROFILE` 覆盖），保存两张官方 PNG 并并行轮询。两路都登录成功后，默认把播放会话切到极光 TV（默认播放会话为极光 TV）。
 
+手动配置 TV 设备时，只有设备号 `tencentTVDevice`、QUA `tencentTVQUA` 和版本 `tencentTVVersion` 全部非空才会作为一组发送。上次扫码保存的设备号用于记录会话，不构成完整的手动设备配置；重新扫码时使用网关预设，不混入这些残缺参数，也不清除本地记录或网关已保存的登录态。
+
 
 ## 两个视频流
 

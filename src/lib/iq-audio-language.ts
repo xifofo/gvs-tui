@@ -11,11 +11,25 @@ const AUDIO_LANGUAGES: Record<number, { language: string; name: string; incorrec
   157: { language: 'tha', name: '泰语', incorrectName: /^(?:普通话|普通話|国语|國語|中文|Mandarin|Chinese)(?=$|[\s·])/i },
 }
 
+function audioLanguageId(row: Record<string, unknown>, requestedId = ''): number {
+  const id = asString(row.id) || requestedId
+  return Number(row.lid ?? (/^\d+:\d+:\d+$/.test(id) ? id.split(':')[0] : NaN))
+}
+
+/** iq.com ID 6 is Japanese even when its Cookie route is marked domestic.
+ * Only admit the confirmed French mislabel; domestic Mandarin/other IDs keep
+ * their own language namespace, including conflicting or missing metadata.
+ */
+export function hasIQJapaneseAudioMislabel(row: Record<string, unknown>, requestedId = ''): boolean {
+  if (audioLanguageId(row, requestedId) !== 6) return false
+  const reported = [row.language, row.lang].map(value => asString(value).trim().toLowerCase()).filter(Boolean)
+  return reported.length > 0 && reported.every(value => ['fra', 'fre', 'fr', 'french', '法语', '法語'].includes(value))
+}
+
 /** Correct known source audio IDs without changing the requested track identity. */
 export function normalizeIQAudioLanguage(row: Record<string, unknown>, requestedId = ''): Record<string, unknown> {
-  if (row.source === 'domestic') return row
-  const id = asString(row.id) || requestedId
-  const lid = Number(row.lid ?? (/^\d+:\d+:\d+$/.test(id) ? id.split(':')[0] : NaN))
+  if (row.source === 'domestic' && !hasIQJapaneseAudioMislabel(row, requestedId)) return row
+  const lid = audioLanguageId(row, requestedId)
   const known = AUDIO_LANGUAGES[lid]
   if (!known) return row
   const label = asString(row.label).replace(known.incorrectName, known.name)

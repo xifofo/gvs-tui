@@ -281,3 +281,36 @@ test('ticketless cleartext plan downloads through the installed helper and remov
     expect(readdirSync(work)).toEqual([])
   } finally { rmSync(work, { recursive: true, force: true }) }
 })
+
+test('whole-file plans copy plain media ranges instead of running the TS helper', () => {
+  const plan = { transport: 'local-v1', localProcessing: { version: 1, ticket: '', identity: 'fixture' }, video: { delivery: 'single-file', drmType: 1 } }
+  expect(iqcnProcessing(plan)).toEqual({ version: 1, ticket: '', identity: 'fixture', copy: true })
+  // The copy path needs the gateway's explicit cleartext declaration.
+  for (const drmType of [undefined, 0, 2, 5, '2', null]) {
+    expect(() => iqcnProcessing({ ...plan, video: { delivery: 'single-file', drmType } })).toThrow('整文件投放不是明文')
+  }
+  // A playlist rendition keeps the existing restore contract.
+  expect(iqcnProcessing({ ...plan, video: { delivery: 'hls', drmType: 1 } }))
+    .toEqual({ version: 1, ticket: '', identity: 'fixture', drmType: 1 })
+})
+
+test('whole-file segment download skips the local helper and keeps exact bytes', async () => {
+  const work = mkdtempSync(join(tmpdir(), 'iqcn-whole-'))
+  try {
+    // A progressive .mp4 range: not 188-byte TS packets, so the helper would
+    // reject it. The copy path must return it untouched.
+    const bytes = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypisom'), Buffer.alloc(8388608 - 12, 0x11)])
+    const processing = iqcnProcessing({ transport: 'local-v1', localProcessing: { version: 1, ticket: '', identity: 'fixture' }, video: { delivery: 'single-file', drmType: 1 } })
+    let restored = 0, timed: Record<string, unknown> | undefined
+    const cli = { invoke: async () => ({ transport: 'local-v1', index: 2, bytes: bytes.length, urls: ['https://fixture.ptqy.gitv.tv/whole.mp4?start=16777216&end=25165824&contentlength=8388608&sd=0'] }) } as unknown as GwClient
+    const result = await downloadIQCNLocalSegment(cli, 'plan', 2, bytes.length, processing, work, undefined, {
+      fetch: async url => { expect(url).toContain('whole.mp4'); return new Response(bytes) },
+      restore: async () => { restored++; throw new Error('whole-file ranges must not reach the TS helper') },
+      onTiming: timing => { timed = { ...timing } },
+    })
+    expect(result.equals(bytes)).toBe(true)
+    expect(restored).toBe(0)
+    expect(timed).toMatchObject({ index: 2, bytes: bytes.length, descriptorRequests: 1 })
+    expect(readdirSync(work)).toEqual([])
+  } finally { rmSync(work, { recursive: true, force: true }) }
+})

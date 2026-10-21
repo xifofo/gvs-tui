@@ -94,6 +94,90 @@ export function parseMgtvConf(json: unknown, now = Date.now()): CalendarDay[] {
   return out
 }
 
+export type CalendarOpenTarget =
+  | { kind: 'detail'; provider: string; id: string }
+  | { kind: 'search'; query: string }
+
+/**
+ * 点日历/发现页的条目时该去哪：
+ * 1. 有匹配的订阅 → 打开那条订阅的详情（用订阅自己的 provider + showId，一定跳得动）；
+ * 2. 条目自带平台剧集 id（芒果兜底排播）→ 直接开详情；
+ * 3. 只有剧名（网关排播）→ 带着剧名去搜索页，不假装能开详情。
+ */
+export function openTarget(
+  item: { id: string; provider: string; title: string },
+  sub: { provider: string; showId: string } | null,
+): CalendarOpenTarget | null {
+  if (sub?.showId) return { kind: 'detail', provider: sub.provider, id: sub.showId }
+  if (item.id) return { kind: 'detail', provider: item.provider, id: item.id }
+  if (item.title.trim()) return { kind: 'search', query: item.title.trim() }
+  return null
+}
+
+const TITLE_NOISE = /[\s\u00a0·・:：;；\-—_~～.,，。!！?？'‘’"“”《》〈〉「」『』【】()[\]（）]/g
+
+/**
+ * 标题归一：去掉空白、标点、书名号与「第 N 季」后缀。
+ *
+ * 用途：网关排播条目只有剧名（灯塔不给平台剧集 id），要和用户已有订阅对上是
+ * 「已订阅 / 未订阅、点进去看哪一页」的唯一依据，所以两边都用这个 key 比。
+ */
+export function titleKey(title: string): string {
+  return (title || '')
+    .replace(/第[一二三四五六七八九十0-9]+[季部]/g, '')
+    .replace(TITLE_NOISE, '')
+    .toLowerCase()
+}
+
+/**
+ * 网关 `provider=dengta / action=calendar` 载荷 → CalendarDay[]。
+ *
+ * 载荷形状（`/v1/invoke` 的 data）：
+ *   { today, horizon, days: [{ date, weekday, today, items: [
+ *       { title, provider, platforms, time, episodes, total, poster, posterHor } ] }] }
+ *
+ * 抓包与签名全在网关侧，客户端只做这一层形状映射：
+ * - `provider` 已经是 TUI 的平台 id（tencent / iqcn / youku / mgtv）；
+ * - `platforms` 是上游原始文案（「爱奇艺/腾讯视频」），塞进 `info` 复用卡片副标题与平台筛选；
+ * - `id` 留空：灯塔只给自家剧目 id，不是平台剧集 id，不能拿去订阅/开详情；
+ *   点卡片时用 `titleKey` 找已订阅的那一部，找不到就带着剧名跳搜索。
+ */
+export function parseGatewayCalendar(json: unknown, now = Date.now()): CalendarDay[] {
+  const root = json as { days?: unknown; data?: { days?: unknown } } | null
+  const list = Array.isArray(root?.days) ? root.days : Array.isArray(root?.data?.days) ? root.data!.days! : []
+  const today = dateKey(now)
+  const out: CalendarDay[] = []
+  for (const raw of list as Record<string, unknown>[]) {
+    const date = str(raw.date)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
+    const items: CalendarItem[] = (Array.isArray(raw.items) ? raw.items : [])
+      .map((x) => {
+        const it = x as Record<string, unknown>
+        const time = str(it.time)
+        const total = Number(it.total) || 0
+        const at = new Date(`${date}T${/^\d{1,2}:\d{2}$/.test(time) ? time.padStart(5, '0') : '20:00'}:00`).getTime()
+        return {
+          provider: str(it.provider),
+          id: '',
+          title: str(it.title),
+          info: str(it.platforms),
+          episodes: str(it.episodes) || (total > 0 ? `全${total}集` : ''),
+          time,
+          onlineAt: Number.isFinite(at) ? at : 0,
+          onlineText: '',
+          poster: str(it.poster),
+          posterHor: str(it.posterHor),
+          url: '',
+          source: 'platform' as const,
+        }
+      })
+      .filter((i) => i.title)
+      .sort((a, b) => a.time.localeCompare(b.time))
+    out.push({ date, weekday: str(raw.weekday), today: date === today, items })
+  }
+  return out
+}
+
 export type UpdateInfo = {
   /** 已更新到第几集 */
   latest: number

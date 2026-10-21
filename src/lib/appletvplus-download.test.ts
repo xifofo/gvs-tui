@@ -56,3 +56,35 @@ test('Apple TV imports transient CK, distinguishes verification and restricts of
   const bad=new ProviderSessions(async()=>({state:'awaiting_cookie',url:'https://evil.invalid/'}))
   await expect(bad.command({provider:'appletvplus',op:'web'})).rejects.toThrow('非官方')
 })
+
+test('Apple TV probe exposes every audio and subtitle rendition with gateway indexes', async () => {
+  const cli = {
+    invoke: async (_p: string, a: string) => {
+      expect(a).toBe('probe')
+      return {
+        qualities: [{ id: '1080|H265|PQ|24', height: 1080, width: 1920, codec: 'H265', hdr: 'PQ' }],
+        audios: [{ id: '1', language: 'en', name: 'English', default: true }, { id: '2', language: 'tr', name: 'Türkçe', default: false }],
+        subtitles: [{ id: '1', language: 'zh-Hant', name: '繁體中文', default: false }, { id: '2', language: 'en', name: 'English (CC)', default: false }],
+      }
+    },
+  } as unknown as GwClient
+  const out = await probeManifest(cli, {} as FileConfig, 'appletvplus', id)
+  expect(out.audios.map(a => [a.id, a.lang, a.selected])).toEqual([['1', 'en', true], ['2', 'tr', false]])
+  expect(out.subtitles?.map(s => [s.id, s.lang])).toEqual([['1', 'zh-Hant'], ['2', 'en']])
+})
+
+test('Apple TV download passes the chosen audio/subtitle indexes to resolve', async () => {
+  const seen: Record<string, unknown>[] = []
+  const cli = {
+    invoke: async (_p: string, _a: string, input: Record<string, unknown>) => {
+      seen.push(input)
+      return response
+    },
+  } as unknown as GwClient
+  await resolveManifestDownload(cli, {}, 'appletvplus', id, '1080|H265|PQ|24', { audio: ['2'], subtitle: ['1', '2'] })
+  expect(seen[0]).toMatchObject({ id, download: true, audio: '2', subtitle: '1,2' })
+  seen.length = 0
+  await resolveManifestDownload(cli, {}, 'appletvplus', id, '1080|H265|PQ|24')
+  expect(seen[0]?.audio).toBeUndefined()
+  expect(seen[0]?.subtitle).toBeUndefined()
+})

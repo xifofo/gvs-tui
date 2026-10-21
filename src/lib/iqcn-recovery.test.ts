@@ -38,7 +38,7 @@ test('real job flow re-probes before streams and never submits the old episode h
       expect(input).toEqual({ tvid: 'episode2' })
       return { tvid: 'episode2', formats: [{ bid: 800, br: 200, fr: 60, vid: 'newHash', codec_code: 1 }] }
     }
-    expect(input).toEqual({ tvid: 'episode2', bid: '800', br: '200', fr: '60', vid: 'newHash', transport: 'local-v1' })
+    expect(input).toEqual({ tvid: 'episode2', bid: '800', br: '200', fr: '60', vid: 'newHash', transport: 'local-v1', 'local-copy': '1' })
     throw stop
   } } as unknown as GwClient
   await expect(downloadIQCN(cli, { vid: 'episode2', quality: '800|200|60|oldHash', codec: 'H265' } as DlTask, '', '', () => {})).rejects.toThrow(stop.message)
@@ -53,7 +53,7 @@ test('domestic unknown-range batch requests the current episode video after veri
       id: `800|100|25|${input.tvid}Video`, codec_code: 1, dynamic_range_code: -1,
     }] }
     expect(action).toBe('streams')
-    expect(input).toEqual({ tvid: 'current', bid: '800', br: '100', fr: '25', vid: 'currentVideo', transport: 'local-v1' })
+    expect(input).toEqual({ tvid: 'current', bid: '800', br: '100', fr: '25', vid: 'currentVideo', transport: 'local-v1', 'local-copy': '1' })
     // End the fixture at the plan boundary; no media or output files are needed.
     throw new Error('fixture plan boundary reached')
   } } as unknown as GwClient

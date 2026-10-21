@@ -87,15 +87,19 @@ test('mgtv refuses ambiguous variants, loops and invalid child URLs', async () =
   })
 })
 
-test('mgtv bounds playlist reads and reports CDN 403 as a read failure, without leaking the URL', async () => {
+test('mgtv bounds playlist reads and reports CDN 403/405 without leaking the URL', async () => {
   await fixture((req, res) => {
     if (req.url === '/large') res.end('x'.repeat(1024 * 1024 + 1))
-    else { res.writeHead(403); res.end('denied') }
+    else { res.writeHead(req.url?.startsWith('/tv-cdn') ? 405 : 403); res.end('denied') }
   }, async base => {
     await expect(verifyMgtvManifest(base + '/large', {}, 40)).rejects.toThrow('清单过大')
     await expect(verifyMgtvManifest(base + '/private?token=secret', {}, 40)).rejects.toThrow('清单读取失败')
     try { await verifyMgtvManifest(base + '/private?token=secret', {}, 40) }
-    catch (error) { expect((error as Error).message).not.toContain('secret') }
+    catch (error) {
+      expect((error as Error).message).toContain('HTTP 403')
+      expect((error as Error).message).not.toContain('secret')
+    }
+    await expect(verifyMgtvManifest(base + '/tv-cdn?token=secret', {}, 40)).rejects.toThrow('HTTP 405')
   })
 })
 
