@@ -153,6 +153,10 @@ async function remove(): Promise<void> {
 .name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink-3); }
 .dim { color: var(--ink-3); font-weight: 500; font-size: 12px; }
 .l1s { margin-top: 4px; }
-.pool { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 0 20px 10px; }
-.poolrow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+/* .srow 是单行 flex（说明区 flex-grow + 操作区 flex-shrink:0）。设备池是第三块
+   内容，必须独占一行：不给 .srow 换行的话 .pool 的 width:100% 会把说明区挤到
+   只剩一个字宽，整段文案竖排。 */
+.srow { flex-wrap: wrap; }
+.pool { display: flex; flex-direction: column; gap: 6px; flex: 1 0 100%; min-width: 0; padding-top: 2px; }
+.poolrow { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
 </style>
