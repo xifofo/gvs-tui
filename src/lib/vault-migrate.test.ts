@@ -103,3 +103,10 @@ test('empty config needs no migration', async () => {
   expect(result).toEqual({ migrated: [], clearedDead: [], kept: [] })
   expect(calls).toHaveLength(0)
 })
+
+test('IQ domestic import sends an explicit source and waits for durable acknowledgement', async () => {
+  let sent: Record<string, unknown> | undefined
+  const cli={invoke:async (_provider: string,_action:string,input:Record<string,unknown>)=>{sent=input;return {imported:true,persisted:true,domesticImported:true}}}
+  await pushLocalCredential(cli as any,'iq','P00001=synthetic-domestic','domestic')
+  expect(sent).toEqual({op:'import',cookie:'P00001=synthetic-domestic',cookieSource:'domestic'})
+})

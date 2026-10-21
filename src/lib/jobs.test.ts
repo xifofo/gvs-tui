@@ -188,7 +188,7 @@ test('finished download removes leftover cache folders next to the file', () => 
 })
 
 
-test('youku separate audio only for 帧享 HQ cmfv with playlist', () => {
+test('youku CMAF always requires separate audio and never silently changes a selected stream', () => {
   const hq = {
     audio_delivery: 'separate',
     video: { stream_type: 'cmfv5hd4_dolbyvision_hfr_hbr_hq', playlist_url: 'https://v.m3u8' },
@@ -204,10 +204,10 @@ test('youku separate audio only for 帧享 HQ cmfv with playlist', () => {
     audio_tracks: [{ stream_type: 'cmfa4hd5_atmos51', playlist_url: 'https://hq-a.m3u8' }],
   }
   expect(youkuUsesSeparateAudio(tv, 'hls5hd3')).toBe(false)
-  expect(youkuUsesSeparateAudio(tv, 'hls5hd4_sdr_hfr_hbr_bit10_hq')).toBe(false)
+  expect(() => youkuUsesSeparateAudio(tv, 'hls5hd4_sdr_hfr_hbr_bit10_hq')).toThrow('所选档位')
 
-  // If the requested HLS row is missing, the actual fallback is the HQ video.
-  expect(youkuUsesSeparateAudio(hq, 'hls5hd3')).toBe(true)
+  // Missing HLS selection must not become the default HQ video.
+  expect(() => youkuUsesSeparateAudio(hq, 'hls5hd3')).toThrow('所选档位')
   // A present HLS row keeps its embedded audio despite leftover HQ inventory.
   expect(youkuUsesSeparateAudio({ ...hq, streams: [
     { stream_type: 'hls5hd3', media_type: 'video', playlist_url: 'https://hls.m3u8' },
@@ -217,26 +217,21 @@ test('youku separate audio only for 帧享 HQ cmfv with playlist', () => {
     video: { stream_type: 'cmfv5hd4_sdr_hfr_hbr_bit10_hq' },
     audio_tracks: [{ stream_type: 'cmfa1hd3' }],
   }
-  expect(youkuUsesSeparateAudio(invOnly, 'cmfv5hd4_sdr_hfr_hbr_bit10_hq')).toBe(false)
+  expect(() => youkuUsesSeparateAudio(invOnly, 'cmfv5hd4_sdr_hfr_hbr_bit10_hq')).toThrow('所选档位')
 })
 
-test('Youku episode fallback uses the actual HQ address and downloads its default audio', () => {
+test('Youku missing selections stop instead of borrowing the default video and audio', () => {
   const hq = 'cmfv5hd4_sdr_hbr_bit10_hq'
   const data = {
-    video: { stream_type: hq, playlist_url: 'https://hq-video.m3u8' },
-    audio_delivery: 'separate',
-    audio_tracks: [{ stream_type: 'cmfa1hd3', playlist_url: 'https://default-aac.m3u8', default: true }],
+    video: { stream_type:hq, playlist_url:'https://hq-video.m3u8' },
+    audio_delivery:'separate', audio_tracks:[{ stream_type:'cmfa1hd3', playlist_url:'https://default-aac.m3u8', default:true }],
   }
-  expect(youkuVideoPlaylist(data, 'mp5hd4')).toBe('https://hq-video.m3u8')
-  expect(youkuUsesSeparateAudio(data, 'mp5hd4')).toBe(true)
-  // Old batches with no selected audio rows use the current episode's default.
+  expect(() => youkuVideoPlaylist(data, 'mp5hd4')).toThrow('所选档位')
+  expect(() => youkuUsesSeparateAudio(data, 'mp5hd4')).toThrow('所选档位')
+  expect(youkuVideoPlaylist(data, '')).toBe('https://hq-video.m3u8')
   expect(youkuAudioPlaylist(data, '')).toBe('https://default-aac.m3u8')
-  expect(youkuUsesSeparateAudio({ ...data, audio_delivery: undefined }, 'mp5hd4')).toBe(true)
-  expect(youkuUsesSeparateAudio({ ...data, video: { playlist_url: 'https://hq-video.m3u8' }, streams: [
-    { stream_type: hq, media_type: 'video', playlist_url: 'https://hq-video.m3u8' },
-    { stream_type: 'mp5hd4', media_type: 'video', playlist_url: '' },
-  ] }, 'mp5hd4')).toBe(true)
-  expect(youkuUsesSeparateAudio({ ...data, video: { stream_type: 'mp5hd4', playlist_url: 'https://muxed.m3u8' } }, hq)).toBe(false)
+  expect(youkuUsesSeparateAudio(data, hq)).toBe(true)
+  expect(youkuUsesSeparateAudio({ ...data, audio_delivery:'muxed', audio_tracks:[] }, hq)).toBe(true)
 })
 
 test('multi-ep batch does not cross-wire first episode audio onto later episodes', () => {

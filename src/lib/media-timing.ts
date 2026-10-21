@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { isEac3CompatibilityDiagnostic, validateEac3WithAudioToolbox } from './eac3-validation.ts'
 
 export function isEac3ProbeError(message: string): boolean {
   const detail = message.match(/读取原始时间戳失败 \(0\)[\s\S]*?: (\[eac3 @ [\s\S]*)$/)?.[1]
@@ -97,20 +98,27 @@ export async function firstPresentationMs(ffmpeg: string, path: string, stream: 
     const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-v', 'error', '-copyts', '-i', path,
       '-map', `0:${stream}`, '-c', 'copy', '-frames:0', '64', '-avoid_negative_ts', 'disabled', '-f', 'framecrc', 'pipe:1'],
     { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
-    let errors = '', parseError: unknown
+    let errors = '', overflow = false, parseError: unknown
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
       try { parser.feed(chunk) } catch (e) { parseError = e; child.kill() }
     })
-    child.stderr.on('data', (b: Buffer) => { errors = (errors + b.toString()).slice(-4000) })
+    child.stderr.on('data', (b: Buffer) => {
+      errors += b.toString()
+      if (errors.length > 4000) { overflow = true; errors = errors.slice(-4000) }
+    })
     child.once('error', (e) => reject(signal?.aborted ? (signal.reason ?? e) : e))
-    child.once('close', (code) => {
+    child.once('close', async (code) => {
       try {
         if (signal?.aborted) throw signal.reason ?? new Error('已停止')
         if (parseError) throw parseError
-        if (code !== 0 || errors.trim()) throw new Error(`读取原始时间戳失败 (${code}) ${stream} ${path}: ${errors.trim()}`)
+        const compatible = process.platform === 'darwin' && !overflow && isEac3CompatibilityDiagnostic(errors)
+        if (code !== 0 || overflow || (errors.trim() && !compatible)) throw new Error(`读取原始时间戳失败 (${code}) ${stream} ${path}: ${errors.trim()}`)
         const track = parser.finish()[0]
         if (!track?.packets || !Number.isFinite(track.firstMs)) throw new Error('轨道没有有效的呈现时间戳')
+        // A valid packet PTS plus full independent audio checks allows stream
+        // copy without dropping the opening packet or altering its timestamps.
+        if (compatible) await validateEac3WithAudioToolbox(ffmpeg, path, signal)
         resolve(track.firstMs)
       } catch (e) { reject(e) }
     })
@@ -144,7 +152,7 @@ export async function inspectMediaTiming(ffmpeg: string, path: string, signal?: 
     const child = spawn(ffmpeg, ['-nostdin', '-hide_banner', '-v', 'error', '-copyts', '-i', path,
       '-map', '0:v?', '-map', '0:a?', '-c', 'copy', '-avoid_negative_ts', 'disabled', '-f', 'framecrc', 'pipe:1'],
     { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal })
-    let errors = '', diagnosticTail = '', codecOnly = true
+    let errors = '', diagnosticTail = '', codecOnly = true, overflow = false
     let parseError: unknown
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
@@ -152,6 +160,7 @@ export async function inspectMediaTiming(ffmpeg: string, path: string, signal?: 
     })
     child.stderr.on('data', (b: Buffer) => {
       const text = b.toString()
+      if (errors.length + text.length > 4000) overflow = true
       errors = (errors + text).slice(-4000)
       const lines = (diagnosticTail + text).split(/\r?\n/)
       diagnosticTail = lines.pop() ?? ''
@@ -160,16 +169,18 @@ export async function inspectMediaTiming(ffmpeg: string, path: string, signal?: 
       if (diagnosticTail.length > 4000) { codecOnly = false; diagnosticTail = diagnosticTail.slice(-4000) }
     })
     child.once('error', (e) => reject(signal?.aborted ? (signal.reason ?? e) : e))
-    child.once('close', (code) => {
+    child.once('close', async (code) => {
       try {
         if (signal?.aborted) throw signal.reason ?? new Error('已停止')
         if (parseError) throw parseError
         // FFmpeg may return 0 even after "File ended prematurely".
         if (diagnosticTail.trim() && !isCodecProbeDiagnostic(diagnosticTail)) codecOnly = false
+        const compatible = code === 0 && process.platform === 'darwin' && !overflow && codecOnly && isEac3CompatibilityDiagnostic(errors)
         const recoverable = code === 0 && options.onCodecDiagnostic && codecOnly && !!errors.trim()
-        if (code !== 0 || (errors.trim() && !recoverable)) throw new Error(`媒体包校验失败 (${code}): ${errors.trim()}`)
+        if (code !== 0 || (errors.trim() && !recoverable && !compatible)) throw new Error(`媒体包校验失败 (${code}): ${errors.trim()}`)
         const tracks = parser.finish()
         if (!tracks.length || tracks.some(t => !t.packets)) throw new Error('媒体轨道为空')
+        if (compatible) await validateEac3WithAudioToolbox(ffmpeg, path, signal)
         if (recoverable) options.onCodecDiagnostic!(errors)
         resolve(tracks)
       } catch (e) { reject(e) }

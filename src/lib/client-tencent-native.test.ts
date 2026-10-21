@@ -1,0 +1,278 @@
+import { beforeEach, afterEach, describe, expect, test } from 'bun:test'
+
+const savedResearch = process.env.GVS_TENCENT_NATIVE_RESEARCH
+beforeEach(() => { process.env.GVS_TENCENT_NATIVE_RESEARCH = '1' })
+afterEach(() => {
+  if (savedResearch === undefined) delete process.env.GVS_TENCENT_NATIVE_RESEARCH
+  else process.env.GVS_TENCENT_NATIVE_RESEARCH = savedResearch
+})
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { GwClient } from './client.ts'
+import type { FileConfig } from './config.ts'
+import { setRunLogDisabled } from './runlog.ts'
+
+const cleanups: (() => void)[] = []
+afterEach(() => { while (cleanups.length) cleanups.pop()!() })
+
+function setup(source: 'tui_process' | 'electron_process') {
+  setRunLogDisabled(true)
+  cleanups.push(() => setRunLogDisabled(false))
+  const dir = mkdtempSync(join(tmpdir(), 'tx-business-flow-'))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  const previousDiagnostics = process.env.GVS_TENCENT_DIAGNOSTICS_PATH
+  process.env.GVS_TENCENT_DIAGNOSTICS_PATH = join(dir, 'isolated-diagnostics.jsonl')
+  cleanups.push(() => { if (previousDiagnostics === undefined) delete process.env.GVS_TENCENT_DIAGNOSTICS_PATH; else process.env.GVS_TENCENT_DIAGNOSTICS_PATH = previousDiagnostics })
+  const path = join(dir, 'producer.jsonl')
+  const calls: { action: string; input: Record<string, unknown>; account: string; auth: string }[] = []
+  let stopped = false
+  let beforeBind: (() => Promise<void>) | undefined
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', async fetch(req) {
+    const body = await req.json() as { action: string; input: Record<string, unknown> }
+    calls.push({ ...body, account: req.headers.get('X-Gvs-Account') || 'default', auth: req.headers.get('Authorization') || '' })
+    const input = body.input
+    if (body.action === 'report' && input.report_type === 'bind') await beforeBind?.()
+    const data = body.action !== 'report' ? (body.action === 'detail' ? { episodes: [{ vid: 'episode1' }] } : { em: 0, has_url: true })
+      : input.report_type === 'bind' ? { binding: 'fixture-binding-' + (req.headers.get('X-Gvs-Account') || 'default'), observation_sources: ['tui_process', 'electron_process'] }
+      : input.report_type === 'event' ? { status: stopped ? 'transport_error' : input.send === '1' ? 'qimei_decrypted_unverified' : 'preview', ...(stopped ? { delivery_unknown: true, stop: true } : {}) }
+      : { status: 'observed_locally' }
+    return Response.json({ code: 0, msg: 'SUCCESS', data })
+  } })
+  cleanups.push(() => server.stop(true))
+  const cfg = { host: server.url.href.replace(/\/$/, ''), key: 'fixture-key', tencentMode: 'tv', tencentObservations: true, tencentNativeEventFile: path, tencentNativeEventMode: 'send' } as FileConfig
+  let account = 'slot-a'
+  const client = new GwClient(cfg.host, cfg.key, () => cfg, source)
+  client.accountFor = () => account
+  function write(id: string, delivery: 'mirror' | 'pending', target = account) {
+    appendFileSync(path, JSON.stringify({ gateway: cfg.host, account: target, delivery, event: {
+      id, kind: 'qimei', source: 'android_app', source_sha256: '2'.repeat(64), device_guid_sha256: 'a'.repeat(64), observed_at: Date.now(),
+      payload: { native: { protobuf_base64: 'CAE=', cpt: '2', tm: String(Date.now()), nn: 'fixture-nonce', usec: 100 } },
+    } }) + '\n')
+  }
+  writeFileSync(path, '')
+  return { client, calls, cfg, write, switchAccount: (value: string) => { account = value }, failDelivery: () => { stopped = true }, setBeforeBind: (callback: () => Promise<void>) => { beforeBind = callback } }
+}
+
+describe('Tencent business flow through the shared app/TUI GwClient', () => {
+  for (const source of ['tui_process', 'electron_process'] as const) {
+    test(`${source}: detail, quality probe and download share the correct account and consume native events`, async () => {
+      const f = setup(source)
+      f.write('mirror-before-detail', 'mirror')
+      await f.client.invoke('tencent', 'detail', { cid: 'cover1', session_type: 'tv' })
+      f.write('pending-before-probe', 'pending')
+      await f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+      const job = f.client.forkTencentJob(5, 'episode1')
+      f.switchAccount('slot-b')
+      f.write('pending-old-job', 'pending', 'slot-a')
+      await job.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+      await job.closeTencentTransfer(false, false)
+      const native = f.calls.filter(c => c.input.report_type === 'event')
+      expect(native).toHaveLength(3)
+      expect(native.map(c => c.input.send)).toEqual(['0', '1', '1'])
+      expect(f.calls.every(c => c.account === 'slot-a')).toBe(true)
+      expect(f.calls.every(c => c.auth === 'Bearer fixture-key')).toBe(true)
+      expect(f.calls.filter(c => c.input.report_type === 'bind')).toHaveLength(1)
+      expect(f.calls.filter(c => c.action === 'play').every(c => c.input.report_binding === 'fixture-binding-slot-a')).toBe(true)
+      const observations = f.calls.filter(c => c.input.report_type === 'observe').map(c => JSON.parse(String(c.input.payload)))
+      expect(observations.every(c => c.source === source)).toBe(true)
+      expect(native.every(c => JSON.parse(String(c.input.payload)).source === 'android_app')).toBe(true)
+    })
+  }
+
+  test('switching account obtains its own binding and cannot inherit a previous flow', async () => {
+    const f = setup('electron_process')
+    await f.client.invoke('tencent', 'detail', { cid: 'cover1', session_type: 'tv' })
+    f.switchAccount('slot-b')
+    f.write('slot-b-event', 'pending')
+    await f.client.invoke('tencent', 'play', { vid: 'episode2', session_type: 'tv' })
+    const bindings = f.calls.filter(c => c.input.report_type === 'bind')
+    expect(bindings.map(c => c.account)).toEqual(['slot-a', 'slot-b'])
+    const play = f.calls.find(c => c.action === 'play')!
+    expect(play.account).toBe('slot-b')
+    expect(play.input.report_binding).toBe('fixture-binding-slot-b')
+  })
+
+  test('an account switch while binding is in flight cannot reroute its event or business request', async () => {
+    const f = setup('electron_process')
+    let release!: () => void, entered!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const ready = new Promise<void>(resolve => { entered = resolve })
+    f.setBeforeBind(async () => { entered(); await gate })
+    f.write('owner-a', 'pending')
+    const operation = f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    await ready
+    f.switchAccount('slot-b')
+    release()
+    await operation
+    expect(f.calls.every(c => c.account === 'slot-a')).toBe(true)
+    expect(f.calls.filter(c => c.action === 'play')).toHaveLength(1)
+    expect(f.calls.filter(c => c.input.report_type === 'event')).toHaveLength(1)
+  })
+
+  test('new source files start a new flow while an existing job keeps its original producer', async () => {
+    const f = setup('tui_process')
+    await f.client.invoke('tencent', 'detail', { cid: 'cover1', session_type: 'tv' })
+    const job = f.client.forkTencentJob(9, 'episode1')
+    const nextFile = f.cfg.tencentNativeEventFile + '.next'
+    writeFileSync(nextFile, '')
+    f.cfg.tencentNativeEventFile = nextFile
+    await f.client.invoke('tencent', 'detail', { cid: 'cover2', session_type: 'tv' })
+    f.write('old-job-source', 'pending')
+    await job.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    expect(f.calls.filter(c => c.input.report_type === 'bind')).toHaveLength(2)
+    const events = f.calls.filter(c => c.input.report_type === 'event')
+    expect(events).toHaveLength(1)
+    expect(JSON.parse(String(events[0]?.input.payload)).id).toBe('old-job-source')
+  })
+
+  test('unknown native delivery stops before media retrieval and does not replay automatically', async () => {
+    const f = setup('tui_process')
+    f.write('pending', 'pending'); f.failDelivery()
+    await expect(f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })).rejects.toThrow('native event flow stopped')
+    expect(f.calls.filter(c => c.action === 'play')).toHaveLength(0)
+    await expect(f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })).rejects.toThrow('stopped after rejection')
+    expect(f.calls.filter(c => c.input.report_type === 'event')).toHaveLength(1)
+  })
+
+  test('without a producer the actual desktop action remains local observations only', async () => {
+    const f = setup('tui_process'); f.cfg.tencentNativeEventFile = ''
+    await f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    expect(f.calls.some(c => c.action === 'play')).toBe(true)
+    expect(f.calls.filter(c => c.input.report_type === 'event')).toHaveLength(0)
+    expect(f.calls.some(c => c.input.report_type === 'observe')).toBe(true)
+  })
+})
+
+
+test('fixture collect feeds phone-free templates before drain without adb', async () => {
+  setRunLogDisabled(true)
+  const dir = mkdtempSync(join(tmpdir(), 'tx-fixture-collect-'))
+  const path = join(dir, 'producer.jsonl')
+  writeFileSync(path, '')
+  const calls: Record<string, unknown>[] = []
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', async fetch(req) {
+    const body = await req.json() as { action: string; input: Record<string, unknown> }
+    calls.push(body.input)
+    const input = body.input
+    const data = body.action !== 'report' ? { em: 0, has_url: true }
+      : input.report_type === 'bind' ? { binding: 'fixture-binding', observation_sources: ['tui_process'] }
+      : input.report_type === 'event' ? { status: 'preview', sent: false }
+      : { status: 'observed_locally' }
+    return Response.json({ code: 0, msg: 'SUCCESS', data })
+  } })
+  try {
+    const cfg = {
+      host: server.url.href.replace(/\/$/, ''),
+      key: 'fixture-key',
+      tencentMode: 'tv',
+      tencentObservations: true,
+      tencentNativeEventCollect: 'fixture',
+      tencentNativeEventFile: path,
+      tencentNativeEventMode: 'preview',
+      tencentTVDevice: 'D0F1A2B3C4D511F191697C8C09268FCA',
+    } as FileConfig
+    const client = new GwClient(cfg.host, cfg.key, () => cfg, 'tui_process')
+    await client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    const events = calls.filter(c => c.report_type === 'event')
+    expect(events.length).toBeGreaterThan(0)
+    expect(events.every(c => c.send === '0')).toBe(true)
+    const kinds = events.map(c => JSON.parse(String(c.payload)).kind)
+    expect(kinds).toContain('watch')
+    expect(kinds).toContain('qimei')
+    expect(readFileSync(path, 'utf8').trim().split('\n').length).toBeGreaterThanOrEqual(3)
+  } finally {
+    server.stop(true)
+    rmSync(dir, { recursive: true, force: true })
+    setRunLogDisabled(false)
+  }
+})
+
+
+for (const source of ['tui_process', 'electron_process'] as const) {
+  test(`${source}: normal TV operations are automatic and ignore old collector settings`, async () => {
+    delete process.env.GVS_TENCENT_NATIVE_RESEARCH
+    const f = setup(source)
+    // Upgrades must also work when the old opt-in was saved as disabled.
+    f.cfg.tencentObservations = false
+    f.cfg.tencentNativeEventCollect = 'fixture'
+    f.cfg.tencentNativeEventMode = 'send'
+    await f.client.invoke('tencent', 'detail', { cid: 'cover1', session_type: 'tv' })
+    await f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    const job = f.client.forkTencentJob(42, 'episode1')
+    f.switchAccount('slot-b')
+    await job.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+    job.observeTencentTransfer(1024, 2048)
+    await job.closeTencentTransfer(false, false)
+    expect(f.calls.filter(c => c.input.report_type === 'bind')).toHaveLength(1)
+    expect(f.calls.some(c => c.input.report_type === 'observe')).toBe(true)
+    expect(f.calls.filter(c => c.input.report_type === 'event')).toHaveLength(0)
+    expect(readFileSync(f.cfg.tencentNativeEventFile!, 'utf8')).toBe('')
+    expect(f.calls.every(c => c.account === 'slot-a')).toBe(true)
+    const observations = f.calls.filter(c => c.input.report_type === 'observe').map(c => JSON.parse(String(c.input.payload)))
+    expect(observations.every(e => e.source === source)).toBe(true)
+    expect(observations.some(e => e.action === 'download' && e.phase === 'finish')).toBe(true)
+    expect(observations.some(e => 'played_time_mills' in e.metrics)).toBe(false)
+  })
+}
+
+test('a fresh desktop TV client needs no reporting or collector settings', async () => {
+  delete process.env.GVS_TENCENT_NATIVE_RESEARCH
+  const f = setup('electron_process')
+  delete f.cfg.tencentObservations
+  delete f.cfg.tencentNativeEventFile
+  delete f.cfg.tencentNativeEventCollect
+  delete f.cfg.tencentNativeEventMode
+  await f.client.invoke('tencent', 'search', { q: 'title', session_type: 'tv' })
+  expect(f.calls.map(c => c.input.report_type || c.action)).toEqual(['bind', 'observe', 'search', 'observe'])
+})
+
+test('research replay stays preview-only even with a saved send mode', async () => {
+  const f = setup('tui_process')
+  f.cfg.tencentNativeEventCollect = 'fixture'
+  f.cfg.tencentNativeEventMode = 'send'
+  f.cfg.tencentTVDevice = 'D0F1A2B3C4D511F191697C8C09268FCA'
+  await f.client.invoke('tencent', 'play', { vid: 'episode1', session_type: 'tv' })
+  const events = f.calls.filter(c => c.input.report_type === 'event')
+  expect(events.length).toBeGreaterThan(0)
+  expect(events.every(c => c.input.send === '0')).toBe(true)
+})
+
+for (const legacy of [false,true]) {
+  test(`real desktop client search detail and play survive a blocked profile (legacy=${legacy})`,async()=>{
+    const previous=process.env.GVS_TENCENT_NATIVE_RESEARCH
+    delete process.env.GVS_TENCENT_NATIVE_RESEARCH
+    const previousDiagnostics=process.env.GVS_TENCENT_DIAGNOSTICS_PATH
+    const directory=mkdtempSync(join(tmpdir(),'tx-profile-business-isolation-'))
+    process.env.GVS_TENCENT_DIAGNOSTICS_PATH=join(directory,'diagnostics.jsonl')
+    const calls:Array<{action:string;input:Record<string,unknown>}>=[]
+    let businessRisk=false
+    const server=Bun.serve({port:0,hostname:'127.0.0.1',async fetch(req){
+      const body=await req.json() as {action:string;input:Record<string,unknown>};calls.push(body)
+      if(body.action==='report'&&body.input.report_type!=='bind')throw new Error('Profile stopped: no extra report calls permitted')
+      const delivery={status:'blocked',stop:true,automatic_retry:false,report_requests:0,service_code:'0'}
+      const data=body.action==='report'?{binding:'fixture-business-binding',status:legacy?'blocked':'bound',...(legacy?{stop:true}:{}),adprofile:{generated:true,complete:false,qimei_registration:{generated:true},registration_delivery:delivery}}
+        :body.action==='search'?{items:[{cid:'synthetic-cover',title:'fixture'}]}:body.action==='detail'?{episodes:[{vid:'synthetic-episode'}]}:{em:businessRisk?93:0,has_url:!businessRisk}
+      return Response.json({code:0,msg:'SUCCESS',data})
+    }})
+    try{
+      const cfg={host:server.url.href.replace(/\/$/,''),key:'fixture-key',tencentMode:'tv'} as FileConfig
+      const cli=new GwClient(cfg.host,cfg.key,()=>cfg,'electron_process')
+      expect((await cli.invoke('tencent','search',{q:'fixture',session_type:'tv'})).items).toBeArray()
+      expect((await cli.invoke('tencent','detail',{cid:'synthetic-cover',session_type:'tv'})).episodes).toBeArray()
+      expect((await cli.invoke('tencent','play',{vid:'synthetic-episode',session_type:'tv'})).em).toBe(0)
+      expect(calls.map(c=>c.action)).toEqual(['report','search','detail','play'])
+      expect(calls.slice(1).every(c=>c.input.report_binding==='fixture-business-binding')).toBe(true)
+      businessRisk=true
+      await expect(cli.invoke('tencent','play',{vid:'synthetic-episode',session_type:'tv'})).rejects.toThrow()
+      const count=calls.length
+      await expect(cli.invoke('tencent','detail',{cid:'synthetic-cover',session_type:'tv'})).rejects.toThrow()
+      expect(calls.length).toBe(count)
+    }finally{
+      server.stop(true)
+      if(previous===undefined)delete process.env.GVS_TENCENT_NATIVE_RESEARCH;else process.env.GVS_TENCENT_NATIVE_RESEARCH=previous
+      if(previousDiagnostics===undefined)delete process.env.GVS_TENCENT_DIAGNOSTICS_PATH;else process.env.GVS_TENCENT_DIAGNOSTICS_PATH=previousDiagnostics
+      rmSync(directory,{recursive:true,force:true})
+    }
+  })
+}

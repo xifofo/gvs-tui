@@ -6,6 +6,47 @@ import { PROVIDER_IDS, PROVIDER_LABELS } from './providers.ts'
 import { needsTunnel } from './tunnel-policy.ts'
 import { resolveDefaultAudioId, selectAudioTracks } from './audio-selection.ts'
 import { normalizeIQAudioLanguage } from './iq-audio-language.ts'
+import { probeOptions } from './quality.ts'
+import type { GwClient } from './client.ts'
+import type { FileConfig } from './config.ts'
+
+test('IQ quality probe carries the explicit Chinese edition to both picker and download language handling', async () => {
+  const data = { audios: [
+    { id: '6:1:500', lid: 6, lang: '法语', language: 'fra', label: '法语 · 杜比 5.1', codec: 'eac3', default: true },
+    { id: '6:2:100', lid: 6, lang: '法语', language: 'fra', label: '法语 · AAC', codec: 'aac' },
+  ] }
+  const calls: unknown[] = []
+  const cli = { invoke: async (...args: unknown[]) => { calls.push(args.slice(0, 3)); return data }, extra: () => ({}) } as unknown as GwClient
+  const result = await probeOptions(cli, {} as FileConfig, 'iq', '4470169459759900', { title: '真珠美人魚（中文版）第1集' })
+  expect(result.audios.map(a => [a.id, a.lang, a.label, a.selected])).toEqual([
+    ['6:1:500', '普通话', '普通话 · 杜比 5.1', true], ['6:2:100', '普通话', '普通话 · AAC', true],
+  ])
+  expect(calls).toEqual([['iq', 'probe', { vid: '4470169459759900' }]])
+  expect(iqOptions(data, '真珠美人魚（日文版）第1集').audios[0]?.lang).toBe('日语')
+  expect(iqOptions(data).audios[0]?.lang).toBe('日语')
+})
+
+test('IQ official Korean audio ID 5 corrects the gateway Japanese label in picker and audio responses', () => {
+  const dolby = { id: '5:1:500', lid: 5, label: '日语 · 杜比 5.1', lang: '日语', language: 'jpn', codec: 'eac3', default: true }
+  const aac = { id: '5:2:100', label: '日语 · AAC', lang: '日语', language: 'jpn', codec: 'aac' }
+  const original = JSON.stringify({ dolby, aac })
+  const { audios } = iqOptions({ audios: [dolby, aac,
+    { id: '6:2:100', lid: 6, lang: '日语', language: 'jpn', label: '日语 · AAC', codec: 'aac' },
+  ] }, '宇宙年糕店')
+  expect(audios.map(a => [a.id, a.label, a.lang, a.selected])).toEqual([
+    ['5:1:500', '韩语 · 杜比 5.1', '韩语', true],
+    ['5:2:100', '韩语 · AAC', '韩语', true],
+    ['6:2:100', '日语 · AAC', '日语', false],
+  ])
+  expect(normalizeIQAudioLanguage(dolby)).toMatchObject({ id: dolby.id, language: 'kor', lang: '韩语', default: true })
+  expect(normalizeIQAudioLanguage({ language: 'jpn', title: '日語', clear: true }, aac.id))
+    .toEqual({ language: 'kor', lang: '韩语', title: '韩语', clear: true })
+  expect(normalizeIQAudioLanguage({ id: '5:2:100', language: 'kor', title: '韓語' }))
+    .toMatchObject({ language: 'kor', title: '韓語' })
+  const domestic = { ...dolby, source: 'domestic' }
+  expect(normalizeIQAudioLanguage(domestic)).toBe(domestic)
+  expect(JSON.stringify({ dolby, aac })).toBe(original)
+})
 
 test('IQ Japanese audio ID 6 is corrected in the picker and mux metadata without changing codec IDs',()=>{
   const original={id:'6:1:500',lid:6,label:'法语 · 杜比 5.1',lang:'法语',language:'fra',codec:'eac3',default:true}
@@ -142,4 +183,9 @@ test('IQ method is native BBTS, not standard CBC or CENC',()=>{
 test('IQ Netscape cookie import preserves only the IQ domain',()=>{
   expect(normalizeIQCookie('#HttpOnly_.iq.com\tTRUE\t/\tTRUE\t0\tI00001\tOWN\n.evil.invalid\tTRUE\t/\tTRUE\t0\tsecret\tIGNORE')).toBe('I00001=OWN')
   expect(()=>normalizeIQCookie('a=b\r\nInjected: yes')).toThrow()
+})
+
+test('domestic Web audio names are not rewritten with overseas language IDs', () => {
+  const row={source:'domestic',id:'157:1:500',lid:157,language:'zho',lang:'普通话',label:'普通话 · 杜比 5.1',codec:'eac3'}
+  expect(normalizeIQAudioLanguage(row)).toEqual(row)
 })

@@ -6,8 +6,8 @@ export type { PublicationDraft, PublicationInput } from '../../../src/integratio
 export type { PlutoFishInput, PlutoFishView } from '../../../src/integrations/plutofish/types.ts'
 export type { PublisherDirectory, PublisherDirectoryPage } from '../../../src/integrations/plutofish/types.ts'
 import type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
-import type { DRMStatus, DRMSystem } from '../../../src/lib/drm-types'
-export type { DRMFileStatus, DRMStatus, DRMSystem } from '../../../src/lib/drm-types'
+import type { DRMStatus, DRMSystem, PlatformMetaResponse } from '../../../src/lib/drm-types'
+export type { DRMFileStatus, DRMStatus, DRMSystem, PlatformMeta, PlatformMethod, PlatformMetaResponse } from '../../../src/lib/drm-types'
 import type { ActualVersion, CompletedMedia } from '../../../src/lib/actual-version'
 export type { TencentDiagnostic } from '../../../src/lib/diagnostic-types'
 import { PROVIDER_IDS, PROVIDER_LABELS } from '../../../src/lib/providers'
@@ -56,12 +56,12 @@ export type SettingsView = {
   tmdbKey: string
   tmdbLang: string
   threads: number
-  tencentObservations: boolean
   hamiClient: 'tv' | 'web'
   tencentCookie: string
   douyinCookie: string
   iqCookie: string
   iqProfile: string
+  iqCdn?: 'auto' | 'akamai' | 'bscloud' | 'zenlayer'
   hongguoNfo: boolean
   huangguoNfo: boolean
   hongguoFmt: string
@@ -70,7 +70,7 @@ export type SettingsView = {
   ui: UiPrefs
 }
 
-export type SettingsPatch = Partial<Omit<SettingsView, 'keyMasked' | 'hasKey' | 'ui'>> & { key?: string; ui?: Partial<UiPrefs> }
+export type SettingsPatch = Partial<Omit<SettingsView, 'keyMasked' | 'hasKey' | 'ui'>> & { key?: string; ui?: Partial<UiPrefs>; iqCookieSource?: 'auto' | 'domestic' | 'international' }
 
 export type AppState = {
   plutofish?: PlutoFishView
@@ -125,7 +125,7 @@ export type SearchResult = { query: string; groups: SearchGroup[]; ms: number }
 export type LinkTarget =
   | { kind: 'youku'; vid: string }
   | { kind: 'tencent'; cid: string; vid: string; url: string }
-  | { kind: 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus'; url: string }
+  | { kind: 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus' | 'dsnp'; url: string }
   | { kind: 'none' }
 
 export type EpisodeView = {
@@ -136,6 +136,8 @@ export type EpisodeView = {
   number: number
   group: string
   collection?: string
+  /** Explicit movie edition for file names (Disney+ IMAX); overrides the title-derived one. */
+  edition?: string
   duration: number
   languages: Array<{ vid: string; lang: string; langcode?: string }>
 }
@@ -170,6 +172,8 @@ export type AudioView = {
   embedded: boolean
 }
 
+export type SubtitleView = { id: string; label: string; lang: string; forced: boolean; sdh: boolean; selected: boolean; isDefault: boolean }
+
 export type QualityView = {
   index: number
   label: string
@@ -190,6 +194,8 @@ export type ProbeResult = {
   token: number
   qualities: QualityView[]
   audios: AudioView[]
+  /** Separately downloadable subtitles (Disney+); absent = subtitles follow the video. */
+  subtitles?: SubtitleView[]
   vip: { canPlay: boolean; isVip: boolean; hasTrial: boolean; note: string } | null
   warning: string
 }
@@ -206,6 +212,8 @@ export type EnqueueRequest = {
   episodes: EpisodeView[]
   quality: number
   audioIds: string[]
+  /** Selected subtitle ids when the probe returned subtitles. */
+  subtitleIds?: string[]
   /** 默认播放的已选音轨；省略时按 DTS、杜比 / 全景声、AAC 顺序自动选择。 */
   defaultAudioId?: string
   tmdb: TmdbHit | null
@@ -351,6 +359,8 @@ export interface GvsApi {
   chooseDir(start?: string): Promise<string>
   /** 本 Key 的设备文件状态（不含文件内容） */
   drmStatus(): Promise<DRMStatus>
+  /** 网关下发的平台账号说明；旧网关返回 null */
+  platformMeta(): Promise<PlatformMetaResponse | null>
   /** 选文件并上传设备文件；取消返回 null */
   uploadDRM(system: DRMSystem): Promise<DRMStatus | null>
   deleteDRM(system: DRMSystem): Promise<DRMStatus>
@@ -394,7 +404,7 @@ export interface GvsApi {
 
   // ---- 下载历史 / 钩子 / ed2k
   history(q?: HistoryQuery): Promise<{ items: HistoryEntry[]; total: number }>
-  historyForShow(provider: Provider, showId: string): Promise<HistoryEntry[]>
+  historyForShow(provider: Provider, showId: string, episodeVids?: string[]): Promise<HistoryEntry[]>
   /** provider:showId → 已下载集数 */
   historyShowCounts(): Promise<Record<string, number>>
   removeHistory(id: number): Promise<void>

@@ -74,15 +74,16 @@ async function probe(url: string, headers: Record<string, string>, fetcher: Prob
 
 export async function selectIQCDN(playlist: string, raw: unknown, options: {
   preferencePath: string; headers: Record<string, string>; signal?: AbortSignal
-  excluded?: Set<string>; fetcher?: ProbeFetch; now?: number
+  excluded?: Set<string>; fetcher?: ProbeFetch; now?: number; preferredHost?: string
   note?: (message: string) => void
 }): Promise<{ playlist: string; hosts: string[]; alternatives: boolean }> {
   const now = options.now ?? Date.now(), saved = preference(options.preferencePath, now)
+  const pinned = options.preferredHost || ''
   let preferred = saved?.host ?? '', alternatives = false
   const choices = new Map<string, string[]>(), selected = new Map<string, string>(), hosts = new Set<string>()
   for (const row of Array.isArray(raw) ? raw.filter(isObj) : []) {
     if (!Array.isArray(row.urls)) continue
-    const urls = row.urls.map(asString).filter(u => mediaURL(u)?.pathname === row.path).slice(0, 4)
+    const urls = row.urls.map(asString).filter(u => mediaURL(u)?.pathname === row.path).slice(0, 12)
     if (urls.length) choices.set(asString(row.path), urls)
   }
   const lines = playlist.split(/\r?\n/)
@@ -96,7 +97,9 @@ export async function selectIQCDN(playlist: string, raw: unknown, options: {
       const candidates = [...new Map((choices.get(key) ?? [line]).map(u => [mediaURL(u)!.hostname, u])).values()]
       alternatives ||= candidates.length > 1
       const eligible = candidates.filter(u => !options.excluded?.has(mediaURL(u)!.hostname))
-      let winner = eligible.find(u => mediaURL(u)!.hostname === preferred)
+      let winner = (pinned ? eligible.find(u => mediaURL(u)!.hostname === pinned) : undefined)
+        ?? eligible.find(u => mediaURL(u)!.hostname === preferred)
+      if (pinned && !eligible.some(u => mediaURL(u)!.hostname === pinned)) options.note?.('指定 CDN 未授权当前文件或已失败，使用该文件的可用节点')
       if (!winner && eligible.length > 1) {
         options.note?.('比较官方 CDN 的响应和传输速度')
         const scores = await Promise.all(eligible.map(async u => ({ url: u, score: await probe(iqCDNWindow(u, line)!, options.headers, options.fetcher ?? fetchMediaSegment, options.signal) })))

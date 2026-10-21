@@ -246,3 +246,35 @@ test('IQ removes stale completion records before retrying a truncated cached fil
     expect(()=>readFileSync(path+'.complete.json')).toThrow()
   }finally{rmSync(dir,{recursive:true,force:true})}
 })
+
+test('IQ audio downloads an IP URL with port and reuses it after a signed domain refresh', async () => {
+  const dir=mkdtempSync(join(tmpdir(),'iq-audio-ip-')), path=join(dir,'part.amp4')
+  const payload=Buffer.from('whole audio bytes from the local IP fixture')
+  let requests=0
+  const server=Bun.serve({hostname:'127.0.0.1',port:0,fetch(req){
+    requests++
+    const url=new URL(req.url)
+    expect(url.pathname).toBe('/videos/v0/audio.amp4')
+    expect(url.searchParams.get('key')).toBe('signed+value')
+    expect(req.headers.get('range')).toBeNull()
+    return new Response(payload,{headers:{'content-length':String(payload.length)}})
+  }})
+  try {
+    await downloadIQParts([{url:`http://127.0.0.1:${server.port}/videos/v0/audio.amp4?key=signed%2Bvalue`,path}],{identity:'episode:6:1:500',threads:1,headers:{}})
+    expect(readFileSync(path)).toEqual(payload)
+    await downloadIQParts([{url:'https://audio.inter.iqiyi.com/videos/v0/audio.amp4?key=fresh',path}],{identity:'episode:6:1:500',threads:1,headers:{},fetcher:async()=>{throw new Error('completed file must be reused')}})
+    expect(requests).toBe(1)
+  }finally{server.stop(true);rmSync(dir,{recursive:true,force:true})}
+})
+
+test('IQ audio preserves bracketed IPv6 URLs and refreshed signing parameters', async () => {
+  const dir=mkdtempSync(join(tmpdir(),'iq-audio-ipv6-')),path=join(dir,'part.amp4')
+  const url='http://[2001:db8::1]:8080/videos/v0/audio.amp4?key=signed%2Bvalue'
+  try {
+    await downloadIQParts([{url,path}],{identity:'ipv6-audio',threads:1,headers:{},fetcher:async received=>{
+      expect(received).toBe(url)
+      return new Response('audio',{headers:{'content-length':'5'}})
+    }})
+    expect(readFileSync(path,'utf8')).toBe('audio')
+  }finally{rmSync(dir,{recursive:true,force:true})}
+})

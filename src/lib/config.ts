@@ -24,6 +24,12 @@ export type FileConfig = {
   tencentMode?: "cookie" | "web" | "app" | "tv"
   /** Bind TV operations and record real client metrics locally on the gateway. */
   tencentObservations?: boolean
+  /** Actual native producer JSONL; read only in the TUI/Electron main process. */
+  tencentNativeEventFile?: string
+  /** Mirrored App events remain preview-only even when this is send. */
+  tencentNativeEventMode?: 'off' | 'preview' | 'send'
+  /** off=disabled; fixture=phone-free local templates; file=external JSONL producer (research/phone). */
+  tencentNativeEventCollect?: 'off' | 'fixture' | 'file'
   /** Hami Web and TV are separate gateway sessions. */
   hamiClient?: 'tv' | 'web'
   tencentTVDevice?: string
@@ -37,6 +43,8 @@ export type FileConfig = {
   iqCookie?: string
   /** Advanced source deviceId + certificate digest; server certificate normally supplies it. */
   iqProfile?: string
+  /** Official IQ CDN preference; never fabricates a host or signed URL. */
+  iqCdn?: 'auto' | 'akamai' | 'bscloud' | 'zenlayer'
   /** Opt-in: probe play with encode=all (风控敏感，默认关) */
   tencentEncodeAll?: boolean
   /** Opt-in: catalog probe with source=1 / 原画 (默认关，易触发权益锁) */
@@ -223,6 +231,9 @@ export function loadConfig(): FileConfig {
   if (process.env.GVS_HOST) cfg.host = process.env.GVS_HOST
   if (process.env.GVS_KEY) cfg.key = process.env.GVS_KEY
   if (process.env.GVS_TENCENT_OBSERVE) cfg.tencentObservations = process.env.GVS_TENCENT_OBSERVE === '1'
+  if (process.env.GVS_TENCENT_NATIVE_COLLECT === 'off' || process.env.GVS_TENCENT_NATIVE_COLLECT === 'fixture' || process.env.GVS_TENCENT_NATIVE_COLLECT === 'file') {
+    cfg.tencentNativeEventCollect = process.env.GVS_TENCENT_NATIVE_COLLECT
+  }
   cfg.host = (cfg.host || 'http://127.0.0.1:8080').replace(/\/+$/, '')
   const outChanged = ensureOutDir(cfg)
   if (!cfg.releaseGroup) cfg.releaseGroup = 'ADWeb'

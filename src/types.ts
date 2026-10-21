@@ -31,6 +31,8 @@ export type Episode = {
   group?: string
   /** Official Tencent collection, preserved in selection and download paths. */
   collection?: string
+  /** Explicit movie edition for file names (Disney+ 'IMAX' / '' for 原版); overrides the title-derived one. */
+  edition?: string
   /** Other dvd.audiolang vids (国语/英语) to probe with this title. */
   languages?: Array<{ vid: string; lang: string; langcode?: string }>
 }
@@ -71,6 +73,8 @@ export type Quality = {
   iqcnQuality?: IQCNQualitySelection
 }
 /** Selectable audio track (only some platforms expose more than one). */
+/** A separately downloadable subtitle rendition (Disney+ HLS); id = the rendition playlist file. */
+export type Subtitle = { id: string; label: string; lang: string; forced: boolean; sdh: boolean; selected: boolean; isDefault: boolean }
 export type Audio = { id: string; label: string; lang: string; codec: string; isDefault: boolean; selected: boolean; embedded?: boolean; vid?: string; url?: string }
 export type Detail = {
   posterUrl?: string
@@ -94,7 +98,7 @@ export type StatusKind = 'info' | 'ok' | 'warn' | 'err'
 /** 会员状态的来源：接口（网页 Cookie）/ 扫码时的快照 / 未知。 */
 export type VipSource = 'api' | 'login' | 'none'
 
-/** `play` 出来的真实取流结果——判断「这个账号现在到底能不能看 VIP」比会员接口可信。 */
+/** Per-title playback response; its isVip flag never certifies current account product membership. */
 export type VipProbe = {
   canPlay: boolean
   isVip: boolean
@@ -134,6 +138,8 @@ export type Snapshot = {
    * 会员那几个 mtop 接口报 SESSION_EXPIRED 只是「查不到会员」，不是掉登录。
    */
   ykAccount?: {
+    membership?: import('./lib/youku-membership.ts').YoukuMembership
+    loginUnknown?: boolean
     loggedIn: boolean
     needsScan: boolean
     nick: string

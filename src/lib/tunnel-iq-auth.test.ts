@@ -171,3 +171,36 @@ test('an unavailable desktop IQ proxy does not fall back to system or direct', a
   await expect(fetcher!(target, {})).rejects.toThrow('proxy unavailable')
   expect(calls).toBe(1)
 })
+
+test('friDay and LINE TV tunnel frames take the same proxy exit without the IQ rewrite', async () => {
+  const logs: string[] = []
+  const proxied: string[] = []
+  let lookups = 0
+  const route = createIQSourceRoute({
+    configuredProxy: () => 'http://127.0.0.1:7897',
+    resolveProxy: async () => { lookups++; return 'DIRECT' },
+    log: line => logs.push(line),
+    fetch: async (url, _init, proxy) => { proxied.push(`${url} via ${proxy}`); return new Response('{}', { status: 200 }) },
+  })
+  for (const url of ['https://video.friday.tw/ranking',
+    'https://vbmspxy.video.friday.tw/apiv2/token/getv2',
+    'https://www.linetv.tw/api/drama']) {
+    const fetcher = await route(new URL(url))
+    expect(fetcher).toBeDefined()
+    expect(await (await fetcher!(url, { method: 'GET' })).text()).toBe('{}')
+  }
+  expect(proxied).toEqual([
+    'https://video.friday.tw/ranking via http://127.0.0.1:7897',
+    'https://vbmspxy.video.friday.tw/apiv2/token/getv2 via http://127.0.0.1:7897',
+    'https://www.linetv.tw/api/drama via http://127.0.0.1:7897',
+  ])
+  expect(logs.join('\n')).toContain('overseas_source_transport host=video.friday.tw route=configured-proxy http=200')
+  expect(lookups).toBe(0)
+  // IQ keeps its own label and every lookalike, domestic platform and CDN host stays on the tunnel transport.
+  expect(await route(new URL('https://video.iq.com/'))).toBeDefined()
+  for (const url of ['https://friday.tw.example.test/', 'https://fake-friday.tw/', 'https://linetv.tw.example.test/',
+    'https://friday.com.tw/', 'https://youku.com/', 'https://mewatch.sg/', 'https://tv.apple.com/',
+    'https://user:pass@video.friday.tw/', 'ftp://video.friday.tw/', 'https://118.26.120.37/']) {
+    expect(await route(new URL(url))).toBeUndefined()
+  }
+})

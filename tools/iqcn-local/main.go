@@ -18,6 +18,7 @@ const maxSegmentBytes = 64 << 20
 
 type request struct {
 	Version     int    `json:"version"`
+	DRMType     int    `json:"drmType,omitempty"`
 	Ticket      string `json:"ticket"`
 	Identity    string `json:"identity"`
 	Source      string `json:"source"`
@@ -53,22 +54,34 @@ func process(req request) (result, error) {
 	if err != nil || len(data) > maxSegmentBytes {
 		return result, errors.New("local segment exceeds size limit or cannot be read")
 	}
-	r, err := iqcn.NewSampleRestorer(req.Ticket, req.Identity)
-	if err != nil {
-		return result, errors.New("invalid local processing material")
-	}
-	clear, report, err := r.Restore(context.Background(), data)
-	if err != nil {
-		if err.Error() != "S has no D on PID 17" || !clearCandidate(data) {
+	var clear []byte
+	if req.DRMType == 1 && req.Ticket == "" && req.Identity != "" {
+		// The gateway explicitly selected a cleartext stream. Validate the TS
+		// packets before copying; missing material alone never enables this path.
+		if !clearCandidate(data) {
 			return result, errors.New("local segment restoration failed")
 		}
 		clear = data
 		result.ClearCandidate = true
 	} else {
-		if report.Units == 0 || report.Passed != report.Units || len(report.Failures) != 0 {
-			return result, errors.New("local segment restoration incomplete")
+		r, err := iqcn.NewSampleRestorer(req.Ticket, req.Identity)
+		if err != nil {
+			return result, errors.New("invalid local processing material")
 		}
-		result.Restored = true
+		restored, report, err := r.Restore(context.Background(), data)
+		clear = restored
+		if err != nil {
+			if err.Error() != "S has no D on PID 17" || !clearCandidate(data) {
+				return result, errors.New("local segment restoration failed")
+			}
+			clear = data
+			result.ClearCandidate = true
+		} else {
+			if report.Units == 0 || report.Passed != report.Units || len(report.Failures) != 0 {
+				return result, errors.New("local segment restoration incomplete")
+			}
+			result.Restored = true
+		}
 	}
 	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {

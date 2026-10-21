@@ -1,4 +1,4 @@
-import { test, expect, afterEach, spyOn } from 'bun:test'
+﻿import { test, expect, afterEach, spyOn } from 'bun:test'
 import { Runtime } from './runtime'
 import * as tunnel from './lib/tunnel'
 import * as tmdb from './lib/tmdb'
@@ -660,11 +660,21 @@ test('Ctrl+1/2/3 switches platform like Alt (Windows Terminal friendly)', async 
 test('settings expose dual QR + cookie + account; Youku QR-only',async()=>{
  const r=await start();const x=r as any
  x.keyInfo={all:true,scope:[]};x.emit()
- expect(x.settingFields().filter((f:string)=>f.startsWith('腾讯'))).toEqual(['腾讯双扫码','腾讯 Cookie','腾讯登录','腾讯 caption=all','腾讯探测原画','腾讯 encode=all','腾讯观测绑定','腾讯诊断日志'])
+ expect(x.settingFields().filter((f:string)=>f.startsWith('腾讯'))).toEqual(['腾讯双扫码','腾讯 Cookie','腾讯登录','腾讯 caption=all','腾讯探测原画','腾讯 encode=all','腾讯诊断日志'])
  expect(x.settingValue('腾讯双扫码')).toContain('App')
  expect(x.settingValue('腾讯登录')).toMatch(/未登录|回车刷新/)
  expect(x.settingFields().filter((f:string)=>f.startsWith('优酷'))).toEqual(['优酷扫码','优酷登录'])
  expect(x.settingValue('优酷扫码')).toContain('仅支持扫码')
+})
+
+test('Tencent settings do not require a collector, source file or delivery mode', async () => {
+ const r = await start(); const x = r as any
+ x.keyInfo = { all: true, scope: [] }
+ // Existing research settings do not surface in the normal user flow either.
+ x.cfg.tencentNativeEventFile = 'C:/old-capture/events.jsonl'
+ x.cfg.tencentNativeEventMode = 'send'
+ expect(x.settingFields()).toContain('腾讯诊断日志')
+ expect(x.settingFields().some((label: string) => /腾讯(?:观测绑定|原生事件)/.test(label))).toBe(false)
 })
 
 test('workspace arrows change columns; bare digits switch platform', async () => {

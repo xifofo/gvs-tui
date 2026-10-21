@@ -104,7 +104,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
 const tailSkeleton = computed(() => (store.searching ? Math.min(2, Math.max(1, store.searchPending.length)) : 0))
 const playable = (c: Card) => c.target !== 'unavailable'
 function open(row: { sources: Card[] }, c?: Card) {
-  const pick = c ?? row.sources.find(playable)
+  const pick = c ?? row.sources.find((s) => s.target === 'detail' && s.id) ?? row.sources.find(playable)
   if (!pick) return
   openCard(pick, row.sources.filter((s) => s !== pick))
 }
@@ -176,13 +176,14 @@ function metaText(row: { year: number; meta: string }): string {
             >
               <PlatformLogo :provider="c.provider" :size="16" />
               <span>{{ cardSourceName(c) }}</span>
-              <span v-if="c.vip" class="chip warn tiny">VIP</span>
-              <span v-else-if="c.target !== 'unavailable'" class="chip ok tiny">可看</span>
+              <span v-if="c.vip && c.target === 'detail' && c.id" class="chip warn tiny">VIP</span>
+              <span v-else-if="c.target === 'detail' && c.id" class="chip ok tiny">可看</span>
+              <span v-else-if="c.target === 'search'" class="chip tiny">相关搜索</span>
               <span v-else class="chip tiny">预约</span>
             </button>
           </div>
         </div>
-        <button type="button" class="btn outline go" :disabled="!row.sources.some(playable)" @click="open(row)">选集下载<Icon name="arrow" :size="16" /></button>
+        <button type="button" class="btn outline go" :disabled="!row.sources.some(playable)" @click="open(row)">{{ row.sources.some((s) => s.target === 'detail' && s.id) ? '选集下载' : '查看相关结果' }}<Icon name="arrow" :size="16" /></button>
       </div>
 
       <div v-for="i in (groups.length ? tailSkeleton : store.searching ? 4 : 0)" :key="'sk' + i" class="card row sk-row">

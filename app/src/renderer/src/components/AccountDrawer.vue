@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { PROVIDER_NAME, type Provider } from '@shared/api'
-import { METHOD_LABEL, providerMeta } from '@shared/provider-registry'
-import { drmSummary, l1Badge } from '../drm-reqs'
+import { providerMeta } from '@shared/provider-registry'
+import PlatformMetaInfo from './PlatformMetaInfo.vue'
+import { loadPlatformMeta } from '../platform-meta'
 import AccountExtras from './AccountExtras.vue'
 import Icon from './Icon.vue'
 import PlatformLogo from './PlatformLogo.vue'
@@ -17,6 +18,7 @@ const account = computed(() => store.state?.accounts.find((a) => a.provider === 
 const slotCount = computed(() => accountsOf(props.provider).length)
 const hidden = computed(() => prefs().hiddenProviders.includes(props.provider))
 const drawer = ref<HTMLElement | null>(null)
+void loadPlatformMeta()
 const close = () => { if (!store.qr) store.accountDrawer = null }
 useDialogFocus(drawer, close, () => !store.qr && store.dialogCount === 0)
 const toneClass: Record<string, string> = { ok: 'ok', warn: 'warn', err: 'err', muted: '' }
@@ -39,12 +41,7 @@ function hide() {
       </header>
       <div class="db">
         <p v-if="account?.summary" class="sum">{{ account.summary }}</p>
-        <div class="kv">
-          <span>登录方式</span><span>{{ meta.methods.map((m) => METHOD_LABEL[m]).join(' · ') }}</span>
-          <template v-if="meta.region"><span>网络</span><span class="region"><Icon name="globe" :size="13" />{{ meta.region }}</span></template>
-          <span>说明</span><span>{{ meta.benefit }}</span>
-          <template v-if="drmSummary(provider)"><span>设备文件</span><span class="drm"><span v-if="l1Badge(provider)" class="chip l1">{{ l1Badge(provider) }}</span>{{ drmSummary(provider) }}；在 设置 › 设备文件 上传</span></template>
-        </div>
+        <PlatformMetaInfo :provider="provider" />
 
         <section class="sec">
           <AccountExtras :provider="provider" />

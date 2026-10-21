@@ -1,6 +1,6 @@
-import { resolveManifestDownload } from './manifest-provider.ts'
+import { DSNP_VIDEO_CODECS, resolveManifestDownload } from './manifest-provider.ts'
 import { downloadWebVideo } from './web-video-download'
-import { userMessage } from './user-message.ts'
+import { userMessage, errorCode } from './user-message.ts'
 import { youkuMediaError } from './media-output.ts'
 import { decryptYoukuTs } from './youku-ts.ts'
 import { tencentPlayInput } from './tencent-qr.ts'
@@ -33,6 +33,7 @@ import { moveFileSync } from './file-move.ts'
 import { downloadIQ } from './iq.ts'
 import { downloadIQCN } from './iqcn.ts'
 import { youkuPlayInput } from './youku-play-input.ts'
+import { assertYoukuPlayback, assertYoukuDuration, assertYoukuCompletedMedia } from './youku-playback.ts'
 import type { IQCNLocalRuntime } from './iqcn-local.ts'
 import { runLog } from './runlog.ts'
 import { prepareAudioLanguage } from './audio-language.ts'
@@ -76,6 +77,8 @@ export type DlTask = {
   includeEpisodeTitle?: boolean
   /** Audio tracks to mux in (空格勾选的那些）；空 = 只封平台默认音轨。 */
   audioTracks?: Array<{ id: string; label: string; lang: string; vid?: string; codec?: string; isDefault?: boolean }>
+  /** Selected separate subtitle renditions (Disney+); undefined = platform default (all). */
+  subtitleTracks?: Array<{ id: string; label: string; lang: string; forced: boolean; sdh: boolean; isDefault: boolean }>
   group: string
   codec: string
   tmdbId: number
@@ -106,6 +109,8 @@ export type JobEvt = {
   /** Present only on successful completion; requested quality remains separate. */
   actualVersion?: ActualVersion
   completedMedia?: CompletedMedia
+  /** Explicit expiry reported by Youku; never inferred from a decode failure. */
+  requiresReauth?: boolean
   /** Final event only: the user stopped the job instead of it failing. */
   stopped?: 'pause' | 'cancel'
 }
@@ -391,7 +396,7 @@ export async function runTask(
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
         break
-      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus':
+      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp':
         await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
         break
       case 'hongguo':
@@ -472,7 +477,7 @@ export async function runTask(
       return
     }
     runLog(`download ${id} failed: ${e instanceof Error ? e.message : String(e)}`)
-    emitEvt({ id, status: '失败', pct: lastPct, log: '', err: userMessage(e), done: true })
+    emitEvt({ id, status: '失败', pct: lastPct, log: '', err: userMessage(e), done: true, ...(t.provider === 'youku' && ((e instanceof Error && e.name === 'ReloginRequired') || ['RELOGIN_REQUIRED', 'YOUKU_RELOGIN_REQUIRED'].includes(errorCode(e))) ? { requiresReauth: true } : {}) })
   } finally {
     if (!succeeded && ownsOutput && out) {
       // Remove only our empty reservation; retain any completed/partial media for diagnosis.
@@ -999,7 +1004,21 @@ async function dlYouku(
     if ((drm.videoEnc || drm.audioEnc) && !drm.reKey) throw new Error('优酷加密轨道未返回密钥，请重试取流或检查登录状态')
     const playlist = youkuVideoPlaylist(payload, t.quality)
     if (!playlist) throw new Error('优酷 play 没有 playlist_url')
+    const selectedVideo = (Array.isArray(payload.streams) ? payload.streams.filter(isObj) : [])
+      .find(row => row.playlist_url === playlist || row.url === playlist)
+      || (isObj(payload.video) ? payload.video : {})
+    const declaredDuration = Number(selectedVideo.duration_ms) / 1000
+    if (declaredDuration > 0) assertYoukuDuration(declaredDuration, t.duration)
     const separateAudio = youkuUsesSeparateAudio(payload, t.quality)
+    // A missing CMAF audio catalogue is not evidence that the video contains audio.
+    // Stop before downloading a large silent video instead of failing at the final mux.
+    if (separateAudio && !youkuAudioPlaylist(payload, '')) {
+      throw new Error('优酷所选帧享档位未返回可下载的独立音轨，已在下载前停止；不会改用其他端的音轨或画质')
+    }
+    const evidence = youkuNamingEvidence(payload, playlist)
+    const safeChoice = /^[\w.|=-]{1,160}$/.test(t.quality) ? t.quality : 'unknown'
+    const safeLane = ['frame_xiang', 'tv', 'app'].includes(asString(payload.lane)) ? asString(payload.lane) : 'unknown'
+    runLog(`youku selection requested=${safeChoice} actual=${evidence.stream || 'unknown'} lane=${safeLane} audio_delivery=${separateAudio ? 'separate' : 'muxed'} audio_tracks=${Array.isArray(payload.audio_tracks) ? payload.audio_tracks.length : 0}`)
     const videoAlreadyDownloaded = completedTracks.has(videoPath)
     emit('下载', 0.05, playlist.split(/[?#]/)[0]?.split('/').pop() ?? '')
     // 帧享 HQ：视频分轨下载并 drop 内嵌音；非 HQ（酷喵 TV/App）：保留视频 m3u8 自带音轨。
@@ -1106,6 +1125,9 @@ async function dlYouku(
       else if (muxAudios.length) await mkvmergeMux(mkvmerge, videoPath, muxAudios, partial, muxProgress, signal, undefined, audioLanguageFallback)
       else await mkvmergeRemux(mkvmerge, videoPath, partial, muxProgress, signal, audioLanguageFallback)
       signal?.throwIfAborted()
+      const completed = await probeFinishedMedia(partial, signal)
+      assertYoukuCompletedMedia(completed, t.duration)
+      runLog(`youku coverage expected_seconds=${t.duration || 0} actual_seconds=${completed.durationSeconds || 0} dynamic_range=${completed.dynamicRange || 'unknown'}`)
       moveFileSync(partial, out)
       if (usesMeasuredNaming(t) && muxAudios.length) t.namingEvidence = { ...t.namingEvidence, muxAudio: { index: defaultAudioIndex(muxAudios), count: muxAudios.length } }
       succeeded = true
@@ -1231,7 +1253,9 @@ async function playYouku(cli: GwClient, cfg: FileConfig, t: DlTask, vid = t.vid)
   // RE/relay reads the selected playlist; expanding every track here fetches
   // unused playlists and adds latency to every signed-URL refresh.
   const input = youkuPlayInput(vid, t.quality)
-  return cli.invoke('youku', 'play', input, cli.extra(cfg, 'youku'))
+  const data = await cli.invoke('youku', 'play', input, cli.extra(cfg, 'youku'))
+  assertYoukuPlayback(data)
+  return data
 }
 
 
@@ -1331,11 +1355,43 @@ export function youkuAudioFetchPlan(
   }))
 }
 
+/**
+ * Sets MKV default / forced-display flags on the muxed subtitle tracks (mkvmerge remux; no mkvpropedit is bundled).
+ * RE muxes the selected renditions in playlist order, which is the order of `subs`; a count mismatch leaves the file untouched.
+ */
+async function markSubtitleFlags(dest: string, subs: NonNullable<DlTask['subtitleTracks']>, signal?: AbortSignal): Promise<void> {
+  const { execFile } = await import('node:child_process')
+  const { rename, rm } = await import('node:fs/promises')
+  const run = (bin: string, args: string[]) => new Promise<string>((ok, fail) => execFile(bin, args, { maxBuffer: 64 << 20, signal, windowsHide: true }, (e, out) => e ? fail(e) : ok(String(out))))
+  const mkvmerge = await ensureMkvmerge()
+  const info = JSON.parse(await run(mkvmerge, ['-J', dest])) as { tracks?: Array<{ id: number; type: string; properties?: { track_name?: string } }> }
+  const tracks = (info.tracks || []).filter(x => x.type === 'subtitles')
+  if (tracks.length !== subs.length) { runLog(`dsnp subtitle flags skipped: ${tracks.length} muxed vs ${subs.length} selected`); return }
+  const args = ['-o', `${dest}.flags.mkv`]
+  tracks.forEach((x, i) => {
+    const s = subs[i]!
+    args.push('--default-track-flag', `${x.id}:${s.isDefault ? 1 : 0}`, '--forced-display-flag', `${x.id}:${s.forced ? 1 : 0}`, '--track-name', `${x.id}:${s.label}`)
+  })
+  args.push(dest)
+  try {
+    await run(mkvmerge, args)
+    await rename(`${dest}.flags.mkv`, dest)
+  } catch (e) {
+    await rm(`${dest}.flags.mkv`, { force: true })
+    runLog(`dsnp subtitle flags failed: ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 /** Media is fetched on this client; gateway traffic is limited to resolve calls. */
 async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, work: string, signal?: AbortSignal): Promise<void> {
   const sources = await resolveManifestDownload(cli, cfg, t.provider, t.vid, t.quality || 'auto')
   signal?.throwIfAborted()
   const source = sources[0]!
+  // Disney+ serves one HLS master; the chosen quality is a height inside it.
+  const dsnpPick = t.provider === 'dsnp' ? /^(\d{3,4})(?::(dv|hdr|sdr))?$/.exec(t.quality || '') : null
+  if (dsnpPick) source.height = Number(dsnpPick[1])
+  const videoCodecs = dsnpPick?.[2] ? DSNP_VIDEO_CODECS[dsnpPick[2] as 'dv' | 'hdr' | 'sdr'] : undefined
+  const audioUris = t.provider === 'dsnp' ? (t.audioTracks || []).map(a => a.id).filter(id => id.endsWith('.m3u8')) : undefined
   const ref = source.headers.Referer || source.headers.referer || ''
   if (!['dash','hls'].includes(source.format.toLowerCase()) && !new URL(source.url).pathname.match(/[.](mpd|m3u8)$/i)) {
     throw new Error('该源不是已接入的 DASH/HLS 清单；拒绝伪装封装格式')
@@ -1343,8 +1399,9 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
   emit('下载', 0.05, '源站 CDN → 本机；网关不转发视频')
   await writeFinal(out, async dest => {
     await downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, contentKeys: source.contentKeys,
-      keepSubtitles: t.provider === 'appletvplus',
-      manifestText: source.manifest, videoHeight: source.height || undefined, threads: cfg.threads,
+      keepSubtitles: t.provider === 'appletvplus' || t.provider === 'dsnp',
+      subtitleUris: t.provider === 'dsnp' && t.subtitleTracks ? t.subtitleTracks.map(s => s.id) : undefined,
+      manifestText: source.manifest, videoHeight: source.height || undefined, videoCodecs, audioUris, threads: cfg.threads,
       select: 'muxed', muxTracks: true, transport: 're', workDir: work, workTag: 'manifest', signal,
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
     })
@@ -1369,6 +1426,10 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
       if (errors.length) throw new Error(`解密后音视频校验失败：${errors.join('；')}`)
       const specs = await probeFinishedMedia(dest, signal)
       if (specs.status !== 'probed' || (source.height && specs.height !== source.height)) throw new Error(`成品分辨率校验失败（预期 ${source.height || '所选'}p，实际 ${specs.height ?? specs.status}），未发布下载文件`)
+    }
+    if (t.provider === 'dsnp' && t.subtitleTracks?.some(s => s.forced || s.isDefault) && /\.mkv$/i.test(dest)) {
+      emit('封装', 0.995, '写入字幕默认 / 强制标记')
+      await markSubtitleFlags(dest, t.subtitleTracks, signal)
     }
   })
 }

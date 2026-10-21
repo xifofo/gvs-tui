@@ -45,7 +45,8 @@ export function parseEpisodes(data: Record<string, unknown>): Episode[] {
     eps.push({ vid, title, number: n > 0 ? n : i + 1, selected: false,
       tencentPlayParams: tencentEpisodePlayParams(it, data),
       duration: duration || undefined, group, season: seasonOf(it) ?? season,
-      collection: official ? group || '正片' : undefined })
+      collection: official ? group || '正片' : undefined,
+      ...(typeof it.edition === 'string' ? { edition: it.edition } : {}) })
     seen.add(vid)
   }
   return eps

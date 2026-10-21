@@ -69,3 +69,15 @@ test('filterRows trims sources and drops rows without a selected provider', () =
     expect(only[0]!.sources.map((s) => s.provider)).toEqual(['tencent'])
     expect(filterRows(rows, new Set())).toBe(rows)
   })
+
+test('a Tencent title suggestion cannot hide the later downloadable show', () => {
+  const suggestion=card('tencent','嫁金钗',{id:'suggestion',target:'search'})
+  const detail=card('tencent','嫁金钗',{id:'mzc00200gag6dkh',target:'detail'})
+  for (const hits of [[suggestion,detail],[detail,suggestion]]) {
+    const rows=mergeSearch([{provider:'youku',cards:[card('youku','嫁金钗')]},{provider:'tencent',cards:hits}])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.sources.map(c=>c.provider)).toEqual(['youku','tencent'])
+    expect(rows[0]!.sources[1]!.target).toBe('detail')
+    expect(rows[0]!.sources[1]!.id).toBe(detail.id)
+  }
+})

@@ -1,9 +1,11 @@
-import type { DRMFileStatus, DRMStatus, DRMSystem } from './drm-types.ts'
+import type { DRMFileStatus, DRMStatus, DRMSystem, PlatformMetaResponse } from './drm-types.ts'
 import { truncate } from './util.ts'
 import type { FileConfig } from './config.ts'
 import { fetchGateway } from './proxy.ts'
 import { runLog, summarizeInput, summarizeResult } from './runlog.ts'
 import { TencentOperations, type TencentOperation } from './tencent-operations.ts'
+import { TencentNativeEvents } from './tencent-native-events.ts'
+import { defaultTencentNativeEventPath, feedTencentNativeFixtures, resolveNativeCollectMode } from './tencent-native-fixture-feed.ts'
 import { randomUUID } from 'node:crypto'
 import { normalizeIQCookie } from './iq.ts'
 import { tencentRisk, TencentRiskStop } from './tencent-risk.ts'
@@ -67,6 +69,8 @@ export class GwClient {
   private proxyOf: () => string | undefined = () => undefined
   private operations?: TencentOperations
   private operationScope = ''
+  private nativeEvents?: TencentNativeEvents
+  private nativeEventFileOverride?: string
   private diagnosticJobID = ''
   private readonly source: 'tui_process' | 'electron_process'
   /**
@@ -95,14 +99,68 @@ export class GwClient {
     }
   }
 
+  private nativeEventSettings() {
+    const cfg = this.cfgOf?.()
+    // External captures and replay templates belong to explicit research runs.
+    // Persisted settings from older releases must not arm them in the App.
+    const collect = process.env.GVS_TENCENT_NATIVE_RESEARCH === '1' ? resolveNativeCollectMode(cfg || {}) : 'off'
+    const configured = this.nativeEventFileOverride ?? (cfg?.tencentNativeEventFile?.trim() || '')
+    const path = collect === 'off' ? '' : collect === 'fixture' ? (configured || defaultTencentNativeEventPath()) : configured
+    return {
+      path,
+      mode: (collect === 'off' ? 'off' : collect === 'fixture' ? 'preview' : (cfg?.tencentNativeEventMode ?? 'preview')) as 'off' | 'preview' | 'send',
+      collect,
+      gateway: this.host,
+      account: this.accountFor?.('tencent') || GW_DEFAULT_ACCOUNT,
+      deviceGuid: cfg?.tencentTVDevice?.trim() || '',
+    }
+  }
+
+  private feedFixtureProducer(): void {
+    const settings = this.nativeEventSettings()
+    if (settings.collect !== 'fixture' || settings.mode === 'off' || !settings.path) return
+    if (!settings.deviceGuid) {
+      runLog('tencent_native_event status=fixture_device_missing')
+      return
+    }
+    try {
+      const result = feedTencentNativeFixtures({
+        gateway: settings.gateway,
+        account: settings.account,
+        deviceGuid: settings.deviceGuid,
+        outPath: settings.path,
+        delivery: 'pending',
+      })
+      runLog(`tencent_native_event status=fixture_fed written=${result.written} kinds=${result.kinds.join(',')}`)
+    } catch {
+      runLog('tencent_native_event status=fixture_feed_failed')
+    }
+  }
+
+  private tencentReportsEnabled(): boolean {
+    // Automatic for both clients, including configurations saved with the old
+    // opt-in toggle disabled. The environment override is for support runs.
+    return process.env.GVS_TENCENT_OBSERVE !== '0'
+  }
+
+  private async tencentReport(input: Record<string, unknown>, account = this.accountFor?.('tencent')): Promise<Record<string, unknown>> {
+    const extra = account && account !== GW_DEFAULT_ACCOUNT ? { [GW_ACCOUNT_HEADER]: account } : undefined
+    const envelope = await this.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, extra, input.report_type === 'event' ? 10_000 : 2_000)
+    return (envelope.data ?? {}) as Record<string, unknown>
+  }
+
   private operationTracker(): TencentOperations {
-    const scope = `${this.host}\0${this.key}`
+    const scope = `${this.host}\0${this.key}\0${this.accountFor?.('tencent') || GW_DEFAULT_ACCOUNT}\0${this.nativeEventSettings().path}`
     if (!this.operations || this.operationScope !== scope) {
       this.operationScope = scope
-      this.operations = new TencentOperations(async input => {
-        const envelope = await this.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, undefined, 5000)
-        return (envelope.data ?? {}) as Record<string, unknown>
-      }, runLog, this.diagnosticJobID, undefined, scope, this.source)
+      const owner = this.nativeEventSettings()
+      const diagnosticScope = `${this.host}\0${this.key}`
+      this.nativeEvents = new TencentNativeEvents(() => ({ ...this.nativeEventSettings(), gateway: owner.gateway, account: owner.account, path: owner.path }), runLog,
+        (kind, id, reply) => writeTencentDiagnostic(diagnosticScope, { flow: '', operation: id, job: this.diagnosticJobID, action: kind, phase: 'native',
+          status: String(reply.status || 'unknown'), decision: reply.stop === true || reply.delivery_unknown === true ? 'no_automatic_resend' : 'not_acceptance_proof' }))
+      const native = this.nativeEvents
+      this.operations = new TencentOperations(input => this.tencentReport(input, owner.account), runLog, this.diagnosticJobID, undefined, `${this.host}\0${this.key}`, this.source,
+        (binding, call) => { this.feedFixtureProducer(); return native.drain(binding, call) })
     }
     return this.operations
   }
@@ -111,13 +169,14 @@ export class GwClient {
     const child = new GwClient(this.host, this.key, this.cfgOf, this.source)
     child.proxyOf = this.proxyOf
     child.diagnosticJobID = String(jobID)
-    child.accountFor = this.accountFor
-    if (!this.cfgOf?.()?.tencentObservations && process.env.GVS_TENCENT_OBSERVE !== '1') return child
-    child.operations = this.operationTracker().fork(String(jobID), vid, async input => {
-      const envelope = await child.request('POST', '/v1/invoke', { provider: 'tencent', action: 'report', input }, undefined, 5000)
-      return (envelope.data ?? {}) as Record<string, unknown>
-    })
-    child.operationScope = `${child.host}\0${child.key}`
+    const accountFor = this.accountFor
+    const tencentAccount = accountFor?.('tencent')
+    child.accountFor = provider => provider === 'tencent' ? tencentAccount : accountFor?.(provider)
+    if (!this.tencentReportsEnabled()) return child
+    child.nativeEventFileOverride = this.nativeEventSettings().path
+    child.operations = this.operationTracker().fork(String(jobID), vid, input => child.tencentReport(input, tencentAccount || GW_DEFAULT_ACCOUNT))
+    child.nativeEvents = this.nativeEvents
+    child.operationScope = `${child.host}\0${child.key}\0${tencentAccount || GW_DEFAULT_ACCOUNT}\0${child.nativeEventSettings().path}`
     return child
   }
 
@@ -200,7 +259,8 @@ export class GwClient {
     let operation: TencentOperation | undefined
     let tracker: TencentOperations | undefined
     const cfg = this.cfgOf?.()
-    if (provider === 'tencent' && action !== 'report' && (cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1') && (input.session_type === 'tv' || cfg?.tencentMode === 'tv')) {
+    const account = this.accountFor?.(provider)
+    if (provider === 'tencent' && action !== 'report' && this.tencentReportsEnabled() && (input.session_type === 'tv' || cfg?.tencentMode === 'tv')) {
       tracker = this.operationTracker()
       try { operation = await tracker.begin(action, input) } catch (error) {
         const risk = tencentRisk(undefined, error)
@@ -212,10 +272,9 @@ export class GwClient {
     const timeoutMs =
       opts?.timeoutMs ??
       (provider === 'tencent' && action === 'play' ? TENCENT_PLAY_TIMEOUT_MS : DEFAULT_TIMEOUT_MS)
-    const account = this.accountFor?.(provider)
     if (account && account !== GW_DEFAULT_ACCOUNT) {
       // 账号的凭证已经托管在网关该账号下；别再用全局配置里的 Cookie 头覆盖它
-      const { 'Iq-Cookie': _iq, 'Tx-Cookie': _tx, 'Dy-Cookie': _dy, ...rest } = extra ?? {}
+      const { 'Iq-Cookie': _iq, 'Tx-Cookie': _tx, 'Dy-Cookie': _dy, 'Yk-Sign': _yk, ...rest } = extra ?? {}
       extra = { ...rest, [GW_ACCOUNT_HEADER]: account }
     }
     if (provider === 'douyin' && !extra?.['Dy-Cookie'] && !(account && account !== GW_DEFAULT_ACCOUNT)) {
@@ -228,7 +287,7 @@ export class GwClient {
       if (provider === 'tencent') {
         writeTencentDiagnostic(this.host + String.fromCharCode(0) + this.key, { flow: operation?.root.flow || '', operation: diagnosticOperation, job: this.diagnosticJobID, action, phase: error ? 'error' : 'decision', status: risk.status, decision: risk.decision, httpStatus: risk.httpStatus, code: risk.code })
         const code = risk.code && /^[0-9.]{1,16}$/.test(risk.code) ? risk.code : '-'
-        runLog(`tencent_decision action=${action} source=${this.source} observations=${cfg?.tencentObservations || process.env.GVS_TENCENT_OBSERVE === '1' ? 'on' : 'off'} job=${this.diagnosticJobID || '-'} status=${risk.status} decision=${risk.decision} code=${code} http=${risk.httpStatus || '-'}`)
+        runLog(`tencent_decision action=${action} source=${this.source} observations=${this.tencentReportsEnabled() ? 'on' : 'off'} job=${this.diagnosticJobID || '-'} status=${risk.status} decision=${risk.decision} code=${code} http=${risk.httpStatus || '-'}`)
       }
       return risk
     }
@@ -277,6 +336,17 @@ export class GwClient {
   async drmStatus(): Promise<DRMStatus> {
     const env = await this.request('GET', '/v1/drm/devices', undefined, undefined, 15_000)
     return env.data as DRMStatus
+  }
+
+  /** 平台账号说明（只读，按 Key 权限过滤）；旧网关没有该接口时返回 null */
+  async platformMeta(): Promise<PlatformMetaResponse | null> {
+    try {
+      const env = await this.request('GET', '/v1/meta/platforms', undefined, undefined, 15_000)
+      return (env.data ?? null) as PlatformMetaResponse | null
+    } catch (e) {
+      if (/\b404\b|not\s*found|NOT_FOUND/i.test(e instanceof Error ? e.message : String(e))) return null
+      throw e
+    }
   }
 
   /** 上传或替换本 Key 的设备文件；网关校验格式并加密保存 */

@@ -18,11 +18,11 @@ export type VaultMigrationResult = {
 export type CredentialKind = 'tencent' | 'douyin' | 'iq'
 
 /** A successful HTTP envelope alone does not prove a durable import. */
-export async function pushLocalCredential(cli: Pick<GwClient, 'invoke'>, kind: CredentialKind, value: string): Promise<void> {
+export async function pushLocalCredential(cli: Pick<GwClient, 'invoke'>, kind: CredentialKind, value: string, iqSource?: 'auto' | 'domestic' | 'international'): Promise<void> {
   if (!value.trim()) throw new Error('凭证不能为空')
   const reply = kind === 'tencent'
     ? await cli.invoke(kind, 'login', { method: 'cookie', cookie: value.trim() })
-    : await cli.invoke(kind, 'login', { op: 'import', cookie: value.trim() })
+    : await cli.invoke(kind, 'login', { op: 'import', cookie: value.trim(), ...(kind === 'iq' && iqSource && iqSource !== 'auto' ? { cookieSource: iqSource } : {}) })
   if (kind === 'tencent' ? reply.logged_in !== true : reply.imported !== true || reply.persisted !== true)
     throw new Error('网关未确认凭证已保存，原本地凭证保留')
 }

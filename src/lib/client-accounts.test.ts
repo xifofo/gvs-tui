@@ -65,3 +65,15 @@ test('scoped tencent/douyin requests drop global cookie headers; legacy keeps th
   expect(seen[2]!.headers['Dy-Cookie']).toBe('sessionid=GLOBAL')
   expect(seen[3]!.headers['Tx-Cookie']).toBe('vqq=GLOBAL')
 })
+
+test('a selected Youku account does not inherit the default Yk-Sign or its membership',async()=>{
+ const seen=capture()
+ const cli=new GwClient('http://gw.test','k','')
+ cli.accountFor=p=>p==='youku'?'ott-account':undefined
+ await cli.invoke('youku','account',{method:'profile'},{'Yk-Sign':'DEFAULT_ACCOUNT_SECRET'})
+ await cli.fixedAccount('youku','default').invoke('youku','account',{method:'profile'},{'Yk-Sign':'DEFAULT_ACCOUNT_SECRET'})
+ expect(seen[0]!.headers[GW_ACCOUNT_HEADER]).toBe('ott-account')
+ expect(seen[0]!.headers['Yk-Sign']).toBeUndefined()
+ expect(seen[1]!.headers[GW_ACCOUNT_HEADER]).toBeUndefined()
+ expect(seen[1]!.headers['Yk-Sign']).toBe('DEFAULT_ACCOUNT_SECRET')
+})

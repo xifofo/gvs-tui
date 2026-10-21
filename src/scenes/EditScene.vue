@@ -31,7 +31,7 @@ const fieldW = computed(() => boxW.value - 4)
 
 /** What the field expects, for the fields where the format is not obvious. */
 const FIELD_HINTS: Record<string, string> = {
-  'IQ 登录账号': '本人 IQ 邮箱或手机号；手机号下一步填写国家区号',
+  'IQ 登录账号': '可选：仅 iq.com 独播内容需要；一般扫码登录爱奇艺国内版即可，同一 Key 会用作 iQ 内容的国内车道',
   'IQ 登录区号': '国家区号，例如 86、852、886，不加 +',
   'IQ 登录密码': '输入或粘贴密码，回车仅本次提交，Esc 清空取消',
   'IQ Web Cookie换TV': '本人 Web Cookie Header 或 Netscape 文本，仅本次提交',

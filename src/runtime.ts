@@ -12,6 +12,7 @@ import { manifestDetail } from './lib/manifest-detail.ts'
 import { providerLink } from './lib/manifest-provider.ts'
 import { isWebVideoProvider, webVideoLink, webVideoDetail } from './lib/web-video-providers'
 import { readTencentDiagnostics, tencentDiagnosticPath } from './lib/tencent-diagnostics.ts'
+import { defaultTencentNativeEventPath, feedTencentNativeFixtures, resolveNativeCollectMode, type TencentNativeEventCollect } from './lib/tencent-native-fixture-feed.ts'
 import { PROVIDER_IDS, supportsSearch, supportsTmdb, isManifestProvider } from './lib/providers.ts'
 import { needsTunnel } from './lib/tunnel-policy.ts'
 import { parseEpisodes as parseEps, episodeCollections } from './lib/episodes.ts'
@@ -638,7 +639,7 @@ export class Runtime {
     if (this.has('mgtv')) f.push('芒果扫码','芒果状态','芒果退出')
     if (this.has('bilibili')) f.push('B 站扫码','B 站 Cookie','B 站状态','B 站退出')
     if (this.has('migu')) f.push('咪咕 App 扫码','咪咕 App 状态','咪咕 App 退出','咪咕 TV 扫码','咪咕 TV 状态','咪咕 TV 退出')
-    if (this.has('tencent')) f.push('腾讯观测绑定', '腾讯诊断日志')
+    if (this.has('tencent')) f.push('腾讯诊断日志')
     f.push('运行日志')
     return f
   }
@@ -652,6 +653,9 @@ export class Runtime {
     if (f.startsWith('芒果')) return '芒果 TV App 扫码 · 会话由网关保存'
     if (f.startsWith('B 站')) return '匿名可用 · 导入本人 Web Cookie · 网关重启需重新导入'
     if (f === '腾讯观测绑定') return this.cfg.tencentObservations ? '开 · 本地观测不等于腾讯已接收' : '关 · 风险诊断仍本地记录'
+    if (f === '腾讯原生事件采集') { const m = resolveNativeCollectMode(this.cfg); return ({ off: '关 · 不采集原生事件', fixture: '本地模板 · 免手机（验证/采集）', file: '外部 JSONL · 研究采集器/手机' })[m] }
+    if (f === '腾讯原生事件文件') { const m = resolveNativeCollectMode(this.cfg); if (m === 'fixture') return this.cfg.tencentNativeEventFile || defaultTencentNativeEventPath(); if (m === 'off') return '采集关闭'; return this.cfg.tencentNativeEventFile || '未配置外部生产者文件' }
+    if (f === '腾讯原生事件模式') return ({ off: '关闭', preview: '仅预览', send: '发送未投递事件；镜像仅预览' })[this.cfg.tencentNativeEventMode || 'preview']
     if (f === '腾讯诊断日志') return tencentDiagnosticPath()
     if (f.startsWith('Hami ') || f.startsWith('mewatch ')) return '回车操作 · 账号材料不保存到本机配置'
     if ((Object.values(tencentLabels) as string[]).includes(f)) return '独立扫码 · 不覆盖其他 Cookie'
@@ -738,6 +742,7 @@ export class Runtime {
   }
 
   private editSeed(f: string): string {
+    if (f === '腾讯原生事件文件') return this.cfg.tencentNativeEventFile || (resolveNativeCollectMode(this.cfg) === 'fixture' ? defaultTencentNativeEventPath() : '')
     if (f === '腾讯 TV 设备 ID') return this.cfg.tencentTVDevice || ''
     if (f === '腾讯 TV QUA') return this.cfg.tencentTVQUA || ''
     if (f === '腾讯 TV 版本') return this.cfg.tencentTVVersion || ''
@@ -812,6 +817,8 @@ export class Runtime {
             uid: this.ykAcct.uid,
             method: this.ykAcct.method,
             vipSource: this.ykAcct.vipSource,
+            membership: this.ykAcct.membership,
+            loginUnknown: this.ykAcct.loginUnknown,
             isVip: this.ykAcct.isVip,
             vipUntil: this.ykAcct.vipUntil,
             riskLevel: this.ykAcct.riskLevel,
@@ -888,7 +895,7 @@ export class Runtime {
     // `cred info` 是唯一会校验签名的只读接口：签名不在网关凭证库里时它直接报
     // not found / revoked。这时候 `account` 还能从全局会话答出来（所以你看到
     // 「已登录」），但 play/download 一律报 invalid Yk-Sign。
-    this.signMissing =
+    this.signMissing = this.ykLogin?.needsRelogin === true ||
       !this.ykLogin?.ok && SIGN_DEAD_RE.test(this.ykLogin?.hint ?? '')
     if (this.signMissing) {
       this.say(
@@ -900,6 +907,8 @@ export class Runtime {
       try {
         const res = await ykRefresh(this.cli, this.cfg.youkuSign)
         if (res.needsRelogin) {
+          this.signMissing = true
+          if (this.ykLogin) this.ykLogin = { ...this.ykLogin, ok:false, needsRelogin:true }
           this.say(
             `优酷登录态需要重新扫码：设置 → 优酷扫码（${res.hint || '网关续期被拒'}）`,
             'warn',
@@ -1919,6 +1928,39 @@ export class Runtime {
       this.say('输入本人 IQ 邮箱或手机号，下一步输入密码'); this.emit(); return
     }
     if (f === '腾讯诊断日志') { this.say(tencentDiagnosticPath() + ' · 任务详情可看该任务诊断'); this.emit(); return }
+    if (f === '腾讯原生事件采集') {
+      const modes: TencentNativeEventCollect[] = ['off', 'fixture', 'file']
+      const cur = resolveNativeCollectMode(this.cfg)
+      const next = modes[(modes.indexOf(cur) + 1) % modes.length]
+      this.cfg.tencentNativeEventCollect = next
+      if (next === 'fixture') {
+        if (!this.cfg.tencentNativeEventFile?.trim()) this.cfg.tencentNativeEventFile = defaultTencentNativeEventPath()
+        if (!this.cfg.tencentNativeEventMode || this.cfg.tencentNativeEventMode === 'off') this.cfg.tencentNativeEventMode = 'preview'
+        this.cfg.tencentObservations = true
+        if (!this.cfg.tencentTVDevice?.trim()) {
+          this.say('本地模板需要先配置腾讯 TV 设备 ID（须与网关 TV 会话一致）', 'warn')
+        } else {
+          try {
+            const fed = feedTencentNativeFixtures({
+              gateway: this.cfg.host,
+              account: 'default',
+              deviceGuid: this.cfg.tencentTVDevice,
+              outPath: this.cfg.tencentNativeEventFile,
+              delivery: 'pending',
+            })
+            this.say(`已装载本地模板 ${fed.written} 条 · ${fed.kinds.join(',')} · 模式=预览 · 无需插手机`, 'ok')
+          } catch {
+            this.say('本地模板装载失败（检查模板目录与设备 ID）', 'warn')
+          }
+        }
+      } else if (next === 'file') {
+        this.say('外部 JSONL 模式：研究采集器用；日常使用请选本地模板', 'ok')
+      } else {
+        this.say('已关闭原生事件采集', 'ok')
+      }
+      this.persistConfig(); this.emit(); return
+    }
+    if (f === '腾讯原生事件模式') { const modes = ['off', 'preview', 'send'] as const; this.cfg.tencentNativeEventMode = modes[(modes.indexOf(this.cfg.tencentNativeEventMode || 'preview') + 1) % modes.length]; this.persistConfig(); this.emit(); return }
     if (f === '腾讯观测绑定') { this.cfg.tencentObservations = !this.cfg.tencentObservations; this.persistConfig(); this.emit(); return }
     if (f === 'Hami 会话类型') { this.cfg.hamiClient = this.cfg.hamiClient === 'web' ? 'tv' : 'web'; this.persistConfig(); this.emit(); return }
     const loginCommands: Record<string, SessionCommand> = {
@@ -1987,7 +2029,7 @@ export class Runtime {
       } else {
         const probe = this.vipProbe
         const tail = probe
-          ? ` · 取流: ${probe.canPlay ? '可播' : '不可播'}${probe.isVip ? ' · 会员权益✓' : ''}${probe.hasTrial ? ' · 仅试看' : ''}`
+          ? ` · 本次片源: ${probe.canPlay ? '已返回' : '不可播'}${probe.hasTrial ? ' · 仅试看' : ''}`
           : ''
         this.say(
           `${accountSummary(this.ykAcct)}${tail}`,
@@ -2222,6 +2264,9 @@ export class Runtime {
       return
     }
     switch (this.editField) {
+      case '腾讯原生事件文件':
+        this.cfg.tencentNativeEventFile = v.trim()
+        break
       case '网关代理':
         try { this.cfg.gatewayProxy = normalizeHttpProxy(v) }
         catch (e) {
@@ -2334,7 +2379,7 @@ export class Runtime {
       if (kind === 'movie') {
         task.season = 0
         task.episode = 0
-        task.edition = movieEdition(task.title, this.detailTitle)
+        task.edition = this.eps.find(ep => ep.vid === task.vid)?.edition ?? movieEdition(task.title, this.detailTitle)
       } else {
         // A movie task's synthetic zero is not an explicit special-season number.
         task.season = seriesSeason(this.eps.find(ep => ep.vid === task.vid)?.season
@@ -2376,7 +2421,7 @@ export class Runtime {
       year: this.detailInfo?.year ?? 0,
       plot: this.detailInfo?.desc ?? '',
       kind: movie ? 'movie' : 'show',
-      edition: movie ? movieEdition(ep.title, this.detailTitle) : '',
+      edition: movie ? ep.edition ?? movieEdition(ep.title, this.detailTitle) : '',
       languages: ep.languages
         ?.filter((l) => l.vid)
         .map((l) => ({ vid: l.vid, lang: l.lang })),
@@ -2389,7 +2434,7 @@ export class Runtime {
     )
   }
 
-  private probeLangOpts(skipSign = false): { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: Episode['tencentPlayParams'] } {
+  private probeLangOpts(skipSign = false): { title?: string; skipSign?: boolean; languages?: Array<{ vid: string; lang: string }>; tencentPlayParams?: Episode['tencentPlayParams'] } {
     const seen: Record<string, true> = {}
     const languages: Array<{ vid: string; lang: string }> = []
     for (const t of this.pending) {
@@ -2399,7 +2444,7 @@ export class Runtime {
         languages.push({ vid: l.vid, lang: l.lang })
       }
     }
-    return { skipSign: skipSign || undefined, languages: languages.length ? languages : undefined, tencentPlayParams: this.pending[0]?.tencentPlayParams }
+    return { title: this.pending[0]?.title, skipSign: skipSign || undefined, languages: languages.length ? languages : undefined, tencentPlayParams: this.pending[0]?.tencentPlayParams }
   }
 
 

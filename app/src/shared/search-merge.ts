@@ -22,7 +22,7 @@ export type ShowRow<C extends MergeCard = MergeCard> = {
   desc: string
   meta: string
   mediaKind?: 'movie' | 'show'
-  /** One entry per provider (first hit per provider wins), in provider arrival order. */
+  /** One entry per source; a direct detail replaces a keyword-only entry, in provider arrival order. */
   sources: C[]
   /** Best provider rank of any source (lower = better), used for stable sort. */
   rank: number
@@ -60,7 +60,12 @@ export function mergeSearch<C extends MergeCard>(groups: ReadonlyArray<{ provide
       const candidates = norm ? byTitle.get(norm) ?? [] : []
       const row = candidates.find((r) => yearsCompatible(r.year, year) && (!r.mediaKind || !c.mediaKind || r.mediaKind === c.mediaKind))
       if (row) {
-        if (!row.sources.some((s) => sourceKey(s) === sourceKey(c))) row.sources.push(c)
+        const sourceIndex = row.sources.findIndex((s) => sourceKey(s) === sourceKey(c))
+        if (sourceIndex < 0) row.sources.push(c)
+        else if (c.target === 'detail' && c.id && row.sources[sourceIndex]!.target !== 'detail') {
+          // A keyword suggestion must not hide a later playable title from that source.
+          row.sources[sourceIndex] = c
+        }
         if (!row.year && year) row.year = year
         if (!row.poster && c.poster) row.poster = c.poster
         if (!row.desc && c.desc) row.desc = c.desc

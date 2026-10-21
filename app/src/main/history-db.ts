@@ -80,9 +80,18 @@ export class HistoryDB {
     return { items: rows.map(toEntry), total }
   }
 
-  /** 某部剧已下载的集（剧集页 / 订阅去重） */
-  forShow(provider: string, showId: string): HistoryEntry[] {
-    return (this.db.prepare(`SELECT ${COLS} FROM downloads WHERE provider = ? AND show_id = ? ORDER BY season, episode`).all(provider, showId) as Row[]).map(toEntry)
+  /** 某部剧已下载的集；分集 VID 可跨同平台的节目 ID 别名匹配。 */
+  forShow(provider: string, showId: string, episodeVids: readonly string[] = []): HistoryEntry[] {
+    const rows = this.db.prepare(`SELECT ${COLS} FROM downloads WHERE provider = ? AND show_id = ? ORDER BY season, episode`).all(provider, showId) as Row[]
+    const found = new Map(rows.map(row => [Number(row.id), row]))
+    const vids = [...new Set(episodeVids.filter(v => typeof v === 'string' && v.length > 0))]
+    // 长栏目也能查询；兼容 SQLite 较低的绑定参数数量上限。
+    for (let start = 0; start < vids.length; start += 500) {
+      const batch = vids.slice(start, start + 500)
+      const matches = this.db.prepare(`SELECT ${COLS} FROM downloads WHERE provider = ? AND vid IN (${batch.map(() => '?').join(',')})`).all(provider, ...batch) as Row[]
+      for (const row of matches) found.set(Number(row.id), row)
+    }
+    return [...found.values()].map(toEntry).sort((a, b) => a.season - b.season || a.episode - b.episode || a.id - b.id)
   }
 
   hasVid(provider: string, vid: string): boolean {
