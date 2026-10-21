@@ -48,6 +48,8 @@ import { defaultAudioIndex, orderedMuxAudios } from './audio-selection.ts'
 import type { CompletedMedia, MediaSpecs } from './actual-version.ts'
 import { probeFinishedMedia } from './gvs-record.ts'
 import { releaseGroup } from './release-group.ts'
+import type { JobEvt } from './job-event.ts'
+export type { JobEvt } from './job-event.ts'
 
 export type DlTask = {
   publication?: import('../integrations/plutofish/publication-types.ts').PublicationDraft
@@ -99,24 +101,6 @@ export type DlTask = {
   collection?: string
   edition?: string
   languages?: Array<{ vid: string; lang: string }>
-}
-
-/** note: non-fatal warning on a finished job, e.g. a skipped audio track. */
-export type JobEvt = {
-  id: number
-  status: string
-  pct: number
-  log: string
-  err: string
-  done?: boolean
-  note?: string
-  /** Present only on successful completion; requested quality remains separate. */
-  actualVersion?: ActualVersion
-  completedMedia?: CompletedMedia
-  /** Explicit expiry reported by Youku; never inferred from a decode failure. */
-  requiresReauth?: boolean
-  /** Final event only: the user stopped the job instead of it failing. */
-  stopped?: 'pause' | 'cancel'
 }
 
 /** What a stop request asks for: keep the work dir (pause) or discard it (cancel). */

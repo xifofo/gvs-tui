@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { publisherSources } from '../../../../../../src/integrations/plutofish/sources'
 import { computed } from 'vue'
 import type { PlutoFishView } from '@shared/api'
 import Icon from '../../components/Icon.vue'
@@ -17,7 +18,8 @@ const status = computed(() => {
 const name = computed(() => identity.value?.name || '尚未验证身份')
 const initial = computed(() => identity.value ? Array.from(identity.value.name)[0] : '')
 const source = computed(() => identity.value?.sourceAccount)
-const sourceText = computed(() => source.value ? `源账号：${source.value.name}` : identity.value ? '未绑定源账号' : status.value.text)
+const sources = computed(() => publisherSources(identity.value))
+const sourceText = computed(() => source.value ? `${sources.value.length} 个可用账号 · 默认 ${source.value.name}` : identity.value ? '未绑定源账号' : status.value.text)
 const summary = computed(() => `PlutoFish · ${name.value} · ${status.value.text}${source.value ? ` · ${sourceText.value}` : ''}`)
 </script>
 
@@ -34,11 +36,12 @@ const summary = computed(() => `PlutoFish · ${name.value} · ${status.value.tex
     <header class="details-heading"><h2 class="h2s">PlutoFish</h2><span class="chip" :class="status.tone" role="status">{{ status.text }}</span></header>
     <div class="srow profile">
       <span class="avatar" aria-hidden="true"><template v-if="initial">{{ initial }}</template><Icon v-else name="user" :size="22" /></span>
-      <div class="sl"><span class="profile-name">{{ name }}</span><span class="sd">{{ identity?.kind === 'legacy' ? '兼容发布密钥' : identity ? '发布端账号' : '验证通过后显示账号信息' }}</span></div>
+      <div class="sl"><span class="profile-name">{{ name }}</span><span class="sd">{{ identity ? '发布端账号' : '验证通过后显示账号信息' }}</span></div>
     </div>
     <dl class="details-fields">
       <div class="srow"><div class="sl"><dt class="st">服务地址</dt><dd class="sd mono">{{ connection?.url || '未设置' }}</dd></div></div>
-      <div class="srow"><div class="sl"><dt class="st">绑定源账号</dt><dd class="sd">{{ source?.name || (identity ? '未绑定' : '尚未验证') }}</dd><dd v-if="source" class="sd mono">{{ source.alias }}</dd><dd v-else-if="identity?.kind === 'legacy'" class="sd">当前使用兼容发布密钥，未绑定固定源账号。</dd></div></div>
+      <div class="srow"><div class="sl"><dt class="st">默认网盘账号</dt><dd class="sd">{{ source?.name || (identity ? '未绑定' : '尚未验证') }}</dd><dd v-if="source" class="sd mono">{{ source.alias }}</dd></div></div>
+      <div v-if="sources.length > 1" class="srow"><div class="sl"><dt class="st">可用网盘账号</dt><dd v-for="account in sources" :key="account.id" class="sd">{{ account.provider ?? '115' }} · {{ account.name }} · {{ account.alias }}</dd></div></div>
     </dl>
     <div v-if="connection?.error" class="srow"><p class="connection-error" role="alert">{{ connection.error }}</p></div>
   </section>

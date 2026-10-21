@@ -10,7 +10,7 @@ import { savePlutoFishConfig } from './config.ts'
 const oldAppData = process.env.APPDATA
 const dirs: string[] = [], runtimes: Runtime[] = []
 const keyInfo = { id: 'fixture', name: 'Fixture gateway', prefix: 'fixture', scope: [], all: false, qps: 1, daily: 0, usedToday: 0, expiresAt: null, permanent: true, daysLeft: null }
-const identity = { id: 'fixture', name: 'Fixture publisher', kind: 'legacy', sourceAccount: null }
+const identity = { id: 'fixture', name: 'Fixture publisher', kind: 'publisher', sourceAccount: { id: 'source-fixture', name: 'Fixture source', alias: 'fixture-source' } }
 afterEach(() => {
   runtimes.splice(0).forEach(r => r.close())
   mock.restore()

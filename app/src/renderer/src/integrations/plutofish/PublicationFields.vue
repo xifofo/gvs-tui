@@ -3,6 +3,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { EpisodeView, PlutoFishView, PublicationContext, PublicationInput, PublicationPreferences, TmdbHit } from '@shared/api'
 import type { OutputNaming } from '@shared/output-naming'
+import { publisherSources } from '../../../../../../src/integrations/plutofish/sources'
 import UploadDirectoryPicker from './UploadDirectoryPicker.vue'
 import ResourceCategorySelect from './ResourceCategorySelect.vue'
 import { publicationCategoryError } from '../../../../../../src/integrations/plutofish/categories'
@@ -14,32 +15,42 @@ const model = defineModel<PublicationInput>({ required: true })
 const emit = defineEmits<{ match: [hit: TmdbHit]; restore: [preferences: PublicationPreferences] }>()
 const manualId = ref('')
 const choosingDirectory = ref(false)
-const source = computed(() => props.connection?.identity?.sourceAccount)
+const sources = computed(() => publisherSources(props.connection?.identity))
+const source = computed(() => sources.value.find(s => s.id === (model.value.sourceAccountId ?? props.connection?.identity?.sourceAccount.id)))
 const context = computed<PublicationContext>(() => ({ provider: props.provider, sourceWorkId: props.sourceWorkId,
   kind: props.kind, tmdb: props.tmdb ? { ...props.tmdb } : null, tmdbSeason: props.tmdbSeason, naming: props.naming ? { ...props.naming } : undefined,
   binding: props.connection?.identity ? { url: props.connection.url, publisherId: props.connection.identity.id,
-    sourceAccount: source.value ? { id: source.value.id, alias: source.value.alias } : null } : undefined }))
+    sourceAccount: model.value.sourceAccountId && source.value ? { id: source.value.id, alias: source.value.alias } : null } : undefined,
+  sourceAccountId: model.value.sourceAccountId }))
 const loading = ref(false)
 const error = ref('')
-const categoryError = computed(() => publicationCategoryError(props.connection, model.value.category))
+const categoryError = computed(() => !source.value ? '请选择可用的上传账号' : publicationCategoryError(props.connection, model.value.category))
 const categoryValid = computed(() => !categoryError.value)
 let sequence = 0
 let saves = Promise.resolve()
 let hydration = Promise.resolve()
+let hydratedScope = ''
 watch(() => JSON.stringify([props.connection?.status === 'verified', props.connection?.url, props.connection?.identity?.id,
-  source.value?.id, source.value?.alias, props.provider, props.sourceWorkId, props.kind, props.tmdb?.id, props.revision]), () => { hydration = hydrate() }, { immediate: true })
-async function hydrate() {
+  sources.value.map(s => [s.id, s.alias, s.enabled]), props.provider, props.sourceWorkId, props.kind, props.tmdb?.id, props.revision]), () => { hydration = hydrate() }, { immediate: true })
+async function hydrate(switching = false) {
   const seq = ++sequence
   choosingDirectory.value = false
   error.value = ''
-  model.value = { ...model.value, category: '', directoryId: '0', directoryPath: '/' }
-  if (!source.value || props.connection?.status !== 'verified') { loading.value = false; return }
+  const scope = JSON.stringify([props.connection?.url, props.connection?.identity?.id, props.provider, props.sourceWorkId, props.kind])
+  const sourceAccountId = hydratedScope && hydratedScope !== scope ? undefined : model.value.sourceAccountId
+  hydratedScope = scope
+  model.value = { ...model.value, sourceAccountId, category: switching ? model.value.category : '', directoryId: '0', directoryPath: '/', releaseSelection: undefined }
+  if (props.connection?.status !== 'verified') { loading.value = false; return }
   loading.value = true
+  // v-model 通过父组件回传，等本轮更新结束再读取账号和上下文。
+  await nextTick()
+  if (seq !== sequence) return
   try {
     const saved = await gvs('publicationPreferences', { ...context.value })
     if (seq !== sequence) return
+    model.value = { ...model.value, ...saved?.publication,
+      sourceAccountId: saved?.publication.sourceAccountId ?? model.value.sourceAccountId ?? props.connection?.identity?.sourceAccount.id }
     if (saved) {
-      model.value = { ...model.value, ...saved.publication }
       if (saved.naming || (!props.tmdb && saved.tmdb) || (props.tmdbSeason === undefined && saved.tmdbSeason !== undefined)) emit('restore', saved)
     }
   } catch (e) { if (seq === sequence) error.value = errText(e) }
@@ -50,7 +61,7 @@ onBeforeUnmount(() => { sequence++ })
 function persist(value = model.value) {
   if (!source.value || props.connection?.status !== 'verified') return Promise.resolve()
   const target = { ...context.value }
-  const input = { category: value.category, directoryId: value.directoryId, directoryPath: value.directoryPath }
+  const input = { category: value.category, sourceAccountId: value.sourceAccountId, directoryId: value.directoryId, directoryPath: value.directoryPath }
   const seq = sequence
   saves = saves.catch(() => {}).then(() => gvs('savePublicationPreferences', target, input))
     .then(() => { if (seq === sequence) error.value = '' }).catch(e => { if (seq === sequence) error.value = errText(e); throw e })
@@ -68,6 +79,11 @@ function remember(value = model.value) { if (props.remember !== false) void pers
 watch(() => props.tmdbSeason, () => { if (!loading.value && !props.busy) remember() })
 watch(() => JSON.stringify(props.naming), () => { if (!loading.value && !props.busy) remember() })
 defineExpose({ loading, ready, save, categoryValid })
+function changeSource(event: Event) {
+  model.value = { ...model.value, sourceAccountId: (event.target as HTMLSelectElement).value, directoryId: '0', directoryPath: '/', releaseSelection: undefined }
+  loading.value = true
+  hydration = nextTick().then(() => hydrate(true)).then(() => { if (!error.value) remember() })
+}
 function changeCategory(category: string) {
   const next = { ...model.value, category }
   model.value = next
@@ -99,8 +115,15 @@ function changeEpisode(vid: string, event: Event) {
 <template>
   <section class="publication-fields" aria-label="PlutoFish 发布信息">
     <strong>PlutoFish 发布信息</strong>
+    <label class="field">上传账号
+      <select :value="error && !model.sourceAccountId ? '' : (model.sourceAccountId ?? source?.id ?? '')" :disabled="loading || busy || connection?.status !== 'verified'" @change="changeSource">
+        <option v-if="error && !model.sourceAccountId" value="" disabled>请选择上传账号</option>
+        <option v-if="model.sourceAccountId && !source" :value="model.sourceAccountId" disabled>原账号已不可用，请重新选择</option>
+        <option v-for="account in sources" :key="account.id" :value="account.id" :disabled="account.enabled === false || !!(account.provider && account.provider !== '115')">{{ account.provider === '115' || !account.provider ? '115' : account.provider }} · {{ account.name }} · {{ account.alias }}</option>
+      </select>
+    </label>
     <ResourceCategorySelect :model-value="model.category" :connection="connection" :disabled="loading || busy" @update:model-value="changeCategory" />
-    <div class="field">115 上传目录
+    <div class="field">上传目录
       <div class="directory-value"><span :title="directoryLabel">{{ directoryLabel }}</span>
         <button class="btn sm" type="button" :disabled="loading || busy || !source || connection?.status !== 'verified'" @click="choosingDirectory = true"><Icon name="folder" :size="16" />选择目录</button>
       </div>
@@ -126,7 +149,7 @@ function changeEpisode(vid: string, event: Event) {
       </div>
     </details>
     <span v-if="!connection?.identity?.sourceAccount" class="small muted">当前凭据未绑定源账号，发布信息将保留为待补全。</span>
-    <span v-if="categoryValid" class="small muted">下载完成后自动上传到绑定源账号并登记草稿目录。</span>
+    <span v-if="categoryValid" class="small muted">下载完成后自动上传，核验成功后自动发布。</span>
   </section>
 </template>
 

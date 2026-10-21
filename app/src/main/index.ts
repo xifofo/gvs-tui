@@ -1,3 +1,5 @@
+import { createED2KComputer } from './ed2k-jobs'
+import { loadRetentionSettings, saveRetentionSettings } from '../../../src/integrations/plutofish/retention-settings.ts'
 import { assertDesktopAccess } from '../../../src/integrations/plutofish/access.ts'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, Tray } from 'electron'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -84,6 +86,8 @@ const core = new Core({
 })
 
 // ---------------------------------------------------------------- 下载历史 / 钩子 / ed2k
+const computeED2K = createED2KComputer(path => createEd2kWorker({ workerData: { path } }))
+core.computePublicationED2K = (path, signal, progress) => computeED2K(path, signal, progress)
 let historyRef: HistoryService | null = null
 function history(): HistoryService {
   historyRef ??= new HistoryService({
@@ -92,6 +96,7 @@ function history(): HistoryService {
     notify: (t, b) => notify(t, b),
     patchJob: (id, fn) => core.patchJob(id, fn),
     createWorker: (path) => createEd2kWorker({ workerData: { path } }),
+    computeFile: computeED2K,
     log: runLog,
   })
   return historyRef
@@ -237,6 +242,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   detail: (p, id, hint) => core.detail(p, id, hint),
   detailFromLink: (l, hint) => core.detailFromLink(l, hint),
   probe: (p, eps, accountId) => probeWithAccounts(p, eps, accountId),
+  publicationReleases: (r) => core.publicationReleases(r),
   namingPreview: (r) => core.namingPreview(r),
   publicationPreferences: (context) => core.publicationPreferences(context),
   refreshPublicationCategories: () => core.refreshPublicationCategories(),
@@ -329,6 +335,8 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   historyShowCounts: () => history().db.showCounts(),
   removeHistory: (id) => history().db.remove(id),
   computeEd2k: (id, jobId) => history().computeEd2k(id, jobId),
+  publicationRetention: () => loadRetentionSettings(),
+  savePublicationRetention: value => saveRetentionSettings(value),
   hookSettings: () => history().hookSettings(),
   saveHookSettings: (s) => history().saveHookSettings(s),
 }

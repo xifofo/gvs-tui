@@ -194,6 +194,30 @@ export function filename(n: Naming): string {
   return result
 }
 
+/** 文件名和发布版本共用已确认的动态范围、帧率及音视频规格标签。 */
+export function mediaFilenameTags(media: MediaSpecs, options: { preview?: boolean } = {}): string[] {
+  const parts: string[] = []
+  if (media.dynamicRange === 'DV') parts.push('DV')
+  else if (media.dynamicRange === 'HDR' || media.dynamicRange === 'HDR10') parts.push('HDR')
+  else if (media.dynamicRange === 'HLG') parts.push('HLG')
+  else if (media.dynamicRange === 'SDR') parts.push('SDR')
+  const fps = Math.round(media.fps || 0)
+  if (fps >= 48) parts.push(`${fps}fps`)
+  const codec = (media.codec || '').toLowerCase()
+  const videoCodec = ({ h264: 'AVC', h265: 'HEVC', hevc: 'HEVC', av1: 'AV1', vp9: 'VP9' } as Record<string, string>)[codec]
+    || (codec && codec !== 'unknown' ? codec.toUpperCase() : '')
+  if (videoCodec) parts.push(videoCodec)
+  if (media.audio?.codec && (options.preview || (media.audio.status === 'confirmed' && media.audio.channels))) {
+    const a = media.audio
+    const audioCodec = ({ aac: 'AAC', ac3: 'AC3', eac3: 'DDP', dts: 'DTS', dca: 'DTS', dtsx: 'DTS.X', truehd: 'TrueHD', mlp: 'TrueHD', flac: 'FLAC' } as Record<string, string>)[a.codec!.toLowerCase()] || a.codec!.toUpperCase()
+    // A 10-channel DTS:X count does not establish a 10.0 speaker layout.
+    const channels = a.channels ? ({ 1: '1.0', 2: '2.0', 6: '5.1', 8: '7.1' } as Record<number, string>)[a.channels]
+      || (a.codec === 'dtsx' ? `${a.channels}ch` : `${a.channels}.0`) : ''
+    parts.push([audioCodec, channels, a.atmos ? 'Atmos' : ''].filter(Boolean).join('.'))
+  }
+  return parts
+}
+
 /** New measured outputs use finished specs; the legacy filename remains the failure fallback. */
 export function completedFilename(n: Naming, media: MediaSpecs, marker?: 'HQ' | 'MAXPLUS' | 'EDR',
   options: { preview?: boolean } = {}): string {
@@ -213,23 +237,7 @@ export function completedFilename(n: Naming, media: MediaSpecs, marker?: 'HQ' | 
   if (n.source) parts.push(n.source === 'YK' ? 'YOUKU' : n.source)
   parts.push('WEB-DL')
   if (marker) parts.push(marker)
-  if (media.dynamicRange === 'DV') parts.push('DV')
-  else if (media.dynamicRange === 'HDR' || media.dynamicRange === 'HLG') parts.push('HDR')
-  else if (media.dynamicRange === 'SDR') parts.push('SDR')
-  const fps = Math.round(media.fps || 0)
-  if (fps === 50 || fps === 60) parts.push(`${fps}fps`)
-  const codec = (media.codec || '').toLowerCase()
-  const videoCodec = ({ h264: 'AVC', h265: 'HEVC', hevc: 'HEVC', av1: 'AV1', vp9: 'VP9' } as Record<string, string>)[codec]
-    || (codec && codec !== 'unknown' ? codec.toUpperCase() : '')
-  if (videoCodec) parts.push(videoCodec)
-  if (media.audio?.codec && (options.preview || (media.audio.status === 'confirmed' && media.audio.channels))) {
-    const a = media.audio
-    const audioCodec = ({ aac: 'AAC', ac3: 'AC3', eac3: 'DDP', dts: 'DTS', dca: 'DTS', dtsx: 'DTS.X', truehd: 'TrueHD', mlp: 'TrueHD', flac: 'FLAC' } as Record<string, string>)[a.codec!.toLowerCase()] || a.codec!.toUpperCase()
-    // A 10-channel DTS:X count does not establish a 10.0 speaker layout.
-    const channels = a.channels ? ({ 1: '1.0', 2: '2.0', 6: '5.1', 8: '7.1' } as Record<number, string>)[a.channels]
-      || (a.codec === 'dtsx' ? `${a.channels}ch` : `${a.channels}.0`) : ''
-    parts.push([audioCodec, channels, a.atmos ? 'Atmos' : ''].filter(Boolean).join('.'))
-  }
+  parts.push(...mediaFilenameTags(media, options))
   const suffix = `${n.group.trim() ? `-${sanitizePath(n.group.trim())}` : ''}.${n.container || 'mkv'}`
   // Reserve space for sidecars and retain the season/episode and technical suffix.
   for (const index of [subtitleIndex, 0]) {

@@ -73,7 +73,7 @@ test('停用分类清空，未验证或无绑定不返回旧偏好', () => {
   store.save(connection, context, publication)
   expect(store.get({ ...connection, identity: { ...connection.identity!, categories: [] } }, context)!.publication.category).toBe('')
   expect(store.get({ ...connection, status: 'error' }, context)).toBeNull()
-  expect(store.get({ ...connection, identity: { ...connection.identity!, sourceAccount: null } }, context)).toBeNull()
+  expect(store.get({ ...connection, identity: null }, context)).toBeNull()
 })
 
 test('非法输入和过期绑定拒绝保存，保留上次有效目录', () => {

@@ -1,4 +1,5 @@
 /** 单任务串行分片：V2 使用完整主机，旧版 OSS 区域地址由 SDK 拼 bucket；每片落盘后才确认字节。 */
+import { PublisherError } from './retry'
 import OSS from 'ali-oss'
 import { Agent } from 'node:https'
 import { createHash } from 'node:crypto'
@@ -23,10 +24,20 @@ export const createOSS: OSSFactory = (dispatch, credentials, signal) => {
   }
   // ali-oss 6.23 的 initMultipartUpload 不暴露 sequential 参数，在签名前补齐。
   // 115 的合并回调需要顺序上传生成的整文件 SHA1；仅串行调用 uploadPart 并不等价。
-  const sdk = new OSS(options) as OSS & { request: (params: { method: string; subres?: string | Record<string, string> }) => Promise<unknown> }
+  const sdk = new OSS(options) as OSS & {
+    request: (params: { method: string; subres?: string | Record<string, string> }) => Promise<unknown>
+    requestError: (result: unknown) => Promise<Error>
+  }
   const request = sdk.request.bind(sdk)
   sdk.request = params => request(params.method === 'POST' && params.subres === 'uploads'
     ? { ...params, subres: { uploads: '', sequential: '' } } : params)
+  // ali-oss 会把 urllib 的 ECONNRESET 等系统码改成 RequestError；保留原因以区分断网和证书错误。
+  const requestError = sdk.requestError.bind(sdk)
+  sdk.requestError = async result => {
+    const error = await requestError(result)
+    if (result instanceof Error && error !== result) error.cause = result
+    return error
+  }
   return { client: sdk, close: () => { signal.removeEventListener('abort', stop); stop() } }
 }
 
@@ -81,6 +92,9 @@ export async function uploadParts(options: {
       try {
         page = await (await client()).listParts(dispatch.object, cp.uploadId!, { 'max-parts': 1000, 'part-number-marker': marker, 'encoding-type': 'url' })
       } catch (error) {
+        if (cp.sequential && cp.completing && (error as { code?: string })?.code === 'NoSuchUpload') {
+          throw new PublisherError('115 合并结果仍待核验，请等待原任务恢复', true)
+        }
         // 只迁移旧版未启用 sequential 且已经合并失效的断点；服务端须先明确确认原文件不存在。
         // 保留原 pick_code/object，仅重建 OSS 分片会话，不能把普通网络错误当成新上传许可。
         if (marker !== 0 || !options.recoverLegacyUpload || cp.sequential || !cp.completing || (error as { code?: string })?.code !== 'NoSuchUpload') throw error
@@ -130,6 +144,6 @@ export async function uploadParts(options: {
     if (dispatch.callbackVar) headers['x-oss-callback-var'] = Buffer.from(dispatch.callbackVar).toString('base64')
     const result = await (await client()).completeMultipartUpload(dispatch.object, cp.uploadId!, cp.parts, { headers })
     const reply = (result as OSS.CompleteMultipartUploadResult & { data?: { state?: unknown } }).data
-    if (reply?.state !== true && reply?.state !== 1) throw new Error('115 合并回调未确认成功，请重试原任务核验')
+    if (reply?.state !== true && reply?.state !== 1) throw new PublisherError('115 合并回调未确认成功，请重试原任务核验', true)
   } finally { session?.close() }
 }

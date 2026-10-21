@@ -1,3 +1,5 @@
+/** 作品偏好按账号隔离，并单独记住所选账号；撤销后不静默改投其他目标。 */
+import { publicationSource } from './sources'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -11,16 +13,17 @@ export type PublicationTmdb = { id: number; kind: 'movie' | 'show'; name: string
 export type PublicationContext = {
   provider: string; sourceWorkId: string; kind: 'movie' | 'show'; tmdb?: PublicationTmdb | null; tmdbSeason?: number
   binding?: PublicationDraft['binding']
+  sourceAccountId?: string
   naming?: OutputNaming
 }
 export type PublicationPreferences = {
-  publication: Pick<PublicationInput, 'category' | 'directoryId' | 'directoryPath'>
+  publication: Pick<PublicationInput, 'category' | 'directoryId' | 'directoryPath' | 'sourceAccountId'>
   tmdb: PublicationTmdb | null
   tmdbSeason?: number
   naming?: OutputNaming
 }
 type Entry = PublicationPreferences & { sourceWorkId: string }
-type File = { version: 1; entries: Record<string, Entry>; aliases: Record<string, string> }
+type File = { version: 1; entries: Record<string, Entry>; aliases: Record<string, string>; targets?: Record<string, { id: string; alias: string }> }
 const hash = (values: unknown[]) => createHash('sha256').update(JSON.stringify(values)).digest('hex')
 export const publicationPreferencesPath = () => join(dirname(configPath()), 'plutofish-publication-preferences.json')
 
@@ -39,17 +42,21 @@ export class PublicationPreferenceStore {
     } catch { throw new Error('发布偏好读取失败，请检查本机配置文件') }
   }
 
-  private keys(connection: PlutoFishView, context: PublicationContext): { entry: string; alias: string } | null {
-    const identity = connection.identity, source = identity?.sourceAccount
-    if (connection.status !== 'verified' || !identity || !source) return null
+  private keys(connection: PlutoFishView, context: PublicationContext): { entry: string; alias: string; target: string; source: { id: string; alias: string } } | null {
+    const identity = connection.identity
+    if (connection.status !== 'verified' || !identity) return null
+    const target = hash([connection.url, identity.id, context.provider, context.kind, context.sourceWorkId])
+    const savedTarget = identity.sourceAccounts ? this.load().targets?.[target] : undefined
+    const source = publicationSource(connection, context.sourceAccountId ?? context.binding?.sourceAccount?.id ?? savedTarget?.id)
+    if (!context.sourceAccountId && !context.binding?.sourceAccount && savedTarget && savedTarget.alias !== source.alias) throw new Error('作品上传账号已改变，请重新选择')
     if (context.binding && (context.binding.url !== connection.url || context.binding.publisherId !== identity.id
-      || context.binding.sourceAccount?.id !== source.id || context.binding.sourceAccount.alias !== source.alias)) throw new Error('发布端或源账号已改变，请重新选择发布信息')
+      || (context.binding.sourceAccount && (context.binding.sourceAccount.id !== source.id || context.binding.sourceAccount.alias !== source.alias)))) throw new Error('发布端或源账号已改变，请重新选择发布信息')
     if (!PROVIDER_IDS.includes(context.provider as typeof PROVIDER_IDS[number]) || !['movie', 'show'].includes(context.kind)
       || typeof context.sourceWorkId !== 'string' || !context.sourceWorkId || context.sourceWorkId.length > 2048 || /[\x00-\x1f\x7f]/.test(context.sourceWorkId)) throw new Error('作品标识无效')
     if (context.tmdb && (!Number.isInteger(context.tmdb.id) || context.tmdb.id < 1 || context.tmdb.id > 2147483647
       || context.tmdb.kind !== context.kind)) throw new Error('TMDB 作品标识无效')
     const namespace = [connection.url, identity.id, source.id, source.alias, context.provider, context.kind]
-    return { alias: hash([...namespace, 'platform', context.sourceWorkId]),
+    return { target, source, alias: hash([...namespace, 'platform', context.sourceWorkId]),
       entry: hash([...namespace, context.tmdb ? 'tmdb' : 'platform', context.tmdb?.id ?? context.sourceWorkId]) }
   }
 
@@ -63,6 +70,7 @@ export class PublicationPreferenceStore {
       : data.entries[data.aliases[keys.alias] || keys.entry]
     if (!entry) return null
     const publication = this.input(entry.publication)
+    if (connection.identity?.sourceAccounts) publication.sourceAccountId = keys.source.id
     const naming = outputNaming(entry.naming)
     if (entry.sourceWorkId !== context.sourceWorkId) delete naming.season
     if (publication.category && !connection.identity?.categories?.some(c => c.value === publication.category)) publication.category = ''
@@ -72,10 +80,11 @@ export class PublicationPreferenceStore {
   }
 
   private input(input: PublicationPreferences['publication']): PublicationPreferences['publication'] {
-    const { category, directoryId = '0', directoryPath = '/' } = input
+    const { category, directoryId = '0', directoryPath = '/', sourceAccountId } = input
+    if (sourceAccountId !== undefined && (typeof sourceAccountId !== 'string' || !sourceAccountId || sourceAccountId.length > 256)) throw new Error('上传账号无效')
     if (typeof category !== 'string' || category.length > 256 || typeof directoryId !== 'string' || !/^(0|[1-9][0-9]{0,39})$/.test(directoryId)
       || typeof directoryPath !== 'string' || directoryPath.length > 4096 || /[\x00-\x1f\x7f]/.test(directoryPath)) throw new Error('发布分类或上传目录无效')
-    return { category, directoryId, directoryPath }
+    return { category, directoryId, directoryPath, ...(sourceAccountId === undefined ? {} : { sourceAccountId }) }
   }
 
   private tmdb(value: PublicationTmdb | null | undefined): PublicationTmdb | null {
@@ -86,7 +95,7 @@ export class PublicationPreferenceStore {
   }
 
   save(connection: PlutoFishView, context: PublicationContext, input: PublicationPreferences['publication'], seed = false): void {
-    const keys = this.keys(connection, context)
+    const keys = this.keys(connection, { ...context, sourceAccountId: input.sourceAccountId ?? context.sourceAccountId })
     if (!keys) throw new Error('请先验证并绑定 PlutoFish 源账号')
     const publication = this.input(input)
     if (publication.category && !connection.identity?.categories?.some(c => c.value === publication.category)) throw new Error('所选发布分类已不可用，请重新选择')
@@ -97,7 +106,8 @@ export class PublicationPreferenceStore {
     const entry: Entry = { sourceWorkId: context.sourceWorkId, publication, tmdb: this.tmdb(context.tmdb),
       ...(Object.keys(naming).length ? { naming } : {}),
       ...(context.tmdbSeason != null ? { tmdbSeason: context.tmdbSeason } : {}) }
-    const next: File = { version: 1, entries: { ...previous.entries }, aliases: { ...previous.aliases } }
+    const next: File = { version: 1, entries: { ...previous.entries }, aliases: { ...previous.aliases }, targets: { ...previous.targets } }
+    if (!seed && input.sourceAccountId) next.targets![keys.target] = { id: keys.source.id, alias: keys.source.alias }
     if (!seed || !next.entries[keys.entry]) next.entries[keys.entry] = entry
     if (!seed || !next.aliases[keys.alias]) next.aliases[keys.alias] = keys.entry
     const tmp = `${this.path}.${randomUUID()}.tmp`

@@ -38,7 +38,9 @@ test('ed2kFile streams a file and builds the link', async () => {
   writeFileSync(p, 'abc')
   const seen: number[] = []
   const r = await ed2kFile(p, (d) => seen.push(d))
-  expect(r).toEqual({ hash: 'a448017aaf21d8525fc10ae87aa6729d', size: 3, link: 'ed2k://|file|ab.mkv|3|A448017AAF21D8525FC10AE87AA6729D|/' })
+  expect(r.sha1).toBe('A9993E364706816ABA3E25717850C26C9CD0D89D')
+  expect(r.file.size).toBe(3)
+  expect({ hash: r.hash, size: r.size, link: r.link }).toEqual({ hash: 'a448017aaf21d8525fc10ae87aa6729d', size: 3, link: 'ed2k://|file|ab.mkv|3|A448017AAF21D8525FC10AE87AA6729D|/' })
   expect(seen.at(-1)).toBe(3)
   expect(ed2kLink('x|y', 1, 'ab')).toBe('ed2k://|file|x_y|1|AB|/')
 })

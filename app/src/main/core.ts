@@ -1,4 +1,7 @@
+import { publicationSource } from '../../../src/integrations/plutofish/sources.ts'
+import { sanitizePath } from '@tui/name.ts'
 import { PublicationWorker } from '../../../src/integrations/plutofish/publication-worker.ts'
+import { ed2kFile } from '../../../src/lib/ed2k.ts'
 import { publicationCategoryError } from '../../../src/integrations/plutofish/categories.ts'
 import { verifiedGatewayKey } from '../../../src/integrations/plutofish/gateway.ts'
 import { PlutoFishConnection } from '../../../src/integrations/plutofish/connection.ts'
@@ -6,7 +9,8 @@ import { completePublication, preparePublication } from '../../../src/integratio
 import { savePublication } from '../../../src/integrations/plutofish/publication-store.ts'
 import { PublicationPreferenceStore, type PublicationContext, type PublicationPreferences } from '../../../src/integrations/plutofish/publication-preferences.ts'
 import type { PlutoFishInput } from '../../../src/integrations/plutofish/types.ts'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { releaseChoices, resolveReleaseSelection } from '../../../src/integrations/plutofish/release-selection.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { userMessage, errorCode } from '@tui/user-message.ts'
 import { ProviderSessions, type SessionCommand, type ProviderSessionView } from '@tui/provider-session.ts'
@@ -335,11 +339,12 @@ export class Core {
   private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | { kind: 'bilibili' } | null = null
 
   readonly plutofish = new PlutoFishConnection({ changed: () => this.emit.state() })
+  computePublicationED2K = (path: string, signal: AbortSignal, progress?: (done: number, total: number) => void) => ed2kFile(path, progress, signal)
 
   private readonly publications = new PublicationWorker(this.plutofish, draft => {
     for (const rec of this.jobs.values()) if (rec.task.publication?.fileKey === draft.fileKey) rec.task.publication = draft
     this.pushJobs()
-  })
+  }, { beforeCleanup: () => this.flushJobs(true), retention: { compute: (path, signal, progress) => this.computePublicationED2K(path, signal, progress) } })
 
   constructor(private readonly emit: Emit) {
     this.hub = new JobHub((e) => this.onJob(e))
@@ -1533,8 +1538,9 @@ export class Core {
   }
 
   publicationPreferences(context: PublicationContext): PublicationPreferences | null {
-    const connection = this.plutofish.view(), source = connection.identity?.sourceAccount
-    if (connection.status !== 'verified' || !source) return null
+    const connection = this.plutofish.view()
+    if (connection.status !== 'verified' || !connection.identity) return null
+    const source = publicationSource(connection, context.sourceAccountId ?? context.binding?.sourceAccount?.id)
     const binding = JSON.stringify([connection.url, connection.identity!.id, source.id, source.alias])
     if (!this.seededPreferenceBindings.has(binding)) {
       // Migrate existing downloads once per account; later user edits always win.
@@ -1546,7 +1552,7 @@ export class Core {
         const tmdb: PublicationContext['tmdb'] = task.tmdbId ? { id: task.tmdbId, kind, name: task.series || task.title, title: task.series || task.title, year: task.year, overview: task.plot } : null
         this.publicationPreferenceStore.save(connection, { provider: task.provider, sourceWorkId: task.sourceWorkId, kind, tmdb, naming: task.outputNaming,
           ...(tmdb && kind === 'show' ? { tmdbSeason: task.season } : {}) },
-          { category: connection.identity?.categories?.some(c => c.value === draft.workTarget.category) ? draft.workTarget.category : '', directoryId: draft.directoryId, directoryPath: draft.directoryPath }, true)
+          { category: connection.identity?.categories?.some(c => c.value === draft.workTarget.category) ? draft.workTarget.category : '', directoryId: draft.directoryId, directoryPath: draft.directoryPath, ...(connection.identity?.sourceAccounts ? { sourceAccountId: source.id } : {}) }, true)
       }
       this.seededPreferenceBindings.add(binding)
     }
@@ -1560,7 +1566,7 @@ export class Core {
 
   private publicationContext(req: EnqueueRequest): PublicationContext {
     return { provider: req.detail.provider, sourceWorkId: req.detail.id, kind: req.tmdb?.kind ?? req.detail.kind,
-      tmdb: req.tmdb, tmdbSeason: req.tmdbSeason, naming: req.naming }
+      tmdb: req.tmdb, tmdbSeason: req.tmdbSeason, naming: req.naming, sourceAccountId: req.publication?.sourceAccountId }
   }
 
   /** runtime.ts taskFromEp + applyOptions + TMDB 选中 */
@@ -1654,6 +1660,24 @@ export class Core {
       ...(usesMeasuredNaming(t) ? { note: NAMING_PREVIEW_NOTE } : {}) }
   }
 
+  /** 仅查询 PlutoFish 目录；预览使用当前探测数据，不触发下载、TMDB 或网盘调用。 */
+  async publicationReleases(req: EnqueueRequest) {
+    this.plutofish.assertReady()
+    const { tasks, quality } = this.buildTasks(req)
+    const connection = this.plutofish.view()
+    const drafts = tasks.map(task => preparePublication(task, connection, req.publication?.category, req.publication?.directoryId, req.publication?.directoryPath, undefined, req.publication?.sourceAccountId))
+    const first = tasks[0]
+    if (!first) throw new Error('请先选择要下载的内容')
+    const n = jobNaming(first, this.cfg)
+    const file = usesMeasuredNaming(first) ? namingPreviewFilename(n, first.provider, quality, first.audioTracks) : filename(n)
+    const stem = basename(file, /\.[^.]+$/.exec(file)?.[0])
+    const match = [...stem.matchAll(/(?:^|\.)(\d{3,4}p)(?=\.|$)/gi)].at(-1)
+    const specs = match ? stem.slice(match.index! + (match[0].startsWith('.') ? 1 : 0)) : `${first.height}p`
+    const suffix = first.group ? `-${sanitizePath(first.group.trim())}` : ''
+    const name = [first.kind === 'movie' ? '' : `S${String(first.season).padStart(2, '0')}`, suffix && specs.endsWith(suffix) ? specs.slice(0, -suffix.length) : specs].filter(Boolean).join('.')
+    return releaseChoices(this.plutofish, drafts, name)
+  }
+
   async enqueue(req: EnqueueRequest): Promise<number> {
     this.plutofish.assertReady()
     req = structuredClone(req)
@@ -1666,14 +1690,20 @@ export class Core {
     let connection = this.plutofish.view()
     const categoryError = publicationCategoryError(connection, req.publication?.category ?? '')
     if (categoryError) throw new Error(categoryError)
-    const binding = (view: typeof connection) => JSON.stringify([view.url, view.identity?.id, view.identity?.sourceAccount])
+    const binding = (view: typeof connection) => {
+      const source = publicationSource(view, req.publication?.sourceAccountId)
+      return JSON.stringify([view.url, view.identity?.id, source.id, source.alias, source.provider ?? '115'])
+    }
     const expectedBinding = binding(connection)
+    const choices = await this.publicationReleases(req)
+    const selected = resolveReleaseSelection(choices, req.publication?.releaseSelection)
+    const release = { existingReleaseId: selected.existingReleaseId, preserveKey: choices.match === 'binding' && selected.existingReleaseId === choices.matchedId, nonce: selected.forceNew ? randomUUID() : undefined }
     await this.resolveFilenameTitle(tasks)
     this.plutofish.assertReady()
     connection = this.plutofish.view()
     if (expectedBinding !== binding(connection)) throw new Error('发布端或源账号已改变，请重新选择发布信息')
     // 先完整校验再落盘；IPC 参数不可信，不能仅依赖前端表单。
-    for (const task of tasks) task.publication = preparePublication(task, connection, req.publication?.category, req.publication?.directoryId, req.publication?.directoryPath)
+    for (const task of tasks) task.publication = preparePublication(task, connection, req.publication?.category, req.publication?.directoryId, req.publication?.directoryPath, release, req.publication?.sourceAccountId)
     for (const task of tasks) savePublication(task.publication!)
     if (connection.identity?.sourceAccount && req.publication) this.savePublicationPreferences(this.publicationContext(req), req.publication)
     const groupId = `${req.detail.provider}:${req.detail.id}:${Date.now()}`
@@ -1826,7 +1856,8 @@ export class Core {
 
   jobList(): JobView[] {
     // 旧 jobs.json 已保存 task.vid；直接补到 IPC 视图，不改写历史任务文件。
-    return [...this.jobs.values()].map((r) => ({ ...r.view, vid: r.task.vid, publication: r.task.publication }))
+    return [...this.jobs.values()].map((r) => ({ ...r.view, vid: r.task.vid, publication: r.task.publication,
+      ed2k: r.task.publication?.ed2k ?? r.view.ed2k }))
   }
 
   /** 排队中的任务没有进程，直接挂起；在跑的让 hub 停进程（保留已下载的分片）。 */
@@ -1954,7 +1985,7 @@ export class Core {
     if (previous.workTarget.category || previous.progress) throw new Error('此任务已进入上传流程，请使用继续上传')
     if (typeof category !== 'string' || !category) throw new Error('请选择资源分类')
     const draft = completePublication(preparePublication({ ...rec.task, season: previous.seasonNumber ?? rec.task.season,
-      episode: previous.episodeNumber ?? rec.task.episode }, this.plutofish.view(), category, previous.directoryId, previous.directoryPath),
+      episode: previous.episodeNumber ?? rec.task.episode }, this.plutofish.view(), category, previous.directoryId, previous.directoryPath, undefined, previous.binding.sourceAccount?.id),
       rec.view.output, previous.measured ?? rec.view.completedMedia)
     savePublication(draft)
     rec.task.publication = draft
@@ -1965,7 +1996,7 @@ export class Core {
       try {
         this.savePublicationPreferences({ provider: task.provider, sourceWorkId: task.sourceWorkId, kind, naming: task.outputNaming,
           tmdb: task.tmdbId ? { id: task.tmdbId, kind, name: task.series || task.title, title: task.series || task.title, year: task.year, overview: task.plot } : null,
-          ...(kind === 'show' ? { tmdbSeason: task.season } : {}) }, { category, directoryId: draft.directoryId, directoryPath: draft.directoryPath })
+          ...(kind === 'show' ? { tmdbSeason: task.season } : {}) }, { category, directoryId: draft.directoryId, directoryPath: draft.directoryPath, sourceAccountId: draft.binding.sourceAccount?.id })
       } catch { rec.view.note = '当前任务可上传，但分类偏好保存失败，请检查目录权限' }
     }
     this.publications.event(draft, { id, done: true, status: '完成', pct: 1, log: rec.view.output, err: '' })
