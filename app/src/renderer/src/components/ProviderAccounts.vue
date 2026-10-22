@@ -65,7 +65,7 @@ async function crSsoLogin() {
   try {
     const r = await gvs('crunchyrollSsoLogin')
     if (current !== revision) return
-    crMessage.value = r.country ? `${r.message}（地区 ${r.country}）` : r.message
+    crMessage.value = r.country ? `${r.note}（地区 ${r.country}）` : r.note
     toast(crMessage.value, 'ok')
   } catch (e) {
     if (current === revision) {

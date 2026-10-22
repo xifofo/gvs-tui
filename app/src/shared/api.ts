@@ -284,8 +284,11 @@ export type QRImage = { title: string; image: string }
 export type QRStart = { images: QRImage[]; hint: string }
 export type QRPoll = { done: boolean; message: string; tone: Tone }
 
-/** Crunchyroll 浏览器 SSO 的结果：refresh_token 已写进本机配置，不回传令牌本体。 */
-export type CrLoginResult = { saved: boolean; country?: string; scope?: string; message: string }
+/**
+ * Crunchyroll 浏览器 SSO 的结果：refresh_token 已写进本机配置，不回传令牌本体。
+ * 字段不能叫 message/msg/hint/reason/summary —— userFacing() 会把它们当错误文案改写。
+ */
+export type CrLoginResult = { saved: boolean; country?: string; scope?: string; note: string }
 
 /**
  * idle 未检查 · checking 检查中 · latest 已是最新 · available 有新版（mac/开发版只提示）

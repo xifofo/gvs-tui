@@ -12,7 +12,7 @@ import { parseEpisodes as parseEps } from '@tui/episodes.ts'
 // 桌面端业务核心：把 tui/src/lib 的能力编排成界面可调用的方法。
 // 流程与 TUI runtime.ts 保持一致（探测 → 选画质/音轨 → TMDB → 入队），
 // 只是去掉了按键状态机，改成显式参数。
-import { app } from 'electron'
+import { app, session } from 'electron'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import QRCode from 'qrcode'
@@ -22,7 +22,7 @@ import { selectAudioTracks } from '@tui/audio-selection.ts'
 import { YoukuPlaybackError } from '@tui/youku-playback.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
 import { makePkce } from '@shared/cr-sso'
-import { openCrunchyrollLogin } from './cr-sso-window'
+import { openCrunchyrollLogin, CR_SSO_PARTITION } from './cr-sso-window'
 import type { CrLoginResult } from '@shared/api'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from '@tui/vault-migrate.ts'
 import { fallbackSections } from '@tui/discovery.ts'
@@ -1124,6 +1124,14 @@ export class Core {
 
   async providerSession(command: SessionCommand): Promise<ProviderSessionView> {
     if (!this.has(command.provider)) throw new Error('当前 Key 没有该平台权限')
+    // Crunchyroll 无服务端会话：令牌在本机，provider-session 里那份 status 是死值（恒「未登录」），
+    // 这里用本机令牌过一遍网关 login 再回答。
+    if (command.provider === 'crunchyroll' && command.op === 'status') {
+      const view = await this.crunchyrollStatus()
+      this.providerAccounts.set('crunchyroll', view)
+      this.emit.state()
+      return view
+    }
     const scope = this.cfg.host + String.fromCharCode(0) + this.cfg.key
     const revision = this.connectionRevision
     this.providerSessions.setScope(scope)
@@ -1148,11 +1156,43 @@ export class Core {
       } else if (command.op === 'logout') {
         this.cfg.crunchyrollToken = ''
         saveConfig(this.cfg)
+        // 一并清掉授权窗的 CR 会话，否则换账号时会秒回跳旧号。
+        void session.fromPartition(CR_SSO_PARTITION).clearStorageData().catch(() => {})
       }
     }
     this.providerAccounts.set(command.provider + (command.provider === 'migu' && view.terminal === 'tv' ? ':tv' : command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
     this.emit.state()
     return view
+  }
+
+  /** 本机 CR 令牌的真实状态：有令牌就拿网关 login 走一次真换 token。 */
+  private async crunchyrollStatus(): Promise<ProviderSessionView> {
+    const token = (this.cfg.crunchyrollToken || '').trim()
+    if (!token) {
+      return {
+        provider: 'crunchyroll',
+        state: 'signed_out',
+        authenticated: false,
+        summary: '尚未登录：点「一键登录（自动获取令牌）」用浏览器登录即可',
+      }
+    }
+    try {
+      const out = await this.invoke('crunchyroll', 'login', { refresh_token: token })
+      const expiresAt = str(out.expiresAt)
+      return {
+        provider: 'crunchyroll',
+        state: 'authenticated',
+        authenticated: true,
+        summary: `令牌有效${expiresAt ? `，access token 至 ${expiresAt}` : ''}`,
+      }
+    } catch {
+      return {
+        provider: 'crunchyroll',
+        state: 'expired',
+        authenticated: false,
+        summary: '本机令牌已失效或被吊销，请重新点「一键登录」',
+      }
+    }
   }
 
   /**
@@ -1169,20 +1209,31 @@ export class Core {
     const authorizeUrl = str(start.authorizeUrl)
     if (!/^https:\/\//.test(authorizeUrl)) throw new Error('网关没有返回可用的授权地址')
     runLog('cr sso: 打开授权页')
-    const code = await openCrunchyrollLogin(authorizeUrl, (m) => runLog(m))
-    const out = await this.invoke('crunchyroll', 'sso_finish', { code, code_verifier: verifier })
-    const token = str(out.refreshToken).trim()
-    if (!token) throw new Error('网关没有返回 refresh_token')
-    // 网关不保存 CR 令牌：本机持有，下载时随 resolve 传回。
-    this.cfg.crunchyrollToken = token
-    saveConfig(this.cfg)
-    this.emit.state()
-    runLog('cr sso: 令牌已保存到本机配置')
-    return {
-      saved: true,
-      country: str(out.country),
-      scope: str(out.scope),
-      message: '已保存 Crunchyroll 令牌（仅本机配置，网关不落盘）',
+    const login = openCrunchyrollLogin(authorizeUrl, (m) => runLog(m))
+    try {
+      const code = await login.code
+      const out = await this.invoke('crunchyroll', 'sso_finish', { code, code_verifier: verifier })
+      const token = str(out.refreshToken).trim()
+      if (!token) throw new Error('网关没有返回 refresh_token')
+      // 网关不保存 CR 令牌：本机持有，下载时随 resolve 传回。
+      this.cfg.crunchyrollToken = token
+      saveConfig(this.cfg)
+      this.emit.state()
+      runLog('cr sso: 令牌已保存到本机配置')
+      const country = str(out.country)
+      login.showResult(true, `令牌已保存到本机${country ? `（地区 ${country}）` : ''}。`)
+      return {
+        saved: true,
+        country,
+        scope: str(out.scope),
+        note: '已保存 Crunchyroll 令牌（仅本机配置，网关不落盘）',
+      }
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e)
+      runLog(`cr sso: 失败 ${why}`)
+      console.log(`[cr-sso] failed: ${why}`)
+      login.showResult(false, why)
+      throw e
     }
   }
 

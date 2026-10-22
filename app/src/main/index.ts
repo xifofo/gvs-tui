@@ -333,7 +333,9 @@ ipcMain.handle('gvs:call', async (_e, method: string, args: unknown[]) => {
   try {
     return { ok: true, data: userFacing(await fn(...(args ?? []))) }
   } catch (e) {
-    runLog(`ipc ${method} failed: ${e instanceof Error ? e.message : String(e)}`)
+    const why = e instanceof Error ? e.message : String(e)
+    runLog(`ipc ${method} failed: ${why}`)
+    console.log(`[gvs:call] ${method} failed: ${why}`)
     return { ok: false, error: userMessage(e) }
   }
 })
