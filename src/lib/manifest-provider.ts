@@ -85,17 +85,65 @@ export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: st
     }))
     return { qualities, audios, subtitles }
   }
-  if (provider === 'crunchyroll') {
-    // Crunchyroll 的画质由 RE 在下载时按 DASH 选最佳；这里只给一条入口，
-    // 避免为了列画质去换钥（按次计费）。
-    return { qualities: [{ id: 'auto', label: '自动（最佳画质）', title: 'DASH · 本机直连 CDN', size: 0, width: 0, height: 0, codec: '', drm: 'widevine', stream: 'auto', tier: 0 }], audios: [] }
-  }
+  if (provider === 'crunchyroll') return probeCrunchyroll(cli, id)
   if (provider === 'dsnp') return probeDsnp(cli, cfg, id)
   const sources = await resolveManifest(cli, cfg, provider, id)
   return { qualities: sources.map(s => {
     const selectable = provider === 'friday' ? [1080,2160].includes(s.height) : provider === 'hamivideo' && cfg.hamiClient !== 'web' && [480,720,1080,2160].includes(s.height)
     return { id: selectable ? String(s.height) : 'auto', label: s.quality || (s.height ? `${s.height}p` : '自动'), title: s.clear ? '源站明确标记明文 · 本机直连下载' : ['hamivideo', 'friday', 'dsnp'].includes(provider) ? '网关授权取内容密钥 · 本机下载解密' : '受保护媒体 · 当前客户端尚未接入该 DRM 授权处理', size: 0, width: 0, height: s.height, codec: '', drm: s.clear ? 'none' : s.drm, stream: selectable ? String(s.height) : 'auto', tier: tierHeight(0, s.height) }
   }), audios: [] }
+}
+
+/**
+ * Crunchyroll 画质：网关 `qualities` 只读源站 DASH 清单、不换钥也不计费，
+ * 所以能在选片阶段就列出真实档位（分辨率/码率/帧率/音轨）。
+ * 旧网关没有这个动作，或本次探测失败时，退回单条「自动（最佳画质）」——
+ * 下载本身由下载器在同一条清单里自选，不会因此下不了。
+ */
+export async function probeCrunchyroll(cli: Pick<GwClient, 'invoke'>, id: string): Promise<{ qualities: Quality[]; audios: Audio[] }> {
+  try {
+    const data = await cli.invoke('crunchyroll', 'qualities', { id })
+    const rows = Array.isArray(data.qualities) ? data.qualities.filter(isObj) : []
+    const qualities: Quality[] = rows.map(q => {
+      const height = Number(q.height) || 0
+      const width = Number(q.width) || 0
+      const kbps = Math.round(Number(q.bitrateKbps) || 0)
+      const codec = str(q.codec)
+      const id = str(q.id) || (height ? `${height}p` : '')
+      const label = str(q.label) || (height ? `${height}p` : id)
+      const bits = [kbps ? `${kbps} kbps` : '', codec].filter(Boolean).join(' · ')
+      return {
+        id: id || 'auto',
+        label,
+        title: bits ? `DASH · 本机直连 CDN · ${bits}` : 'DASH · 本机直连 CDN',
+        size: 0,
+        width,
+        height,
+        codec,
+        drm: 'widevine',
+        stream: str(q.stream) || id || 'auto',
+        fps: Number(q.fps) || undefined,
+        tier: tierHeight(width, height),
+      }
+    }).filter(q => q.height > 0 || q.id === 'auto')
+    if (!qualities.length) throw new Error('网关没有返回可用档位')
+    const audios: Audio[] = (Array.isArray(data.audios) ? data.audios.filter(isObj) : []).map((a, i) => {
+      const kbps = Math.round(Number(a.bitrateKbps) || 0)
+      const base = str(a.label) || str(a.lang) || `音轨 ${i + 1}`
+      return {
+        id: str(a.id) || String(i + 1),
+        label: kbps ? `${base} · ${kbps}k` : base,
+        lang: str(a.lang),
+        codec: str(a.codec),
+        isDefault: i === 0,
+        selected: i === 0,
+      }
+    })
+    return { qualities, audios }
+  } catch {
+    // 旧网关 / 探测失败：保留原来的单入口，下载照旧走最佳画质。
+  }
+  return { qualities: [{ id: 'auto', label: '自动（最佳画质）', title: 'DASH · 本机直连 CDN', size: 0, width: 0, height: 0, codec: '', drm: 'widevine', stream: 'auto', tier: 0 }], audios: [] }
 }
 
 type HlsAttrs = Record<string, string>

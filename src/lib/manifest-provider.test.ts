@@ -68,4 +68,35 @@ describe('manifest provider client contracts', () => {
     let calls=0; const d = await manifestDetail(async () => {calls++;return {episodes:[{id:'a'}],hasMore:true,nextCursor:'same'}},'mewatch','show1')
     expect(calls).toBe(2); expect(d.hasMore).toBe(true); expect(d.episodes).toHaveLength(1)
   })
+
+  // Crunchyroll：网关 qualities 只读清单不换钥，列表页就能显示真实档位。
+  test('crunchyroll qualities come from the gateway ladder, not a placeholder', async () => {
+    const calls: unknown[] = []
+    const cli = {invoke: async (...args: unknown[]) => {
+      calls.push(args)
+      return {
+        qualities: [
+          { id: '1080p', label: '1080p', height: 1080, width: 1920, bitrateKbps: 7061, codec: 'avc1.640028', fps: 23.976, stream: '1080p' },
+          { id: '720p', label: '720p', height: 720, width: 1280, bitrateKbps: 3317, codec: 'avc1.64001F' },
+          { id: '480p', label: '480p', height: 480, width: 854, bitrateKbps: 1573, codec: 'avc1.4D401E' },
+        ],
+        audios: [{ id: 'a1', label: 'ja-JP', lang: 'ja-JP', codec: 'mp4a.40.2', bitrateKbps: 199 }],
+      }
+    }} as unknown as GwClient
+    const out = await probeManifest(cli, {} as FileConfig, 'crunchyroll', 'G69P9MD9Y')
+    expect((calls[0] as unknown[])[1]).toBe('qualities')
+    expect(out.qualities.map(q => q.label)).toEqual(['1080p', '720p', '480p'])
+    expect(out.qualities[0]).toMatchObject({ stream: '1080p', tier: 1080, drm: 'widevine', width: 1920 })
+    expect(out.qualities[0]!.title).toContain('7061 kbps')
+    expect(out.qualities[0]!.fps).toBeCloseTo(23.976, 2)
+    expect(out.audios[0]).toMatchObject({ lang: 'ja-JP', label: 'ja-JP · 199k', selected: true })
+  })
+
+  test('crunchyroll falls back to the single auto entry on old gateways', async () => {
+    const cli = {invoke: async () => { throw new Error('INVALID_PARAM: crunchyroll 支持 …') }} as unknown as GwClient
+    const out = await probeManifest(cli, {} as FileConfig, 'crunchyroll', 'G69P9MD9Y')
+    expect(out.qualities).toHaveLength(1)
+    expect(out.qualities[0]).toMatchObject({ id: 'auto', stream: 'auto', drm: 'widevine' })
+    expect(out.audios).toEqual([])
+  })
 })
