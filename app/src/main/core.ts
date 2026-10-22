@@ -21,6 +21,9 @@ import type { PlatformMetaResponse } from '@tui/drm-types.ts'
 import { selectAudioTracks } from '@tui/audio-selection.ts'
 import { YoukuPlaybackError } from '@tui/youku-playback.ts'
 import { clampThreads, loadConfig, normalizeOutDir, saveConfig, type FileConfig } from '@tui/config.ts'
+import { makePkce } from '@shared/cr-sso'
+import { openCrunchyrollLogin } from './cr-sso-window'
+import type { CrLoginResult } from '@shared/api'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from '@tui/vault-migrate.ts'
 import { fallbackSections } from '@tui/discovery.ts'
 import {
@@ -1150,6 +1153,37 @@ export class Core {
     this.providerAccounts.set(command.provider + (command.provider === 'migu' && view.terminal === 'tv' ? ':tv' : command.provider === 'hamivideo' ? ':' + (command.op.startsWith('web_') ? 'web' : 'tv') : ''), view)
     this.emit.state()
     return view
+  }
+
+  /**
+   * Crunchyroll 浏览器 SSO：点一下就跳官方登录页，登录完自动把 refresh_token 存进本机配置。
+   * PKCE verifier 只在本进程内存里活一次；网关只负责拼授权地址和拿 code 换令牌（不落盘）。
+   */
+  async crunchyrollSsoLogin(): Promise<CrLoginResult> {
+    if (!this.has('crunchyroll')) throw new Error('当前 Key 没有该平台权限')
+    const { verifier, challenge } = makePkce()
+    const start = await this.invoke('crunchyroll', 'sso_start', {
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+    })
+    const authorizeUrl = str(start.authorizeUrl)
+    if (!/^https:\/\//.test(authorizeUrl)) throw new Error('网关没有返回可用的授权地址')
+    runLog('cr sso: 打开授权页')
+    const code = await openCrunchyrollLogin(authorizeUrl, (m) => runLog(m))
+    const out = await this.invoke('crunchyroll', 'sso_finish', { code, code_verifier: verifier })
+    const token = str(out.refreshToken).trim()
+    if (!token) throw new Error('网关没有返回 refresh_token')
+    // 网关不保存 CR 令牌：本机持有，下载时随 resolve 传回。
+    this.cfg.crunchyrollToken = token
+    saveConfig(this.cfg)
+    this.emit.state()
+    runLog('cr sso: 令牌已保存到本机配置')
+    return {
+      saved: true,
+      country: str(out.country),
+      scope: str(out.scope),
+      message: '已保存 Crunchyroll 令牌（仅本机配置，网关不落盘）',
+    }
   }
 
   async catalog(provider: Provider, country = ''): Promise<Section[]> {

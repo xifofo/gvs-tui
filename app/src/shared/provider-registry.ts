@@ -2,7 +2,7 @@
  * Data-driven provider registry for the desktop account center / onboarding.
  * Declares how each platform signs in, so the UI does not hard-code per-platform button rows.
  */
-export type LoginMethod = 'qr' | 'cookie' | 'token' | 'password' | 'tv-code' | 'sms' | 'none'
+export type LoginMethod = 'qr' | 'cookie' | 'token' | 'password' | 'tv-code' | 'sms' | 'sso' | 'none'
 
 export type ProviderMeta = {
   id: string
@@ -40,11 +40,11 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
   huangguo: { id: 'huangguo', methods: ['none'], loginOptional: true, benefit: '公开接口，无需账号', multiAccount: false },
   dsnp: { id: 'dsnp', methods: ['password', 'cookie'], loginOptional: false, benefit: '', multiAccount: false },
   appletvplus: { id: 'appletvplus', methods: ['cookie'], loginOptional: true, region: '目录跟随账号地区，未登录默认美国', benefit: '导入官网登录态后查看可用画质并下载', multiAccount: false },
-  crunchyroll: { id: 'crunchyroll', methods: ['token'], loginOptional: true, region: '内容与订阅跟随 CR 账号地区', benefit: '导入本人 refresh_token 后可下载；需本人 Widevine .wvd', multiAccount: false },
+  crunchyroll: { id: 'crunchyroll', methods: ['sso', 'token'], loginOptional: true, region: '内容与订阅跟随 CR 账号地区', benefit: '一键登录自动取令牌；也可粘贴 refresh_token。需本人 Widevine .wvd（L3）', multiAccount: false },
 }
 
 export const METHOD_LABEL: Record<LoginMethod, string> = {
-  qr: '扫码登录', cookie: '导入 Cookie', token: '导入令牌', password: '账号密码', 'tv-code': '设备激活码', sms: '短信验证', none: '无需登录',
+  qr: '扫码登录', cookie: '导入 Cookie', token: '导入令牌', password: '账号密码', 'tv-code': '设备激活码', sms: '短信验证', sso: '浏览器登录', none: '无需登录',
 }
 
 export function providerMeta(id: string): ProviderMeta {

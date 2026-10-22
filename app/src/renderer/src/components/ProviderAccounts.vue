@@ -10,6 +10,7 @@ const views = reactive<Record<string, ProviderSessionView>>({})
 const cookie = ref(''), phone = ref(''), code = ref(''), profile = ref(''), pin = ref('')
 const iqUsername = ref(''), iqPassword = ref(''), iqAreaCode = ref('')
 const iqStatusError = ref('')
+const crMessage = ref('')
 const appleVerifyID = ref('')
 const dsnpEmail = ref(''), dsnpPassword = ref(''), dsnpSeat = ref('')
 const dsnpSeats = computed(() => [{ value: '', label: '选择席位', disabled: true }, ...(views.dsnp?.profiles ?? []).map((p: { id: string; name?: string }, i: number) => ({ value: String(i + 1), label: p.name || p.id }))])
@@ -55,6 +56,26 @@ async function checkIQStatus() {
 async function setMode(hamiClient: 'tv' | 'web') {
   try { await gvs('saveSettings', { hamiClient }) } catch (e) { toast(errText(e), 'err') }
 }
+/** Crunchyroll 一键登录：主进程开授权窗并在回跳时截获 code，令牌直接存本机。 */
+async function crSsoLogin() {
+  if (busy.value) return
+  const current = revision
+  busy.value = true
+  crMessage.value = ''
+  try {
+    const r = await gvs('crunchyrollSsoLogin')
+    if (current !== revision) return
+    crMessage.value = r.country ? `${r.message}（地区 ${r.country}）` : r.message
+    toast(crMessage.value, 'ok')
+  } catch (e) {
+    if (current === revision) {
+      crMessage.value = '自动登录未完成：' + errText(e)
+      toast(crMessage.value, 'err')
+    }
+  } finally {
+    if (current === revision) busy.value = false
+  }
+}
 watch(accountScope, () => {
   revision++
   busy.value = false
@@ -85,9 +106,11 @@ onBeforeUnmount(() => { revision++ })
   </div>
   <div v-if="allowed('crunchyroll')" class="provider-account">
     <h3>Crunchyroll · 账号登录</h3>
-    <p>粘贴本人 Crunchyroll refresh_token（长期有效，等同账号凭据）。网关不保存；下载时仅用于换取约 1 小时的 access token 与内容密钥，媒体由本机直连 CDN。</p>
-    <textarea v-model="cookie" class="input" aria-label="本人 Crunchyroll refresh_token，仅保存在本机" autocomplete="off" spellcheck="false" placeholder="粘贴 refresh_token" />
-    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'crunchyroll',op:'import',token:cookie})">导入令牌</button><button class="btn sm" :disabled="busy" @click="command({provider:'crunchyroll',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'crunchyroll',op:'logout'})">退出</button></div>
+    <p>点「一键登录」会打开 Crunchyroll 官方登录页（在登录窗里完成，不用手动抓令牌），登录完成后自动把 refresh_token 存到本机配置；网关不保存该令牌，下载时仅用于换取约 1 小时的 access token 与内容密钥，媒体由本机直连 CDN。也可以手动粘贴 refresh_token。</p>
+    <div class="controls"><button class="btn sm" :disabled="busy" @click="crSsoLogin">一键登录（自动获取令牌）</button><button class="btn sm" :disabled="busy" @click="command({provider:'crunchyroll',op:'status'})">账号状态</button><button class="btn sm" :disabled="busy" @click="command({provider:'crunchyroll',op:'logout'})">退出</button></div>
+    <p v-if="crMessage" aria-live="polite">{{ crMessage }}</p>
+    <textarea v-model="cookie" class="input" aria-label="本人 Crunchyroll refresh_token，仅保存在本机" autocomplete="off" spellcheck="false" placeholder="或粘贴本人 refresh_token" />
+    <div class="controls"><button class="btn sm" :disabled="busy || !cookie.trim()" @click="command({provider:'crunchyroll',op:'import',token:cookie})">粘贴导入令牌</button></div>
     <p v-if="views.crunchyroll" aria-live="polite">{{ views.crunchyroll.summary }}</p>
   </div>
   <div v-if="allowed('appletvplus')" class="provider-account">

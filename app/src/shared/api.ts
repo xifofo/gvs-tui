@@ -284,6 +284,9 @@ export type QRImage = { title: string; image: string }
 export type QRStart = { images: QRImage[]; hint: string }
 export type QRPoll = { done: boolean; message: string; tone: Tone }
 
+/** Crunchyroll 浏览器 SSO 的结果：refresh_token 已写进本机配置，不回传令牌本体。 */
+export type CrLoginResult = { saved: boolean; country?: string; scope?: string; message: string }
+
 /**
  * idle 未检查 · checking 检查中 · latest 已是最新 · available 有新版（mac/开发版只提示）
  * downloading 下载中 · ready 已下载待安装 · error 出错
@@ -303,6 +306,8 @@ export type UpdateState = {
 export interface GvsApi {
   tencentDiagnostics(jobID?: number): Promise<TencentDiagnostic[]>
   providerSession(command: SessionCommand): Promise<ProviderSessionView>
+  /** Crunchyroll 一键登录：开授权窗 → 截获 crunchyroll://auth 回跳 → 网关换令牌 → 存本机 */
+  crunchyrollSsoLogin(): Promise<CrLoginResult>
   state(): Promise<AppState>
   setup(host: string, key: string, desktopProxy?: string): Promise<AppState>
   saveSettings(patch: SettingsPatch): Promise<AppState>

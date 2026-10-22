@@ -230,6 +230,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   browse: (p, s, c) => core.browse(p, s, c),
   tencentDiagnostics: (jobID) => core.tencentDiagnostics(jobID),
   providerSession: (command) => core.providerSession(command),
+  crunchyrollSsoLogin: () => core.crunchyrollSsoLogin(),
   parseLink: (t) => core.parseLink(t),
   searchTargets: () => core.searchTargets(),
   searchProvider: (p, q) => core.searchProvider(p, q),
