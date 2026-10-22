@@ -24,7 +24,7 @@ const view = { url: 'https://example.invalid', status: 'verified', hasKey: true,
 } }
 const qualities = [{ id: '360p', label: '360P', width: 640, height: 360, codec: 'hevc', fps: 25, size: 0, drm: '', hdr: 'sdr' }]
 const audios = [{ id: 'aac', lang: '国语', label: 'AAC 立体声', codec: 'AAC', isDefault: true, selected: true }]
-const option: ReleaseOption = { id, name: 'S01.360p.YK.WEB-DL.H265', resolution: '360p', dynamicRange: 'SDR', status: 'published', latestEpisode: 2 }
+const option: ReleaseOption = { id, name: 'S01.360p.YK.WEB-DL.H265-FPWeb', resolution: '360p', dynamicRange: 'SDR', status: 'published', latestEpisode: 2 }
 let items: ReleaseOption[] = [option], fail = false, queryDelay = 0
 let core: Core | undefined, win: BrowserWindow | undefined
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -53,6 +53,7 @@ async function main() {
   const req: EnqueueRequest = { token: 701, detail: { provider: 'youku', id: 'fixture-show', title: '山海回声', year: 2026, kind: 'show', poster: '' },
     episodes: [{ vid: 'e3', number: 3, title: '第三集', group: '', languages: [] }], quality: 0, audioIds: ['aac'], tmdb: null, publication: { category: 'anime' } }
   const matched = await core.publicationReleases(req)
+  assert.ok(matched.name.endsWith('-FPWeb'))
   assert.equal(matched.matchedId, id)
   assert.equal(await core.enqueue({ ...req, publication: { category: 'anime', releaseSelection: { context: matched.context, mode: 'existing', releaseId: id } } }), 1)
   assert.equal(core.jobList().at(-1)?.publication?.existingReleaseId, id)
@@ -131,7 +132,7 @@ async function main() {
     writeFileSync(join(output, `unmatched-${width}.png`), (await win.webContents.capturePage()).toPNG())
 
     // 两个相同规格候选不默认勾选，但用户可手动归入其中一个。
-    items = [option, { ...option, id: 'b'.repeat(32), name: 'S01.360p.YOUKU.WEB-DL.SDR.HEVC.AAC.2.0' }]
+    items = [option, { ...option, id: 'b'.repeat(32), name: 'S01.360p.YOUKU.WEB-DL.SDR.HEVC.AAC.2.0-FPWeb' }]
     await click(refresh)
     await wait('document.querySelectorAll("input[name=publication-release]").length === 3')
     assert.equal(await run('document.querySelector("input[name=publication-release]:checked")'), null)
