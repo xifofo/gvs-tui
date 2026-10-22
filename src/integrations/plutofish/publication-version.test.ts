@@ -10,15 +10,15 @@ const draft = (output: string, patch: Partial<PublicationDraft> = {}): Publicati
 
 test('截图中的旧文件直接取文件名规格，不补入文件名里没有的 SDR', () => {
   expect(publicationVersion(draft('/movies/Good.Night.2026.S01E01.360p.YOUKU.WEB-DL.HEVC-FPWeb.mp4')))
-    .toEqual({ name: 'S01.360p.YOUKU.WEB-DL.HEVC', resolution: '360p', dynamicRange: 'SDR' })
+    .toEqual({ name: 'S01.360p.YOUKU.WEB-DL.HEVC-FPWeb', resolution: '360p', dynamicRange: 'SDR' })
 })
 
-test('新版 SDR、HDR、音轨和帧率保留原大小写，名称、年份、单集标题与发布组不进入版本名', () => {
+test('规格与制作组保留原大小写，名称、年份和单集标题不进入版本名', () => {
   const result = publicationVersion(draft('/movies/1080p.Show.S00E298.特别篇.2024.2160p.YOUKU.WEB-DL.HQ.DV.60fps.HEVC.DDP.5.1.Atmos-Team.Web-Release.mkv',
     { seasonNumber: 0, naming: { source: 'YK', group: 'Team.Web-Release' } }))
-  expect(result.name).toBe('S00.2160p.YOUKU.WEB-DL.HQ.DV.60fps.HEVC.DDP.5.1.Atmos')
+  expect(result.name).toBe('S00.2160p.YOUKU.WEB-DL.HQ.DV.60fps.HEVC.DDP.5.1.Atmos-Team.Web-Release')
   expect(publicationVersion(draft('Good.Night.2026.S01E01.360p.YOUKU.WEB-DL.SDR.HEVC-FPWeb.mp4')).name)
-    .toBe('S01.360p.YOUKU.WEB-DL.SDR.HEVC')
+    .toBe('S01.360p.YOUKU.WEB-DL.SDR.HEVC-FPWeb')
   expect(publicationVersion(draft('Movie.2026.1080P.WEB-DL.AVC.AAC.2.0.mp4', { seasonNumber: undefined, naming: { source: '', group: '' } })).name)
     .toBe('1080P.WEB-DL.AVC.AAC.2.0')
 })
@@ -37,6 +37,18 @@ test('简短平台文件名使用成品规格与统一编码标签，不显示�
     file: { size: 1234 },
   } })
   expect(publicationVersion(file).name).toBe('S01.1080p.HG.WEB-DL.SDR.AVC.AAC.2.0')
+  expect(publicationVersion({ ...file, naming: { source: 'HG', group: ' Team.Web-Release ' } }).name)
+    .toBe('S01.1080p.HG.WEB-DL.SDR.AVC.AAC.2.0-Team.Web-Release')
+})
+
+test('旧队列也保留完整制作组，不把 WEB-DL 和 DTS-HD 识别成组名', () => {
+  for (const group of ['Team.Web-Release', '制作组', 'Team_One']) {
+    expect(publicationVersion(draft(`Show.1080p.BluRay.AVC.DTS-HD.MA.5.1-${group}.mkv`)).name)
+      .toBe(`S01.1080p.BluRay.AVC.DTS-HD.MA.5.1-${group}`)
+  }
+  for (const specs of ['1080p.YK.WEB-DL', '1080p.BluRay.AVC.DTS-HD.MA.5.1']) {
+    expect(publicationVersion(draft(`Show.${specs}.mkv`)).name).toBe(`S01.${specs}`)
+  }
 })
 
 test('已确认的新版本快照用于登记，重试不会被原文件名缺失规格改变', () => {

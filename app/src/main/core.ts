@@ -1,5 +1,4 @@
 import { publicationSource } from '../../../src/integrations/plutofish/sources.ts'
-import { sanitizePath } from '@tui/name.ts'
 import { PublicationWorker } from '../../../src/integrations/plutofish/publication-worker.ts'
 import { ed2kFile } from '../../../src/lib/ed2k.ts'
 import { publicationCategoryError } from '../../../src/integrations/plutofish/categories.ts'
@@ -1673,8 +1672,7 @@ export class Core {
     const stem = basename(file, /\.[^.]+$/.exec(file)?.[0])
     const match = [...stem.matchAll(/(?:^|\.)(\d{3,4}p)(?=\.|$)/gi)].at(-1)
     const specs = match ? stem.slice(match.index! + (match[0].startsWith('.') ? 1 : 0)) : `${first.height}p`
-    const suffix = first.group ? `-${sanitizePath(first.group.trim())}` : ''
-    const name = [first.kind === 'movie' ? '' : `S${String(first.season).padStart(2, '0')}`, suffix && specs.endsWith(suffix) ? specs.slice(0, -suffix.length) : specs].filter(Boolean).join('.')
+    const name = [first.kind === 'movie' ? '' : `S${String(first.season).padStart(2, '0')}`, specs].filter(Boolean).join('.')
     return releaseChoices(this.plutofish, drafts, name)
   }
 

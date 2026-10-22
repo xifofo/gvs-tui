@@ -64,12 +64,13 @@ test('两端同一匹配规则兼容旧别名和缺失音轨，不合并已知�
   expect(matchRelease(ambiguous, expected).matchedId).toBeUndefined()
 })
 
-test('同来源和实测规格两端新版本名称一致，片名、分集、发布组不进入版本', () => {
+test('同来源和实测规格两端新版本名称一致，保留制作组并排除片名和分集', () => {
   for (const source of ['YK', 'TX', 'IQ', 'IQIYI', 'HG', 'DSNP']) {
     for (const specs of [media, { ...media, dynamicRange: 'HDR' }, { ...media, dynamicRange: 'HLG', fps: 50 }, { ...media, fps: 120 }, { ...media, dynamicRange: 'DV', fps: 60, codec: 'hevc', audio: { status: 'confirmed' as const, codec: 'eac3', channels: 6, atmos: true } }]) {
       const naming = { title: 'Show', kind: 'show', season: 1, episode: 1, year: 2026, source, group: 'Team.Web', container: 'mkv' } as Naming
       const output = completedFilename(naming, specs, 'HQ')
       const downloader = publicationVersion({ output, seasonNumber: 1, naming: { source, group: 'Team.Web' }, measured: { media: specs, file: { size: 1 } } } as PublicationDraft)
+      expect(downloader.name.endsWith('-Team.Web')).toBe(true)
       expect(measuredReleaseVersion(specs, output, 1)).toEqual(downloader)
       const next = completedFilename({ ...naming, title: 'Other', episode: 12 }, specs, 'HQ')
       expect(measuredReleaseVersion(specs, next, 1)).toEqual(downloader)
@@ -93,7 +94,23 @@ test('没有分辨率字段时仍保留特殊标签，不把 DTS-HD 当成发布
   const dts = { ...media, audio: { status: 'confirmed' as const, codec: 'dts', channels: 6 } }
   const version = measuredReleaseVersion(dts, 'Movie.1080p.BluRay.AVC.DTS-HD.MA.5.1-Group.mkv')
   expect(version.name).toContain('HD')
+  expect(version.name.endsWith('-Group')).toBe(true)
   expect(matchMeasuredRelease([row({ name: '1080p.BluRay.SDR.AVC.DTS.5.1' })], dts, 'Movie.1080p.BluRay.AVC.DTS-HD.MA.5.1-Group.mkv').matchedId).toBeUndefined()
+})
+
+test('自动匹配区分制作组，大小写兼容且明确绑定仍然优先', () => {
+  const grouped = row({ name: `${row().name}-Team.Web-Release` })
+  const other = row({ id: 'b'.repeat(32), name: `${row().name}-Other` })
+  const file = 'Show.1080p.YK.WEB-DL.AVC-team.web-release.mkv'
+  const version = measuredReleaseVersion(media, file, 1)
+  expect(version.name).toBe(`${row().name}-team.web-release`)
+  expect(matchMeasuredRelease([row(), other, grouped], media, file).matchedId).toBe(grouped.id)
+  expect(matchRelease([row(), other, grouped], version.name).matchedId).toBe(grouped.id)
+  expect(matchMeasuredRelease([row(), other], media, file).canCreate).toBe(true)
+  expect(matchRelease([row(), other], version.name).matchedId).toBeUndefined()
+  expect(matchRelease([other], version.name, other.id)).toEqual({ matchedId: other.id, match: 'binding' })
+  expect(matchMeasuredRelease([grouped], media, 'show.mkv', preset).canCreate).toBe(true)
+  expect(measuredReleaseVersion(media, 'Show.YK.WEB-DL.AVC-制作组.mkv', 1).name).toBe(`${row().name}-制作组`)
 })
 
 test('文件名明确写出的普通帧率保留在动态范围与编码之间', () => {

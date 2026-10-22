@@ -16,7 +16,7 @@ import { PublisherError } from './retry.ts'
 
 test('Complete 回执丢失后重启核验原文件，目录上报失败可重放且不重复上传', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'plutofish-worker-'))
-  const path = join(directory, 'E01.mkv'), data = Buffer.alloc(1024, 9)
+  const path = join(directory, 'Show.S01E01.1080p.HG.WEB-DL.SDR.AVC-Team.Web-Release.mkv'), data = Buffer.alloc(1024, 9)
   writeFileSync(path, data)
   const identity = { id: 'pub', name: 'Publisher', kind: 'publisher' as const, sourceAccount: { id: 'source', alias: 'source', name: 'Source' }, categories: [{ value: 'short', label: '短剧' }] }
   const connection = new PlutoFishConnection({ load: () => ({ url: 'https://example.com', key: 'secret' }), verify: async () => identity })
@@ -101,7 +101,7 @@ test('Complete 回执丢失后重启核验原文件，目录上报失败可重�
     expect(finalReports).toHaveLength(2)
     expect(finalReports[0]).toEqual(finalReports[1])
     expect(finalReports[0]).toMatchObject({ resource: { pickCode: 'finishedfile' },
-      releaseTarget: { existingReleaseId: 'a'.repeat(32), name: 'S01.1080p.HG.WEB-DL.SDR.AVC', resolution: '1080p', dynamicRange: 'SDR', autoPublish: true } })
+      releaseTarget: { existingReleaseId: 'a'.repeat(32), name: 'S01.1080p.HG.WEB-DL.SDR.AVC-Team.Web-Release', resolution: '1080p', dynamicRange: 'SDR', autoPublish: true } })
     expect(starts).toBe(1)
     expect(puts).toBe(1)
     expect(view.progress?.synced).toBeTrue()
