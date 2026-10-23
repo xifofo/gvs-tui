@@ -95,7 +95,7 @@ describe('localFetchH2', () => {
       url,
     )
     expect(frame.status).toBe(200)
-    expect(frame.header['x-proto']?.[0]).toBe('2.0')
+    expect(frame.header?.['x-proto']?.[0]).toBe('2.0')
     const body = JSON.parse(Buffer.from(frame.body ?? '', 'base64').toString('utf8'))
     expect(body.path).toBe('/api?x=1')
     expect(body.proto).toBe('2.0')
