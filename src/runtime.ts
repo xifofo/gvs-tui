@@ -639,6 +639,7 @@ export class Runtime {
     if (this.has('mgtv')) f.push('芒果扫码','芒果状态','芒果退出')
     if (this.has('bilibili')) f.push('B 站扫码','B 站 Cookie','B 站状态','B 站退出')
     if (this.has('migu')) f.push('咪咕 App 扫码','咪咕 App 状态','咪咕 App 退出','咪咕 TV 扫码','咪咕 TV 状态','咪咕 TV 退出')
+    if (this.has('crunchyroll')) f.push('CR 令牌')
     if (this.has('tencent')) f.push('腾讯诊断日志')
     f.push('运行日志')
     return f
@@ -684,6 +685,10 @@ export class Runtime {
         if (!proxy) return '默认网络 · 回车配置代理'
         try { return `${new URL(proxy).origin} · ${override ? '启动环境覆盖' : '已保存'}` }
         catch { return '地址格式无效 · 回车修改' }
+      }
+      case 'CR 令牌': {
+        const t = (this.cfg.crunchyrollToken || '').trim()
+        return t ? `已保存 · ${t.slice(0, 6)}… · 回车替换/清空` : '未导入 · 回车粘贴 refresh_token'
       }
       case 'Key':
         if (this.simulated) return '演示模式，无需 Key'
@@ -748,6 +753,8 @@ export class Runtime {
     if (f === '腾讯 TV 版本') return this.cfg.tencentTVVersion || ''
 
     switch (f) {
+      case 'CR 令牌':
+        return this.cfg.crunchyrollToken || ''
       case '网关代理':
         return this.cfg.gatewayProxy || ''
       case '网关':
@@ -2175,6 +2182,7 @@ export class Runtime {
     this.scene = 'edit'
     if (f === 'TMDB 代理') this.say('填写 HTTP/HTTPS 代理地址；仅用于 TMDB，留空使用默认网络')
     if (f === '网关代理') this.say('填写 HTTP/HTTPS 代理地址，保存后用于网关请求和隧道；留空直连')
+    if (f === 'CR 令牌') this.say('粘贴本人 Crunchyroll refresh_token；只存本机配置，网关不落盘；留空清除')
     this.emit()
   }
 
@@ -2267,6 +2275,13 @@ export class Runtime {
       case '腾讯原生事件文件':
         this.cfg.tencentNativeEventFile = v.trim()
         break
+      case 'CR 令牌': {
+        const token = v.trim()
+        if (token.length > 4096) { this.say('refresh_token 过长', 'warn'); this.emit(); return }
+        this.cfg.crunchyrollToken = token
+        this.say(token ? '已保存 Crunchyroll 令牌（仅本机配置）' : '已清除 Crunchyroll 令牌', 'ok')
+        break
+      }
       case '网关代理':
         try { this.cfg.gatewayProxy = normalizeHttpProxy(v) }
         catch (e) {

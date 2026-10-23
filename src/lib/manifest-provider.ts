@@ -3,12 +3,15 @@ import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
 import { asBool, isObj } from './util.ts'
 import { tierHeight } from './name.ts'
+import { onlineSubtitles, type OnlineSubtitle } from './online-subtitles.ts'
 
-export type ManifestSource = { url: string; headers: Record<string, string>; format: string; height: number; quality: string; clear: boolean; drm: string; live: boolean; contentKeys: string[]; manifest?: string }
+export type ManifestSource = { url: string; headers: Record<string, string>; format: string; height: number; quality: string; clear: boolean; drm: string; live: boolean; contentKeys: string[]; manifest?: string; subtitles?: OnlineSubtitle[] }
 const str = (v: unknown): string => typeof v === 'string' ? v : ''
 export function manifestSources(data: Record<string, unknown>): ManifestSource[] {
   const raw = isObj(data.raw) ? data.raw : {}
   const rows = Array.isArray(data.media) ? data.media : Array.isArray(raw.media) ? raw.media : []
+  // Crunchyroll 的字幕是源站单独的签名直链，不在清单里：随 resolve 一起带走。
+  const subtitles = onlineSubtitles(data)
   return rows.filter(isObj).filter(m => !m.type || m.type === 'video').map(m => {
     const meta = isObj(m.meta) ? m.meta : {}
     const drm = isObj(m.drm) ? m.drm : isObj(meta.drm) ? meta.drm : isObj(data.drm) ? data.drm : isObj(raw.drm) ? raw.drm : {}
@@ -18,7 +21,7 @@ export function manifestSources(data: Record<string, unknown>): ManifestSource[]
     try { const u = new URL(url); safe = ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password } catch {}
     const contentKeys = parseContentKeys(drm.contentKeys)
     const manifest = str(data.manifest || raw.manifest) || undefined
-    return { url: safe ? url : '', headers, format: str(m.format || meta.format), quality: str(m.quality || meta.quality), height: Number(m.height || meta.height) || 0, clear: drm.clear === true, drm: str(drm.system) || (drm.clear === true ? 'none' : 'unknown'), live: m.isLive === true || data.isLive === true || raw.isLive === true, contentKeys, manifest }
+    return { url: safe ? url : '', headers, format: str(m.format || meta.format), quality: str(m.quality || meta.quality), height: Number(m.height || meta.height) || 0, clear: drm.clear === true, drm: str(drm.system) || (drm.clear === true ? 'none' : 'unknown'), live: m.isLive === true || data.isLive === true || raw.isLive === true, contentKeys, manifest, ...(subtitles.length ? { subtitles } : {}) }
   }).filter(m => !!m.url)
 }
 export function manifestInput(provider: string, cfg: Pick<FileConfig, 'hamiClient'>, id: string, quality = 'auto'): Record<string, unknown> {
@@ -36,11 +39,33 @@ export async function resolveManifest(cli: Pick<GwClient, 'invoke'>, cfg: Pick<F
   if (!sources.length) throw new Error('网关没有返回可用媒体清单')
   return sources
 }
-export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: string, id: string): Promise<{ qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[] }> {
+const positive = (value: unknown): number => {
+  const n = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/** Catalog bytes win. Otherwise estimate from this rendition's bitrate and a known duration. */
+export function appleTVQualitySize(row: Record<string, unknown>, episodeDuration = 0): { size: number; estimated: boolean } {
+  const bytes = positive(row.size) || positive(row.estimatedSize) || positive(row.fileSize) || positive(row.fs)
+  if (bytes) return { size: bytes <= Number.MAX_SAFE_INTEGER ? Math.round(bytes) : 0, estimated: false }
+  const duration = positive(row.duration) || positive(row.durationSec) || positive(episodeDuration)
+  const kbps = positive(row.bitrateKbps) || positive(row.videoBitrateKbps)
+  const bps = kbps ? kbps * 1000 : positive(row.bitrate) || positive(row.bandwidth) || positive(row.averageBitrate) || positive(row.avgBitrate)
+  if (!bps || !duration) return { size: 0, estimated: false }
+  const estimated = bps * duration / 8
+  if (!Number.isFinite(estimated) || estimated > Number.MAX_SAFE_INTEGER) return { size: 0, estimated: false }
+  return { size: Math.round(estimated), estimated: true }
+}
+
+export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: string, id: string, episodeDuration = 0): Promise<{ qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[] }> {
   if (provider === 'appletvplus') {
     const data = await cli.invoke(provider, 'probe', manifestInput(provider, cfg, id))
     const rows = Array.isArray(data.qualities) ? data.qualities.filter(isObj) : []
-    const qualities: Quality[] = rows.filter(q => str(q.id) && Number(q.height) > 0).map(q => ({ id: str(q.id), label: str(q.label), title: str(q.label), size: 0, width: Number(q.width) || 0, height: Number(q.height), codec: str(q.codec), drm: 'playready', stream: str(q.id), hdr: str(q.hdr), fps: Number(q.fps) || undefined, tier: tierHeight(Number(q.width) || 0, Number(q.height)) }))
+    const qualities: Quality[] = rows.filter(q => str(q.id) && Number(q.height) > 0).map(q => {
+      const sized = appleTVQualitySize(q, episodeDuration)
+      const label = str(q.label)
+      return { id: str(q.id), label, title: sized.estimated ? `${label} · 体积按码率和时长估算` : label, size: sized.size, duration: positive(q.duration) || positive(episodeDuration) || undefined, width: Number(q.width) || 0, height: Number(q.height), codec: str(q.codec), drm: 'playready', stream: str(q.id), hdr: str(q.hdr), fps: Number(q.fps) || undefined, tier: tierHeight(Number(q.width) || 0, Number(q.height)) }
+    })
     if (!qualities.length) throw new Error('Apple TV 没有返回可用画质')
     // Apple TV 一片多配音、多字幕；网关按 1-based 序号标识，下载时原样传回，
     // 由网关只把选中的渲染写进 master（它们的 URI 都叫 stream/playlist.m3u8）。
@@ -63,12 +88,83 @@ export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: st
     }))
     return { qualities, audios, subtitles }
   }
+  if (provider === 'crunchyroll') return probeCrunchyroll(cli, id)
   if (provider === 'dsnp') return probeDsnp(cli, cfg, id)
   const sources = await resolveManifest(cli, cfg, provider, id)
   return { qualities: sources.map(s => {
     const selectable = provider === 'friday' ? [1080,2160].includes(s.height) : provider === 'hamivideo' && cfg.hamiClient !== 'web' && [480,720,1080,2160].includes(s.height)
     return { id: selectable ? String(s.height) : 'auto', label: s.quality || (s.height ? `${s.height}p` : '自动'), title: s.clear ? '源站明确标记明文 · 本机直连下载' : ['hamivideo', 'friday', 'dsnp'].includes(provider) ? '网关授权取内容密钥 · 本机下载解密' : '受保护媒体 · 当前客户端尚未接入该 DRM 授权处理', size: 0, width: 0, height: s.height, codec: '', drm: s.clear ? 'none' : s.drm, stream: selectable ? String(s.height) : 'auto', tier: tierHeight(0, s.height) }
   }), audios: [] }
+}
+
+/**
+ * Crunchyroll 画质：网关 `qualities` 只读源站 DASH 清单、不换钥也不计费，
+ * 所以能在选片阶段就列出真实档位（分辨率/码率/帧率/音轨）。
+ * 旧网关没有这个动作，或本次探测失败时，退回单条「自动（最佳画质）」——
+ * 下载本身由下载器在同一条清单里自选，不会因此下不了。
+ */
+export async function probeCrunchyroll(cli: Pick<GwClient, 'invoke'>, id: string): Promise<{ qualities: Quality[]; audios: Audio[] }> {
+  try {
+    const data = await cli.invoke('crunchyroll', 'qualities', { id })
+    const rows = Array.isArray(data.qualities) ? data.qualities.filter(isObj) : []
+    const qualities: Quality[] = rows.map(q => {
+      const height = Number(q.height) || 0
+      const width = Number(q.width) || 0
+      const kbps = Math.round(Number(q.bitrateKbps) || 0)
+      const codec = str(q.codec)
+      const id = str(q.id) || (height ? `${height}p` : '')
+      const label = str(q.label) || (height ? `${height}p` : id)
+      const bits = [kbps ? `${kbps} kbps` : '', codec].filter(Boolean).join(' · ')
+      return {
+        id: id || 'auto',
+        label,
+        title: bits ? `DASH · 本机直连 CDN · ${bits}` : 'DASH · 本机直连 CDN',
+        size: 0,
+        width,
+        height,
+        codec,
+        drm: 'widevine',
+        stream: str(q.stream) || id || 'auto',
+        fps: Number(q.fps) || undefined,
+        tier: tierHeight(width, height),
+      }
+    }).filter(q => q.height > 0 || q.id === 'auto')
+    if (!qualities.length) throw new Error('网关没有返回可用档位')
+    // 配音：CR 的每一档配音是另一条 episode 版本，网关按 locale 换版本 id。
+    const audioRows = Array.isArray(data.audios) ? data.audios.filter(isObj) : []
+    const audios: Audio[] = audioRows.map((a, i) => {
+      const locale = str(a.lang) || str(a.locale) || str(a.id)
+      const base = str(a.label) || locale || `音轨 ${i + 1}`
+      const original = asBool(a.original)
+      return {
+        id: str(a.id) || locale || String(i + 1),
+        label: original && locale && !/原声/.test(base) ? `${base}（原声）` : base,
+        lang: locale,
+        codec: str(a.codec),
+        isDefault: asBool(a.default) || i === 0,
+        selected: asBool(a.default) || i === 0,
+      }
+    })
+    // 字幕：源站给的是独立签名直链，中文/英语优先选中。
+    const subRows = onlineSubtitles(data)
+    const subtitles: Subtitle[] = subRows.map(s => ({
+      id: s.id,
+      label: s.label,
+      lang: s.lang,
+      forced: false,
+      sdh: false,
+      selected: false,
+      isDefault: false,
+    }))
+    for (const want of [/^zh/i, /^en/i]) {
+      const pick = subtitles.find(s => want.test(s.lang) && !s.selected)
+      if (pick) { pick.selected = true; break }
+    }
+    return { qualities, audios, ...(subtitles.length ? { subtitles } : {}) }
+  } catch {
+    // 旧网关 / 探测失败：保留原来的单入口，下载照旧走最佳画质。
+  }
+  return { qualities: [{ id: 'auto', label: '自动（最佳画质）', title: 'DASH · 本机直连 CDN', size: 0, width: 0, height: 0, codec: '', drm: 'widevine', stream: 'auto', tier: 0 }], audios: [] }
 }
 
 type HlsAttrs = Record<string, string>
@@ -261,12 +357,22 @@ export function parseContentKeys(value: unknown): string[] {
   return [...keys].map(([kid, key]) => `${kid}:${key}`)
 }
 
-export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient'>, provider: string, id: string, quality = 'auto', selection?: { audio?: string[]; subtitle?: string[] }): Promise<ManifestSource[]> {
+export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient' | 'crunchyrollToken'>, provider: string, id: string, quality = 'auto', selection?: { audio?: string[]; subtitle?: string[] }): Promise<ManifestSource[]> {
   const input = manifestInput(provider, cfg, id, quality)
   if (provider === 'appletvplus' && selection) {
     // 序号取自 probe；网关据此裁剪 master，RE 只需 --select-audio best。
     if (selection.audio?.length) input.audio = selection.audio.join(',')
     if (selection.subtitle?.length) input.subtitle = selection.subtitle.join(',')
+  }
+  if (provider === 'crunchyroll') {
+    // 网关只换钥并发放短期 token；媒体由本机直连 CDN（不过网关带宽）。
+    const token = (cfg.crunchyrollToken || '').trim()
+    if (!token) throw new Error('CRUNCHYROLL_TOKEN_REQUIRED: 请先在设置里导入本人 Crunchyroll refresh_token')
+    input.download = true
+    input.refresh_token = token
+    // 配音是另一条 episode 版本：只认第一档（网关按 locale 换成版本 id 再取流）。
+    const audio = selection?.audio?.find(a => !!a)
+    if (audio) input.audio = audio
   }
   if (provider === 'hamivideo' || provider === 'friday' || provider === 'appletvplus' || provider === 'dsnp') input.download = true
   const sources = manifestSources(await cli.invoke(provider, 'resolve', input, undefined, { timeoutMs: 120_000 }))
@@ -274,7 +380,7 @@ export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg
   for (const source of sources) {
     if (source.live) throw new Error('直播录制尚未接入；不会启动无限下载')
     if (source.clear) continue
-    const supported = provider === 'appletvplus' ? ['playready', 'widevine'].includes(source.drm) && source.format.toLowerCase() === 'hls' : provider === 'dsnp' ? source.drm === 'widevine' && source.format.toLowerCase() === 'hls' : ['hamivideo', 'friday'].includes(provider) && source.drm === 'widevine' && source.format.toLowerCase() === 'dash'
+    const supported = provider === 'appletvplus' ? ['playready', 'widevine'].includes(source.drm) && source.format.toLowerCase() === 'hls' : provider === 'dsnp' ? source.drm === 'widevine' && source.format.toLowerCase() === 'hls' : provider === 'crunchyroll' ? source.drm === 'widevine' && source.format.toLowerCase() === 'dash' : ['hamivideo', 'friday'].includes(provider) && source.drm === 'widevine' && source.format.toLowerCase() === 'dash'
     if (!supported || !source.contentKeys.length) {
       requireClearDownload(source)
     }

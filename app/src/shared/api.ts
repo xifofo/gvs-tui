@@ -299,6 +299,12 @@ export type QRStart = { images: QRImage[]; hint: string }
 export type QRPoll = { done: boolean; message: string; tone: Tone }
 
 /**
+ * Crunchyroll 浏览器 SSO 的结果：refresh_token 已写进本机配置，不回传令牌本体。
+ * 字段不能叫 message/msg/hint/reason/summary —— userFacing() 会把它们当错误文案改写。
+ */
+export type CrLoginResult = { saved: boolean; country?: string; scope?: string; note: string }
+
+/**
  * idle 未检查 · checking 检查中 · latest 已是最新 · available 有新版（mac/开发版只提示）
  * downloading 下载中 · ready 已下载待安装 · error 出错
  */
@@ -317,6 +323,8 @@ export type UpdateState = {
 export interface GvsApi {
   tencentDiagnostics(jobID?: number): Promise<TencentDiagnostic[]>
   providerSession(command: SessionCommand): Promise<ProviderSessionView>
+  /** Crunchyroll 一键登录：开授权窗 → 截获 crunchyroll://auth 回跳 → 网关换令牌 → 存本机 */
+  crunchyrollSsoLogin(): Promise<CrLoginResult>
   state(): Promise<AppState>
   setup(host: string, key: string, desktopProxy?: string, plutofish?: PlutoFishInput): Promise<AppState>
   saveSettings(patch: SettingsPatch): Promise<AppState>
@@ -362,6 +370,7 @@ export interface GvsApi {
   /** 选文件夹；start 为对话框初始位置（缺省下载目录） */
   chooseDir(start?: string): Promise<string>
   /** 本 Key 的设备文件状态（不含文件内容） */
+  deleteDRMOne(system: DRMSystem, id: string): Promise<DRMStatus>
   drmStatus(): Promise<DRMStatus>
   /** 网关下发的平台账号说明；旧网关返回 null */
   platformMeta(): Promise<PlatformMetaResponse | null>

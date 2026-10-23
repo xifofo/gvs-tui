@@ -121,3 +121,19 @@ describe('shared client provider sessions', () => {
     expect(log).toContain('web_verify')
   })
 })
+
+test('Crunchyroll imports a refresh token and never claims a server-side session', async () => {
+  const calls: Array<{ provider: string; action: string; input: Record<string, unknown> }> = []
+  const sessions = new ProviderSessions(async (provider, action, input) => {
+    calls.push({ provider, action, input })
+    return action === 'login' ? { account: '', tokenType: 'Bearer', token: 'abcd...wxyz', expiresAt: new Date().toISOString() } : {}
+  })
+  const imported = await sessions.command({ provider: 'crunchyroll', op: 'import', token: 'refresh-token-value' })
+  expect(calls[0]).toMatchObject({ provider: 'crunchyroll', action: 'login' })
+  expect(calls[0]?.input).toMatchObject({ op: 'import', refresh_token: 'refresh-token-value' })
+  expect(imported.authenticated).toBe(false)
+  await expect(sessions.command({ provider: 'crunchyroll', op: 'import', token: '  ' })).rejects.toThrow('refresh_token')
+  const status = await sessions.command({ provider: 'crunchyroll', op: 'status' })
+  expect(status.authenticated).toBe(false)
+  expect(status.summary).toContain('不保存服务端会话')
+})
