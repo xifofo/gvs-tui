@@ -340,8 +340,9 @@ export class Core {
   readonly plutofish = new PlutoFishConnection({ changed: () => this.emit.state() })
   computePublicationED2K = (path: string, signal: AbortSignal, progress?: (done: number, total: number) => void) => ed2kFile(path, progress, signal)
 
-  private readonly publications = new PublicationWorker(this.plutofish, draft => {
+  private readonly publications = new PublicationWorker(this.plutofish, (draft, transient) => {
     for (const rec of this.jobs.values()) if (rec.task.publication?.fileKey === draft.fileKey) rec.task.publication = draft
+    if (transient) { this.emit.jobs(this.jobList()); return }
     this.pushJobs()
   }, { beforeCleanup: () => this.flushJobs(true), retention: { compute: (path, signal, progress) => this.computePublicationED2K(path, signal, progress) } })
 
@@ -429,6 +430,7 @@ export class Core {
     for (const rec of data.jobs) {
       if (!isObj(rec) || !isObj(rec.view) || !isObj(rec.task) || !isObj(rec.pin)) continue
       const view = { ...rec.view } as JobView
+      if (rec.task.publication?.progress) delete rec.task.publication.progress.transfer
       const id = anyInt(view.id)
       if (!id || this.jobs.has(id)) continue
       view.busy = undefined
@@ -485,7 +487,7 @@ export class Core {
       version: JOBS_VERSION,
       jobs: [...this.jobs.values()].map((r) => ({
         view: { ...r.view, busy: undefined },
-        task: r.task,
+        task: r.task.publication?.progress ? { ...r.task, publication: { ...r.task.publication, progress: { ...r.task.publication.progress, transfer: undefined } } } : r.task,
         pin: r.pin,
         account: r.account,
       })),
