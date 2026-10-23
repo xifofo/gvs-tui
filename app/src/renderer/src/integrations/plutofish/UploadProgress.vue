@@ -5,13 +5,15 @@ import { publicationMissing, publicationStage } from '../../../../../../src/inte
 import { errText, gvs, human, store, toast } from '../../store'
 import ResourceCategorySelect from './ResourceCategorySelect.vue'
 import { publicationCategoryError } from '../../../../../../src/integrations/plutofish/categories'
+import { uploadBytes, uploadRemaining } from '../../../../../../src/integrations/plutofish/upload-display'
 
 const props = defineProps<{ job: JobView }>()
 const draft = computed(() => props.job.publication!)
 const progress = computed(() => draft.value.progress)
 const missing = computed(() => publicationMissing(draft.value))
-const percent = computed(() => Math.min(100, Math.max(0, progress.value?.uploadPercent ?? 0)))
 const total = computed(() => progress.value?.sizeBytes || draft.value.measured?.file.size || 0)
+const transfer = computed(() => progress.value?.stage === 'uploading' && progress.value.phase === 'uploading' ? progress.value.transfer : undefined)
+const percent = computed(() => Math.min(100, Math.max(0, transfer.value && total.value ? transfer.value.sentBytes / total.value * 100 : progress.value?.uploadPercent ?? 0)))
 const busy = ref(false)
 const category = ref('')
 const categoryValid = computed(() => !publicationCategoryError(store.state?.plutofish, category.value))
@@ -40,7 +42,12 @@ async function control(action: 'pause' | 'resume' | 'setup') {
       <div class="progress" :class="{ done: progress?.stage === 'completed', fail: progress?.stage === 'failed', pause: progress?.stage === 'paused' }" role="progressbar" aria-label="上传" :aria-valuenow="percent" :aria-valuemin="0" :aria-valuemax="100">
         <div :style="{ width: percent + '%' }" />
       </div>
-      <div class="upload-meta"><span>{{ human(progress?.uploadedBytes ?? 0) || '0 B' }} / {{ human(total) || '待检测' }}</span><span :title="`${draft.binding.sourceAccount?.alias ?? ''} · ${draft.directoryPath || '/'}`">{{ draft.binding.sourceAccount?.alias }} · {{ draft.directoryPath || '/' }}</span></div>
+      <div class="upload-meta"><span>{{ transfer ? '已发送 ' : '' }}{{ human(transfer?.sentBytes ?? progress?.uploadedBytes ?? 0) || '0 B' }} / {{ human(total) || '待检测' }}</span><span :title="`${draft.binding.sourceAccount?.alias ?? ''} · ${draft.directoryPath || '/'}`">{{ draft.binding.sourceAccount?.alias }} · {{ draft.directoryPath || '/' }}</span></div>
+      <div v-if="progress?.stage === 'uploading' && progress.phase === 'uploading'" class="upload-speed" aria-label="上传速度与剩余时间">
+        <strong>{{ transfer ? `${uploadBytes(transfer.bytesPerSecond)}/s` : '测速中…' }}</strong>
+        <span>{{ transfer?.sentBytes === total ? '等待分片确认' : `剩余${uploadRemaining(transfer?.etaSeconds)}` }}</span>
+        <span v-if="transfer && transfer.rateLimit > 0">账号共享上限 {{ uploadBytes(transfer.rateLimit) }}/s</span>
+      </div>
     </template>
     <p v-if="progress?.error" class="err" role="alert">{{ progress.error }}</p>
     <p v-if="!ready && progress?.stage !== 'completed'" class="err">{{ store.state?.plutofish?.error || '等待 PlutoFish 连接恢复' }}</p>
@@ -66,6 +73,8 @@ async function control(action: 'pause' | 'resume' | 'setup') {
 .upload-heading, .upload-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .upload-heading strong { color: var(--orange-text); }
 .upload-meta { color: var(--ink-3); }
+.upload-speed { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.upload-speed strong { color: var(--orange-text); }
 .upload-meta span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .upload-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .upload-setup { display: grid; gap: 8px; }

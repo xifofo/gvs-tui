@@ -19,7 +19,7 @@ async function main() {
   let preload = readFileSync(resolve('scripts/ui-flow-smoke-preload.cjs'), 'utf8')
   const start = preload.indexOf('let jobs ='), end = preload.indexOf('const update =', start)
   preload = preload.slice(0, start) + `
-const progress = stage => ({ stage, phase: 'uploading', downloadPercent: 100, uploadPercent: stage === 'completed' ? 100 : 35, uploadedBytes: stage === 'completed' ? 104857600 : 36700160, sizeBytes: 104857600, error: stage === 'failed' ? 'PlutoFish 上报失败（HTTP 503）' : '', synced: true });
+const progress = stage => ({ stage, phase: 'uploading', downloadPercent: 100, uploadPercent: stage === 'completed' ? 100 : 35, uploadedBytes: stage === 'completed' ? 104857600 : 36700160, sizeBytes: 104857600, transfer: stage === 'uploading' ? { sentBytes: 41943040, bytesPerSecond: 2097152, etaSeconds: 30, rateLimit: 10485760 } : undefined, error: stage === 'failed' ? 'PlutoFish 上报失败（HTTP 503）' : '', synced: true });
 let jobs = ['missing', 'uploading', 'paused', 'failed'].map((stage, i) => ({
  id: i + 1, groupId: 'upload-' + i, groupTitle: ['此处通往繁星', '远方来信', '长风入海', '山间小路'][i], provider: 'youku', poster: '', label: 'S01E01', quality: '1080P', status: '完成', pct: 1, log: '', err: '', note: '', state: 'done', output: '/Downloads/Example.2026.S01E01.mp4', createdAt: Date.now(), finishedAt: Date.now(),
  publication: { schemaVersion: 1, title: '测试作品', binding: { url: 'https://example.com', publisherId: 'pub', sourceAccount: { id: 'source', alias: 'main' } }, workTarget: { mediaType: 'tv', tmdbId: '296203', category: stage === 'missing' ? '' : 'tv' }, directoryPath: '/电视剧', directoryId: '123', categoryLabel: '电视剧', fileKey: 'fixture-' + i, releaseKey: 'fixture-r', kind: 'video', output: '/Downloads/Example.2026.S01E01.mp4', updatedAt: '', seasonNumber: 1, episodeNumber: 1, measured: { file: { size: 104857600 }, media: { status: 'probed', width: 1920, height: 1080, codec: 'hevc' } }, ...(stage === 'missing' ? {} : { progress: progress(stage) }) }
@@ -58,6 +58,7 @@ state.plutofish = { url: 'https://example.com', hasKey: true, status: 'verified'
       await wait(code); await run(`(${code}).click()`); await delay(100)
     }
     await win.loadFile(resolve('out/renderer/index.html'))
+    await run(`document.documentElement.classList.remove('light', 'dark'); document.documentElement.classList.add('${width === 760 ? 'dark' : 'light'}')`)
     await wait('window.__uiFlowFixture.snapshot().ready')
     await run('Array.from(document.querySelectorAll(".side button")).find(e => e.textContent.trim().startsWith("下载"))?.click()')
     await wait('document.querySelectorAll(".upload-progress").length === 4')
@@ -69,11 +70,15 @@ state.plutofish = { url: 'https://example.com', hasKey: true, status: 'verified'
     assert.equal(await run('document.querySelector("select[aria-label=补全资源分类]").required'), true)
     assert.equal(await run('Array.from(document.querySelectorAll("button")).find(e => e.textContent.trim() === "补全并上传").disabled'), true)
     assert.ok(await run('document.body.innerText.includes("待补全资源分类")'))
-    assert.ok(await run('document.body.innerText.includes("35.0%") && document.body.innerText.includes("35.0 MB / 100 MB")'))
+    assert.ok(await run('document.body.innerText.includes("40.0%") && document.body.innerText.includes("40.0 MB / 100 MB")'))
+    assert.ok(await run('document.body.innerText.includes("2.00 MB/s") && document.body.innerText.includes("约 30 秒") && document.body.innerText.includes("账号共享上限 10.00 MB/s")'))
     assert.ok(await run('document.body.innerText.includes("PlutoFish 上报失败（HTTP 503）")'))
     await run('document.fonts.ready.then(() => true)')
     await delay(100)
     writeFileSync(join(output, `uploads-${width}.png`), (await win.webContents.capturePage()).toPNG())
+    await run('Array.from(document.querySelectorAll(".upload-progress")).find(e => e.querySelector(".upload-speed"))?.scrollIntoView({ block: "center" })')
+    await delay(100)
+    writeFileSync(join(output, `upload-speed-${width}.png`), (await win.webContents.capturePage()).toPNG())
     assert.equal(await run('document.documentElement.scrollWidth > innerWidth + 1'), false)
     await run('Array.from(document.querySelectorAll(".filters button")).find(e => e.textContent.startsWith("进行中")).click()')
     await wait('document.querySelectorAll(".upload-progress").length === 1')
