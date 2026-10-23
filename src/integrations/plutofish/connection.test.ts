@@ -99,6 +99,21 @@ test('HTTP client targets only publisher/me, sends no cookies and refuses redire
   expect(called).toBe(true)
 })
 
+test.each([
+  [undefined, false], [null, false], [{}, false],
+  [{ uploadClientGrouping: false }, false], [{ uploadClientGrouping: 'true' }, false],
+  [{ uploadClientGrouping: 2 }, false], [['uploadClientGrouping'], false],
+  [{ uploadClientGrouping: true, futureFeature: { version: 99 } }, true],
+])('上传能力只接受显式支持，旧服务端和未知未来扩展保持可连接：%j', async (capabilities, grouped) => {
+  const c = connection({ verify: (value, signal) => verifyPublisher(value, signal, async () => Response.json({ ...publisher, capabilities, futureField: 'ignored' })) })
+  await c.verify()
+  expect(c.ready).toBe(true)
+  expect(c.groupedUploads).toBe(grouped)
+  expect(!!c.view().uploadNotice).toBe(!grouped)
+  expect(JSON.stringify(c.view())).not.toContain('futureFeature')
+  expect(JSON.stringify(c.view())).not.toContain('futureField')
+})
+
 test.each([401, 403, 500, 302])('HTTP %s cannot authenticate and does not echo response secrets', async status => {
   const request = (async () => new Response(input.key, { status })) as PublisherFetch
   try { await verifyPublisher(input, undefined, request); throw new Error('unexpected success') }

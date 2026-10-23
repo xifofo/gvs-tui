@@ -52,6 +52,7 @@ const hint = computed(() => {
         <Text :content="form.keyLength ? '•'.repeat(Math.min(form.keyLength, fieldW)) : state.plutofish?.hasKey ? '已保存；输入可替换' : '请输入 PlutoFish 密钥'" :height="1" :width="fieldW" :fg="form.field === 3 ? c.accent : c.dim" />
       </Box>
       <Text :content="hint" :height="1" :truncate="true" :fg="state.plutofish?.status === 'verified' ? c.accent : c.dim" />
+      <Text v-if="state.plutofish?.uploadNotice" content="单文件兼容模式 · 服务端更新后可启用双文件上传" :height="1" :truncate="true" :fg="c.dim" />
       <Text content="Tab 切换 · Enter 验证并进入 · Ctrl+U 清空密钥" :height="1" :fg="c.faint" />
     </Box>
   </Box>

@@ -18,6 +18,7 @@ const model = defineModel<PlutoFishInput>({ required: true })
     <span v-if="state?.status === 'checking'" class="dim" role="status">正在验证 PlutoFish…</span>
     <span v-else-if="state?.status === 'verified'" class="verified" role="status">PlutoFish 已验证：{{ state.identity?.name }}</span>
     <span v-else-if="state?.error" class="error-box" role="alert">{{ state.error }}</span>
+    <span v-if="state?.uploadNotice" class="dim" role="status">{{ state.uploadNotice }}</span>
   </fieldset>
 </template>
 

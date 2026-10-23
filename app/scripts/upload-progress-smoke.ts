@@ -25,7 +25,7 @@ let jobs = ['missing', 'uploading', 'paused', 'failed'].map((stage, i) => ({
  publication: { schemaVersion: 1, title: '测试作品', binding: { url: 'https://example.com', publisherId: 'pub', sourceAccount: { id: 'source', alias: 'main' } }, workTarget: { mediaType: 'tv', tmdbId: '296203', category: stage === 'missing' ? '' : 'tv' }, directoryPath: '/电视剧', directoryId: '123', categoryLabel: '电视剧', fileKey: 'fixture-' + i, releaseKey: 'fixture-r', kind: 'video', output: '/Downloads/Example.2026.S01E01.mp4', updatedAt: '', seasonNumber: 1, episodeNumber: 1, measured: { file: { size: 104857600 }, media: { status: 'probed', width: 1920, height: 1080, codec: 'hevc' } }, ...(stage === 'missing' ? {} : { progress: progress(stage) }) }
 })).reverse();
 let categoryReads = 0;
-state.plutofish = { url: 'https://example.com', hasKey: true, status: 'verified', error: '', identity: { id: 'pub', kind: 'publisher', name: 'Fixture', sourceAccount: { id: 'source', alias: 'main', name: '测试源' } } };
+state.plutofish = { url: 'https://example.com', hasKey: true, status: 'verified', error: '', uploadNotice: '服务端尚未声明支持双文件上传，已使用单文件兼容模式；其他文件仍会提前准备。', identity: { id: 'pub', kind: 'publisher', name: 'Fixture', sourceAccount: { id: 'source', alias: 'main', name: '测试源' } } };
 ` + preload.slice(end)
   preload = preload.replace('  snapshot,', `  snapshot,
   uploadStage(id, stage) { jobs.find(j => j.id === id).publication.progress = progress(stage); emit('jobs', jobs) },`)
@@ -73,6 +73,7 @@ state.plutofish = { url: 'https://example.com', hasKey: true, status: 'verified'
     assert.ok(await run('document.body.innerText.includes("40.0%") && document.body.innerText.includes("40.0 MB / 100 MB")'))
     assert.ok(await run('document.body.innerText.includes("2.00 MB/s") && document.body.innerText.includes("约 30 秒") && document.body.innerText.includes("账号共享上限 10.00 MB/s")'))
     assert.ok(await run('document.body.innerText.includes("PlutoFish 上报失败（HTTP 503）")'))
+    assert.ok(await run('document.querySelector(".upload-progress").textContent.includes("单文件兼容模式")'))
     await run('document.fonts.ready.then(() => true)')
     await delay(100)
     writeFileSync(join(output, `uploads-${width}.png`), (await win.webContents.capturePage()).toPNG())

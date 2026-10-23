@@ -12,7 +12,7 @@ import type { OSSFactory } from './oss-upload.ts'
 
 test('最多两个 PUT，排队文件提前哈希，暂停一路不影响另一路，实时发送不落盘', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'publisher-two-'))
-  const identity = { id: 'pub', name: 'Pub', kind: 'publisher' as const, sourceAccount: { id: 'source', alias: 'source', name: 'Source' } }
+  const identity = { id: 'pub', name: 'Pub', kind: 'publisher' as const, sourceAccount: { id: 'source', alias: 'source', name: 'Source' }, capabilities: { uploadClientGrouping: true } }
   const connection = new PlutoFishConnection({ load: () => ({ url: 'https://example.com', key: 'offline' }), verify: async () => identity })
   await connection.verify()
   const views = new Map<string, PublicationDraft>(), phases = new Set<string>(), clients = new Set<string>()
