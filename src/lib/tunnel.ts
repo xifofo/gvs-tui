@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import dns from 'node:dns/promises'
 import net from 'node:net'
 import tls from 'node:tls'
+import http2 from 'node:http2'
 import { sleep } from './util.ts'
 import { isLocalGateway } from './gateway-route.ts'
 
@@ -38,6 +39,35 @@ const SILENCE_MS = 8_000
 const CLOSE_REPLACED = 4000
 
 export type TunnelStop = { opened: boolean; code: number; reason: string }
+
+/** 上游 h2 通道：tx/yk 的真实客户端都声明 h2，而 Bun fetch 只发 h1.1。 */
+const H2_DEFAULT_HOSTS = '.youku.com,.qq.com,.atianqi.com'
+
+function h2Enabled(): boolean {
+  return (process.env.GVS_TUNNEL_H2 ?? '1') !== '0'
+}
+
+function h2Hosts(): string[] {
+  return (process.env.GVS_TUNNEL_H2_HOSTS ?? H2_DEFAULT_HOSTS)
+    .split(',')
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+/** 纯匹配函数（导出便于单测）：`.youku.com` 同时匹配裸域与子域。 */
+export function h2HostMatches(hosts: string[], hostname: string): boolean {
+  const h = hostname.toLowerCase()
+  return hosts.some((s) => (s.startsWith('.') ? h === s.slice(1) || h.endsWith(s) : h === s))
+}
+
+/** 该主机是否走 h2 通道（默认只覆盖 tx/yk 的上游域）。 */
+export function tunnelUsesH2(hostname: string): boolean {
+  return h2Enabled() && h2HostMatches(h2Hosts(), hostname)
+}
+
+function h2Insecure(): boolean {
+  return process.env.GVS_TUNNEL_H2_INSECURE === '1'
+}
 
 export function tunnelRetryWait(stop: TunnelStop, failures: number, message: string): number {
   if (replaced(stop) || LIMIT_RE.test(message)) return 30_000
@@ -474,6 +504,13 @@ async function local(f: TunFrame): Promise<TunFrame> {
     const routedFetch = await fetchRoute?.(url)
     if (routedFetch) return await localFetch(f, routedFetch)
     const route = await tunnelRoute(url.hostname)
+    if (tunnelUsesH2(url.hostname)) {
+      try {
+        return await localFetchH2(f, url, route.fakeIp ? route.tcp : undefined)
+      } catch {
+        // h2 通道是新增能力，任何失败都回落 h1.1，不能影响既有可用性。
+      }
+    }
     if (route.fakeIp) return await localDial(f, url, route.tcp)
     return await localFetch(f)
   } catch (e) {
@@ -515,6 +552,94 @@ export async function localFetch(f: TunFrame, fetcher: TunnelFetch = fetch): Pro
   const cookies = res.headers.getSetCookie()
   if (cookies.length) header['set-cookie'] = cookies
   return { t: 'res', id: f.id, status: res.status, header, body: body.toString('base64') }
+}
+
+/** 上游 h2 请求（node:http2）。失败由调用方回落 h1.1。 */
+export async function localFetchH2(f: TunFrame, url: URL, tcpHost?: string): Promise<TunFrame> {
+  const method = (f.method || 'GET').toUpperCase()
+  const raw = f.body ? Buffer.from(f.body, 'base64') : undefined
+  const headers: Record<string, string | string[]> = {
+    ':method': method,
+    ':path': `${url.pathname}${url.search}`,
+    ':authority': url.host,
+    ':scheme': 'https',
+  }
+  for (const [k, v] of Object.entries(f.header ?? {})) {
+    const lk = k.toLowerCase()
+    if (lk.startsWith(':') || H2_HOP.has(lk)) continue
+    headers[lk] = v
+  }
+  const session = h2Session(url, tcpHost)
+  const req = session.request(headers as any)
+  const chunks: Buffer[] = []
+  try {
+    return await new Promise<TunFrame>((resolve, reject) => {
+      let status = 0
+      const header: Record<string, string[]> = {}
+      const timer = setTimeout(() => {
+        req.close()
+        reject(new Error('h2 timeout'))
+      }, 40_000)
+      req.on('response', (h) => {
+        status = Number(h[':status'] ?? 0)
+        for (const [k, v] of Object.entries(h)) {
+          if (k.startsWith(':')) continue
+          header[k] = Array.isArray(v) ? v : [String(v)]
+        }
+      })
+      req.on('data', (c: Buffer) => chunks.push(Buffer.from(c)))
+      req.on('end', () => {
+        clearTimeout(timer)
+        const body = Buffer.concat(chunks)
+        const slice = body.byteLength > 6 << 20 ? body.subarray(0, 6 << 20) : body
+        resolve({ t: 'res', id: f.id, status, header, body: slice.toString('base64') })
+      })
+      req.on('error', (e) => {
+        clearTimeout(timer)
+        reject(e)
+      })
+      req.end(raw && raw.byteLength ? raw : undefined)
+    })
+  } catch (e) {
+    session.destroy()
+    throw e
+  }
+}
+
+const H2_HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'host', 'te', 'trailer'])
+
+const h2Sessions = new Map<string, http2.ClientHttp2Session>()
+
+/** 关闭所有 h2 会话（诊断/测试用）。 */
+export function closeH2Sessions(): void {
+  for (const s of h2Sessions.values()) s.destroy()
+  h2Sessions.clear()
+}
+
+function h2Session(url: URL, tcpHost?: string): http2.ClientHttp2Session {
+  const key = tcpHost ? `${url.origin}|${tcpHost}` : url.origin
+  const hit = h2Sessions.get(key)
+  if (hit && !hit.closed && !hit.destroyed) return hit
+  const opts: any = {}
+  if (h2Insecure()) opts.rejectUnauthorized = false
+  if (tcpHost) {
+    // fake-IP：自己拿真实 IP 建 TLS，SNI 仍用域名（与 App 一致）。
+    opts.createConnection = () =>
+      tls.connect({
+        host: tcpHost,
+        port: url.port ? Number(url.port) : 443,
+        servername: url.hostname,
+        ALPNProtocols: ['h2'],
+        rejectUnauthorized: !h2Insecure(),
+      })
+  }
+  const session = http2.connect(url.origin, opts)
+  const drop = () => h2Sessions.delete(key)
+  session.on('error', drop)
+  session.on('goaway', drop)
+  session.on('close', drop)
+  h2Sessions.set(key, session)
+  return session
 }
 
 /** Clash fake-ip: Bun fetch to 198.18/15 never hits the real Youku MTOP. */
@@ -701,7 +826,7 @@ function dial(
       resolve(raw)
       return
     }
-    const tlsSock = tls.connect({ socket: raw, servername: hostname }, () => {
+    const tlsSock = tls.connect({ socket: raw, servername: hostname, ALPNProtocols: ['http/1.1'] }, () => {
       signal.removeEventListener('abort', onAbort)
       resolve(tlsSock)
     })
