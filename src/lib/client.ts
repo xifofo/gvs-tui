@@ -360,6 +360,13 @@ export class GwClient {
     return env.data as DRMStatus
   }
 
+  /** 删除设备池中的一只，其它设备保留 */
+  async deleteDRMOne(system: DRMSystem, id: string): Promise<DRMStatus> {
+    if (!/^(legacy|[0-9a-f]{16})$/.test(id)) throw new Error('DRM_ENTRY_INVALID')
+    const env = await this.request('DELETE', `/v1/drm/devices/${system}/${encodeURIComponent(id)}`, undefined, undefined, 15_000)
+    return env.data as DRMStatus
+  }
+
   async keyInfo(): Promise<KeyInfo> {
     const env = await this.request('GET', '/v1/key')
     return (env.data ?? {}) as KeyInfo

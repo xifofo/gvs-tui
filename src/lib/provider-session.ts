@@ -1,11 +1,11 @@
 import { appleTVImportCookie } from './appletvplus-auth'
-export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus' | 'dsnp'
-export type SessionCommand = { provider: SessionProvider; op: string; email?: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string; country?: string }
+export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus' | 'dsnp' | 'crunchyroll'
+export type SessionCommand = { provider: SessionProvider; op: string; email?: string; token?: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string; country?: string }
 export type ProviderSessionView = { provider: SessionProvider; terminal?: 'mobile' | 'tv' | 'unified'; state: string; authenticated: boolean; summary: string; qrDataUrl?: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
 const positive = (v: unknown, fallback: number) => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback
-const OPS = { dsnp: new Set(['status', 'password', 'otp_request', 'otp_verify', 'import', 'seat', 'logout']), appletvplus: new Set(['web','import','status','verify','logout']), mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']), friday: new Set(['import', 'status', 'refresh', 'qr', 'web', 'poll', 'logout']), linetv: new Set(['import', 'status', 'refresh', 'logout']) }
+const OPS = { dsnp: new Set(['status', 'password', 'otp_request', 'otp_verify', 'import', 'seat', 'logout']), appletvplus: new Set(['web','import','status','verify','logout']), mewatch: new Set(['start', 'poll', 'status', 'logout', 'profiles', 'profile', 'refresh']), hamivideo: new Set(['import', 'status', 'refresh', 'logout', 'web_start', 'web_send_code', 'web_verify', 'web_status', 'web_logout']), iq: new Set(['password', 'web_import', 'exchange_tv', 'poll', 'status', 'verify', 'logout']), iqcn: new Set(['start', 'poll', 'status', 'logout', 'cancel']), mgtv:new Set(['start','poll','status','logout']), bilibili:new Set(['start','poll','import','status','logout']), migu:new Set(['start','poll','status','logout']), friday: new Set(['import', 'status', 'refresh', 'qr', 'web', 'poll', 'logout']), linetv: new Set(['import', 'status', 'refresh', 'logout']), crunchyroll: new Set(['import', 'status', 'logout']) }
 
 /** Source credentials are transient: never persist or log command inputs. */
 export class ProviderSessions {
@@ -93,7 +93,20 @@ export class ProviderSessions {
       if (!prev?.expiresAt || this.now() >= prev.expiresAt) throw new Error('激活码已过期，请重新开始')
       if (this.now() < this.nextPoll) return { ...prev, interval: Math.ceil((this.nextPoll - this.now()) / 1000) }
     }
-    if (c.op === 'import' || (c.provider === 'iq' && c.op === 'web_import')) {
+    if (c.provider === 'crunchyroll') {
+      // Crunchyroll 无服务端会话：网关按 refresh_token 逐次换取 token，客户端只校验并持有。
+      if (c.op === 'import') {
+        const token = (c.token || '').trim()
+        if (!token || token.length > 4096) throw new Error('请输入本人的 Crunchyroll refresh_token')
+        input.refresh_token = token
+      }
+      if (c.op === 'status' || c.op === 'logout') {
+        const view: ProviderSessionView = { provider: c.provider, state: c.op === 'logout' ? 'logged_out' : 'unverified', authenticated: false, summary: c.op === 'logout' ? '已从本机清除令牌' : 'Crunchyroll 不保存服务端会话；请在需要时重新导入令牌' }
+        this.views.set(key, view)
+        return view
+      }
+    }
+    if ((c.op === 'import' && c.provider !== 'crunchyroll') || (c.provider === 'iq' && c.op === 'web_import')) {
       if (!c.cookie?.trim() || c.cookie.length > 65536) throw new Error('请输入有效的本人 Cookie 文本')
       input.cookie = c.provider === 'appletvplus' ? appleTVImportCookie(c.cookie, c.country) : c.cookie
     }

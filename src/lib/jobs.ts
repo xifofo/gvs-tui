@@ -1,3 +1,4 @@
+import { pickSubtitles, downloadSubtitles, attachSubtitles } from './online-subtitles.ts'
 import { DSNP_VIDEO_CODECS, resolveManifestDownload } from './manifest-provider.ts'
 import { downloadWebVideo } from './web-video-download'
 import { userMessage, errorCode } from './user-message.ts'
@@ -384,7 +385,7 @@ export async function runTask(
       case 'iq':
         note = await downloadIQ(cli,cfg,t,out,work,emit,signal)
         break
-      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp':
+      case 'mewatch': case 'hamivideo': case 'friday': case 'linetv': case 'appletvplus': case 'dsnp': case 'crunchyroll':
         await dlManifestProvider(cli, cfg, t, out, emit, work, signal)
         break
       case 'hongguo':
@@ -1000,6 +1001,7 @@ async function dlYouku(
     const declaredDuration = Number(selectedVideo.duration_ms) / 1000
     if (declaredDuration > 0) assertYoukuDuration(declaredDuration, t.duration)
     const separateAudio = youkuUsesSeparateAudio(payload, t.quality)
+    const probeBox = await ensureMP4Box()
     // A missing CMAF audio catalogue is not evidence that the video contains audio.
     // Stop before downloading a large silent video instead of failing at the final mux.
     if (separateAudio && !youkuAudioPlaylist(payload, '')) {
@@ -1023,7 +1025,24 @@ async function dlYouku(
     )
     if (!videoAlreadyDownloaded && usesMeasuredNaming(t)) t.namingEvidence = youkuNamingEvidence(payload, playlist)
     if (!separateAudio) {
-      // soft-skip：不强制独立音轨，避免缺 URL 失败或误复用 HQ 音轨。
+      // 上游可能把音轨从视频 m3u8 里拆走：先探测实际轨道，缺音频就退回独立音轨，
+      // 否则会在校验阶段报「下载的文件中没有音频轨道」。
+      // 探测失败（例如容器不是 MP4）时保持原行为，不误判成"没有音轨"。
+      let info: Awaited<ReturnType<typeof readMp4Tracks>> | null = null
+      try { info = await readMp4Tracks(probeBox, videoPath, signal) } catch { info = null }
+      if (!info || info.some(t => t.type === 'soun')) return
+      const fallback = youkuAudioPlaylist(payload, '')
+      if (!fallback) {
+        throw new Error('音轨缺失：视频流里没有音频，源站也没有返回可用的独立音轨，已在封装前停止')
+      }
+      const fallbackDrm = youkuDRM(payload)
+      const fallbackPath = join(work, `.${t.vid}.audio-default.mp4`)
+      temps.add(fallbackPath)
+      temps.add(`${fallbackPath}.transport.json`)
+      temps.add(`${fallbackPath}.download-error.log`)
+      await pull(fallback, fallbackPath, fallbackDrm.audioEnc ? fallbackDrm.reKey : undefined, '音轨 默认', 0.67, 0.18, 'audio', '')
+      muxInputs.push({ path: fallbackPath, title: '默认音轨', lang: youkuAudioLanguage('', audioLanguageFallback), isDefault: true })
+      muxDts.push(false)
       return
     }
     for (const [i, track] of tracks.entries()) {
@@ -1057,6 +1076,20 @@ async function dlYouku(
       muxInputs.push({ path: audioPath, title: track.label,
         lang: youkuAudioLanguage(track.lang, audioLanguageFallback), isDefault: track.isDefault })
       muxDts.push(isDtsAudio(track))
+    }
+    // 所选音轨全部被 soft-skip（URL 缺失）时，退回平台默认音轨；一条都没有就在封装前停下，
+    // 不要等到校验阶段才报「没有音频轨道」。
+    if (muxInputs.length === 0) {
+      const fallback = youkuAudioPlaylist(payload, '')
+      if (!fallback) throw new Error('音轨缺失：所选音轨没有可下载的播放列表，且没有默认音轨可用')
+      const fallbackDrm = youkuDRM(payload)
+      const fallbackPath = join(work, `.${t.vid}.audio-default.mp4`)
+      temps.add(fallbackPath)
+      temps.add(`${fallbackPath}.transport.json`)
+      temps.add(`${fallbackPath}.download-error.log`)
+      await pull(fallback, fallbackPath, fallbackDrm.audioEnc ? fallbackDrm.reKey : undefined, '音轨 默认', 0.67, 0.18, 'audio', '')
+      muxInputs.push({ path: fallbackPath, title: '默认音轨', lang: youkuAudioLanguage('', audioLanguageFallback), isDefault: true })
+      muxDts.push(false)
     }
   }
 
@@ -1380,9 +1413,13 @@ async function markSubtitleFlags(dest: string, subs: NonNullable<DlTask['subtitl
 /** Media is fetched on this client; gateway traffic is limited to resolve calls. */
 async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, work: string, signal?: AbortSignal): Promise<void> {
   // Apple TV：把 probe 里选中的音轨/字幕序号传回网关，由它裁剪 master。
+  // Crunchyroll：配音是另一条 episode 版本，只传选中的那一档 locale；字幕由网关
+  // 随 resolve 返回签名直链，下完再挂进 MKV。
   const selection = t.provider === 'appletvplus'
     ? { audio: (t.audioTracks || []).map(a => a.id), subtitle: (t.subtitleTracks || []).map(s => s.id) }
-    : undefined
+    : t.provider === 'crunchyroll'
+      ? { audio: (t.audioTracks || []).map(a => a.id).slice(0, 1), subtitle: (t.subtitleTracks || []).map(s => s.id) }
+      : undefined
   const sources = await resolveManifestDownload(cli, cfg, t.provider, t.vid, t.quality || 'auto', selection)
   signal?.throwIfAborted()
   const source = sources[0]!
@@ -1405,34 +1442,31 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
       select: 'muxed', muxTracks: true, releaseGroup: releaseGroup(t,cfg), transport: 're', workDir: work, workTag: 'manifest', signal,
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
     })
-    if (source.contentKeys.length) {
-      emit('校验', 0.97, '检查解密后的完整音视频')
-      const ffmpeg = await ensureFFmpeg()
-      const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
-      let lastLogged = 0
-      const duration = t.duration ?? 0
-      // 整片逐帧解码在 4K HDR 上要几十分钟；长片改成抽 3 段（开头/中间/结尾）解码，
-      // 仍能抓到解密不完整、花屏、丢音这类问题。
-      const errors = await validateVideoDecode(ffmpeg, dest, signal, {
-        requireAudio: true,
-        sample: duration > 600 ? { duration, windows: 3 } : undefined,
-        onProgress: seconds => {
-          const ratio = duration > 0 ? Math.min(0.99, seconds / duration) : 0
-          const detail = `完整音视频校验 ${clock(seconds)}${duration > 0 ? ' / ' + clock(duration) : ''}`
-          emit('校验', 0.97 + 0.02 * ratio, detail)
-          if (Date.now() - lastLogged >= 30_000) {
-            lastLogged = Date.now()
-            runLog(`${t.provider} validation ${detail}`)
-          }
-        },
-      })
-      if (errors.length) throw new Error(`解密后音视频校验失败：${errors.join('；')}`)
-      const specs = await probeFinishedMedia(dest, signal)
-      if (specs.status !== 'probed' || (source.height && specs.height !== source.height)) throw new Error(`成品分辨率校验失败（预期 ${source.height || '所选'}p，实际 ${specs.height ?? specs.status}），未发布下载文件`)
-    }
     if (t.provider === 'dsnp' && t.subtitleTracks?.some(s => s.forced || s.isDefault) && /\.mkv$/i.test(dest)) {
       emit('封装', 0.995, '写入字幕默认 / 强制标记')
       await markSubtitleFlags(dest, t.subtitleTracks, signal)
+    }
+    if (t.provider === 'crunchyroll') {
+      // CR 的字幕不在清单里：源站给的是独立签名直链（ass/vtt/srt），下完用 mkvmerge 挂轨。
+      const picked = pickSubtitles(source.subtitles ?? [], (t.subtitleTracks || []).map(s => s.id))
+      if (picked.length) {
+        const defaults = new Set((t.subtitleTracks || []).filter(s => s.isDefault).map(s => s.id))
+        emit('字幕', 0.99, `下载 ${picked.length} 条字幕`)
+        try {
+          const files = await downloadSubtitles(picked, join(work, 'subs'), signal)
+          if (/\.mkv$/i.test(dest)) {
+            const mkvmerge = await ensureMkvmerge()
+            if (!mkvmerge) throw new Error('没有 mkvmerge')
+            emit('封装', 0.995, `挂入 ${files.length} 条字幕`)
+            await attachSubtitles(mkvmerge, dest, files.map(f => ({ ...f, isDefault: defaults.has(f.sub.id) })), signal)
+          } else {
+            emit('字幕', 0.995, `${files.length} 条字幕已存到 ${join(work, 'subs')}`)
+          }
+        } catch (e) {
+          // 字幕失败不能毁掉已经下好的视频。
+          emit('字幕', 0.995, `字幕未写入：${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
     }
   })
 }

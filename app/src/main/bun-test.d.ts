@@ -12,7 +12,13 @@ declare module 'bun:test' {
     toContain(v: unknown): void
     toMatch(v: RegExp | string): void
     toBeGreaterThan(n: number): void
+    toBeGreaterThanOrEqual(n: number): void
+    toBeLessThan(n: number): void
+    toBeLessThanOrEqual(n: number): void
     toBeDefined(): void
+    toBeNull(): void
+    toThrow(v?: unknown): void
+    readonly not: Matchers
   }
   export function expect(v: unknown): Matchers
   export function test(name: string, fn: () => void | Promise<void>, timeoutMs?: number): void

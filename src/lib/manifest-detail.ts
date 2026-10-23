@@ -40,8 +40,44 @@ export function dsnpDetail(data: Record<string, unknown>): Record<string, unknow
   if (!out.year && data.year) out.year = data.year
   return out
 }
+/** Crunchyroll 的层级是 series → seasons → episodes；detail 本身不带分集，
+ * 所以这里把三跳拼成客户端统一的 episodes 列表（movie 直接一条）。 */
+export async function crunchyrollDetail(invoke: Invoke, id: string): Promise<Record<string, unknown>> {
+  const input = { id }
+  const head = await invoke('crunchyroll', 'detail', input)
+  const type = String(head.type || '')
+  if (type !== 'series') {
+    return { ...head, id, type: 'movie', episodes: [{ id, vid: id, title: String(head.title || ''), number: 1 }] }
+  }
+  const seasons = await invoke('crunchyroll', 'seasons', input)
+  const rows = Array.isArray(seasons.items) ? seasons.items.filter(isObj) : []
+  const episodes: Record<string, unknown>[] = []
+  const seen = new Set<string>()
+  for (const season of rows) {
+    const seasonId = String(season.id || '')
+    if (!seasonId) continue
+    const seasonNumber = Number(season.season_number) || rows.indexOf(season) + 1
+    const list = await invoke('crunchyroll', 'episodes', { id: seasonId })
+    for (const ep of Array.isArray(list.items) ? list.items.filter(isObj) : []) {
+      const vid = String(ep.id || '')
+      if (!vid || seen.has(vid)) continue
+      seen.add(vid)
+      episodes.push({
+        id: vid,
+        vid,
+        title: String(ep.title || ''),
+        number: Number(ep.episode_number) || episodes.length + 1,
+        season: Number(ep.season_number) || seasonNumber,
+        duration: Number(ep.duration) > 0 ? Math.round(Number(ep.duration)) : undefined,
+      })
+    }
+  }
+  return { ...head, id, type: 'series', episodes }
+}
+
 export async function manifestDetail(invoke: Invoke, provider: string, id: string): Promise<Record<string, unknown>> {
   const input = id.startsWith('https://') ? { url: id } : { id }
+  if (provider === 'crunchyroll') return crunchyrollDetail(invoke, id)
   const first = await invoke(provider, 'detail', input)
   let result = normalizeManifestDetail(provider === 'dsnp' ? dsnpDetail(isObj(first.raw) ? { ...first.raw, ...first } : first) : first)
   const episodes = [...(result.episodes as Record<string, unknown>[])]

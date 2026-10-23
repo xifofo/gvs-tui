@@ -236,6 +236,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   browse: (p, s, c) => core.browse(p, s, c),
   tencentDiagnostics: (jobID) => core.tencentDiagnostics(jobID),
   providerSession: (command) => core.providerSession(command),
+  crunchyrollSsoLogin: () => core.crunchyrollSsoLogin(),
   parseLink: (t) => core.parseLink(t),
   searchTargets: () => core.searchTargets(),
   searchProvider: (p, q) => core.searchProvider(p, q),
@@ -277,6 +278,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
     return r.canceled ? '' : (r.filePaths[0] ?? '')
   },
   drmStatus: () => core.drmStatus(),
+  deleteDRMOne: (system, id) => core.deleteDRMOne(system, id),
   platformMeta: () => core.platformMeta(),
   uploadDRM: async (system) => {
     const widevine = system === 'widevine'
@@ -348,7 +350,9 @@ ipcMain.handle('gvs:call', async (_e, method: string, args: unknown[]) => {
     assertDesktopAccess(method, core.state().configured)
     return { ok: true, data: userFacing(await fn(...(args ?? []))) }
   } catch (e) {
-    runLog(`ipc ${method} failed: ${e instanceof Error ? e.message : String(e)}`)
+    const why = e instanceof Error ? e.message : String(e)
+    runLog(`ipc ${method} failed: ${why}`)
+    console.log(`[gvs:call] ${method} failed: ${why}`)
     return { ok: false, error: userMessage(e) }
   }
 })

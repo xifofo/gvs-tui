@@ -2,7 +2,18 @@
 export type DRMSystem = 'widevine' | 'playready'
 export const DRM_MAX_BYTES = 1 << 20
 /** reupload：网关里保存的是旧格式记录，已不能使用，需要重新上传。 */
-export type DRMFileStatus = { system: DRMSystem; configured: boolean; level?: number; name?: string; updatedAt?: string; reupload?: boolean }
+export type DRMFileStatus = {
+  system: DRMSystem
+  configured: boolean
+  level?: number
+  name?: string
+  updatedAt?: string
+  reupload?: boolean
+  /** 设备池条目 id（聚合视图没有 id）。 */
+  id?: string
+  /** 同一系统的全部设备，强等级在前。 */
+  entries?: DRMFileStatus[]
+}
 /** Gateway level rule (userdrm.LevelRule); absent fields mean "not required". */
 export type DRMLevelRule = { aboveHeight?: number; hdr?: boolean; dolbyVision?: boolean; tiers?: string[]; summary?: string }
 /** Per-platform requirement served by newer gateways with GET /v1/drm/devices. */
