@@ -1,5 +1,5 @@
-import { pickSubtitles, downloadSubtitles, attachSubtitles } from './online-subtitles.ts'
-import { DSNP_VIDEO_CODECS, resolveManifestDownload } from './manifest-provider.ts'
+import { pickSubtitles, orderSubtitles, downloadSubtitles, attachSubtitles } from './online-subtitles.ts'
+import { DSNP_VIDEO_CODECS, manifestDownloadProxy, resolveManifestDownload } from './manifest-provider.ts'
 import { downloadWebVideo } from './web-video-download'
 import { userMessage, errorCode } from './user-message.ts'
 import { youkuMediaError } from './media-output.ts'
@@ -1457,9 +1457,12 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
     }
     if (t.provider === 'crunchyroll') {
       // CR 的字幕不在清单里：源站给的是独立签名直链（ass/vtt/srt），下完用 mkvmerge 挂轨。
-      const picked = pickSubtitles(source.subtitles ?? [], (t.subtitleTracks || []).map(s => s.id))
+      // 轨序按简体 → 繁体 → 其他排列；没有"默认显示"标记时把第一条勾选的标成默认，
+      // 保证播放器打开就有字幕（探针已把简体中文标为默认，这里只兜底）。
+      const picked = orderSubtitles(pickSubtitles(source.subtitles ?? [], (t.subtitleTracks || []).map(s => s.id)))
       if (picked.length) {
         const defaults = new Set((t.subtitleTracks || []).filter(s => s.isDefault).map(s => s.id))
+        if (!picked.some(sub => defaults.has(sub.id))) defaults.add(picked[0]!.id)
         emit('字幕', 0.99, `下载 ${picked.length} 条字幕`)
         try {
           const files = await downloadSubtitles(picked, join(work, 'subs'), signal)

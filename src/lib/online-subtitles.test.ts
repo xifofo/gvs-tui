@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { attachSubtitleArgs, onlineSubtitles, pickSubtitles, subtitleFileName } from './online-subtitles.ts'
+import { attachSubtitleArgs, chineseVariant, onlineSubtitles, orderSubtitles, pickSubtitles, subtitleFileName } from './online-subtitles.ts'
 
 describe('crunchyroll online subtitles', () => {
   const gateway = {
@@ -22,6 +22,23 @@ describe('crunchyroll online subtitles', () => {
     expect(pickSubtitles(rows, ['en-US', 'zh-Hans']).map(r => r.id)).toEqual(['zh-Hans', 'en-US'])
     expect(pickSubtitles(rows, undefined)).toEqual([])
     expect(pickSubtitles(rows, [])).toEqual([])
+  })
+
+  test('simplified / traditional detection covers the BCP 47 forms CR returns', () => {
+    expect(chineseVariant('zh-Hans')).toBe('hans')
+    expect(chineseVariant('zh-CN')).toBe('hans')
+    expect(chineseVariant('zh-Hant')).toBe('hant')
+    expect(chineseVariant('zh-TW')).toBe('hant')
+    expect(chineseVariant('zh-HK')).toBe('hant')
+    expect(chineseVariant('zh')).toBe('hans')
+    expect(chineseVariant('', '繁体中文')).toBe('hant')
+    expect(chineseVariant('en-US')).toBe('')
+  })
+
+  test('track order puts simplified first, then traditional, then the rest', () => {
+    const sub = (id: string, lang = id) => ({ id, lang, label: id, format: 'ass', url: 'u' })
+    const ordered = orderSubtitles([sub('en-US'), sub('zh-Hant'), sub('de-DE'), sub('zh-Hans')])
+    expect(ordered.map(s => s.id)).toEqual(['zh-Hans', 'zh-Hant', 'en-US', 'de-DE'])
   })
 
   test('file names stay path-safe and keep the real extension', () => {

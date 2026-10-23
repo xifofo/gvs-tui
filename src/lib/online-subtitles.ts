@@ -32,6 +32,34 @@ export function pickSubtitles(all: readonly OnlineSubtitle[], selected: readonly
   return all.filter(s => want.has(s.id))
 }
 
+/**
+ * 中文字幕的简繁判断（只看语言/标签，不猜内容）。
+ * CR 给的是 BCP 47：`zh-Hans` / `zh-Hant` / `zh-CN` / `zh-TW` ……，无区域的 `zh` 按简体处理。
+ */
+export function chineseVariant(...texts: Array<string | undefined>): 'hans' | 'hant' | '' {
+  for (const text of texts) {
+    const v = (text || '').trim().toLowerCase().replace(/_/g, '-')
+    if (!v) continue
+    if (/繁体|繁體/.test(v) || /^zh-(?:hant|tw|hk|mo)\b/.test(v)) return 'hant'
+    if (/简体|簡體/.test(v) || /^zh-(?:hans|cn|sg)\b/.test(v)) return 'hans'
+    if (/^zh\b/.test(v) || /中文/.test(v)) return 'hans'
+  }
+  return ''
+}
+
+/** 字幕轨顺序权重：简体 → 繁体 → 其他。 */
+export function subtitleRank(sub: OnlineSubtitle): number {
+  const variant = chineseVariant(sub.lang, sub.label, sub.id)
+  return variant === 'hans' ? 0 : variant === 'hant' ? 1 : 2
+}
+
+/** 简体在前、繁体其次、其他最后；同组内保持源站顺序（稳定排序）。 */
+export function orderSubtitles(subs: readonly OnlineSubtitle[]): OnlineSubtitle[] {
+  return subs.map((sub, i) => ({ sub, i }))
+    .sort((a, b) => subtitleRank(a.sub) - subtitleRank(b.sub) || a.i - b.i)
+    .map(x => x.sub)
+}
+
 const SUB_EXT: Record<string, string> = { ass: 'ass', ssa: 'ass', vtt: 'vtt', srt: 'srt', ttml: 'ttml' }
 
 /** 字幕文件名：`<语言>.<ext>`，去掉会破坏路径的字符。 */
