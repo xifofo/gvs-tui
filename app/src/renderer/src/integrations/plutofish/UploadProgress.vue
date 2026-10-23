@@ -50,6 +50,7 @@ async function control(action: 'pause' | 'resume' | 'setup') {
       </div>
     </template>
     <p v-if="progress?.error" class="err" role="alert">{{ progress.error }}</p>
+    <p v-if="store.state?.plutofish?.uploadNotice && progress?.stage !== 'completed'" role="status">{{ store.state.plutofish.uploadNotice }}</p>
     <p v-if="!ready && progress?.stage !== 'completed'" class="err">{{ store.state?.plutofish?.error || '等待 PlutoFish 连接恢复' }}</p>
     <div v-if="missing.length" class="upload-setup">
       <template v-if="!draft.workTarget.category && draft.binding.sourceAccount">

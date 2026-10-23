@@ -89,7 +89,7 @@ test.each([false, true])('失败后只补传缺失分片并保留地址和回调
   writeFileSync(path, data)
   const signal = new AbortController().signal, file = await fingerprint(path, signal)
   let cp: UploadCheckpoint = { file, partSize: 128 * 1024, parts: [] }
-  let saved = '', fail = true, initCount = 0
+  let saved = '', fail = true, initCount = 0, listCount = 0
   let activeDispatch = legacy ? { ...dispatch, endpoint: undefined } : dispatch
   const getCredentials = async () => ({ ...await credentials(), ...(legacy ? { endpoint: 'https://oss-cn-shenzhen.aliyuncs.com', rate: 0 } : {}) })
   const progress: number[] = []
@@ -100,6 +100,7 @@ test.each([false, true])('失败后只补传缺失分片并保留地址和回调
     return { close() {}, client: {
       async initMultipartUpload() { initCount++; return { uploadId: 'UPLOAD-1' } as OSS.InitMultipartUploadResult },
       async listParts(_name, id) {
+        listCount++
         expect(id).toBe('UPLOAD-1')
         return { uploadId: id, bucket: route.bucket, name: route.object, isTruncated: 'false', parts: [...remote].map(([n, b]) => ({ PartNumber: n, Size: b.length, ETag: digest(b) })) } as unknown as OSS.ListPartsResult
       },
@@ -121,12 +122,14 @@ test.each([false, true])('失败后只补传缺失分片并保留地址和回调
   }
   const options = () => ({ path, dispatch: activeDispatch, checkpoint: cp, signal, credentials: getCredentials, factory, save: () => { saved = JSON.stringify(cp) }, progress: (bytes: number) => { progress.push(bytes) } })
   await expect(uploadParts(options())).rejects.toThrow('network')
+  expect(listCount).toBe(0)
   expect(cp.parts.map(p => p.number)).toEqual([1])
   expect(saved).not.toContain('TEMP-')
   cp = JSON.parse(saved); fail = false
   activeDispatch = { ...dispatch, endpoint: legacy ? undefined : 'https://up-yunfile.115.com' }
   await uploadParts(options())
   expect(initCount).toBe(1)
+  expect(listCount).toBe(1)
   expect(cp.endpoint).toBe(activeDispatch.endpoint || 'https://oss-cn-shenzhen.aliyuncs.com')
   expect(progress).toEqual([0, 128 * 1024, 128 * 1024, 256 * 1024, data.length])
   expect(saved).not.toContain('TEMP-')
@@ -218,4 +221,18 @@ test('顺序分片合并回执未知且会话已消失时保留断点，等待�
   const error = await uploadParts({ path, dispatch, checkpoint: cp, credentials, factory, signal, save() {}, progress() {} }).then(() => null, e => e)
   expect(retryableError(error)).toBe(true)
   expect(cp.uploadId).toBe('OLD'); expect(cp.completing).toBe(true)
+})
+
+test('等待临时凭据期间取消，响应到达后不能再创建 OSS 会话', async () => {
+  const path = join(temp(), 'cancelled.bin'); writeFileSync(path, Buffer.alloc(150000))
+  const abort = new AbortController()
+  const cp: UploadCheckpoint = { file: await fingerprint(path, abort.signal), partSize: 256 * 1024, parts: [] }
+  let created = false
+  const error = new Error('test cancelled')
+  await expect(uploadParts({ path, dispatch, checkpoint: cp, signal: abort.signal, save() {}, progress() {},
+    credentials: async () => { const token = await credentials(); abort.abort(error); return token },
+    factory: () => { created = true; throw new Error('不得创建会话') },
+  })).rejects.toThrow('test cancelled')
+  expect(created).toBe(false)
+  expect(cp.uploadId).toBeUndefined()
 })
