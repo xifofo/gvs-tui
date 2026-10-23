@@ -1,3 +1,4 @@
+import { recognizeFile } from '../../../src/integrations/plutofish/recognition'
 import { publicationSource } from '../../../src/integrations/plutofish/sources.ts'
 import { PublicationWorker } from '../../../src/integrations/plutofish/publication-worker.ts'
 import { ed2kFile } from '../../../src/lib/ed2k.ts'
@@ -1631,6 +1632,13 @@ export class Core {
     if (!this.categoryRefresh) this.categoryRefresh = this.plutofish.verify(undefined, true)
       .then(() => this.plutofish.view()).finally(() => { this.categoryRefresh = undefined })
     return this.categoryRefresh
+  }
+
+  /** 使用后台 TMDB Key 和分类规则；绑定和过期响应由连接层校验。 */
+  recognizePublication(sourceAccountId: string, fileName: string) {
+    const view = this.plutofish.view()
+    const source = publicationSource(view, sourceAccountId)
+    return recognizeFile(this.plutofish, { url: view.url, publisherId: view.identity!.id, sourceAccount: source }, fileName)
   }
 
   publicationPreferences(context: PublicationContext): PublicationPreferences | null {

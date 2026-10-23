@@ -1,3 +1,5 @@
+import type { Recognition } from '../../../src/integrations/plutofish/recognition-types'
+export type { Recognition } from '../../../src/integrations/plutofish/recognition-types'
 import type { RetentionSettings } from '../../../src/integrations/plutofish/retention-settings.ts'
 import type { ReleaseChoices } from '../../../src/integrations/plutofish/release-selection.ts'
 export type { ReleaseChoices, ReleaseSelection } from '../../../src/integrations/plutofish/release-selection.ts'
@@ -338,6 +340,7 @@ export interface GvsApi {
   detailFromLink(link: LinkTarget, hint?: DetailHint): Promise<DetailView>
   /** accountId：用指定账号探测（空 = 默认）；会员/登录错误时自动换号重试 */
   probe(provider: Provider, episodes: EpisodeView[], accountId?: string): Promise<ProbeResult>
+  recognizePublication(sourceAccountId: string, fileName: string): Promise<Recognition>
   publicationReleases(req: EnqueueRequest): Promise<ReleaseChoices>
   namingPreview(req: EnqueueRequest): Promise<NamingPreview>
   publicationPreferences(context: PublicationContext): Promise<PublicationPreferences | null>

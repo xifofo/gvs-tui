@@ -1,18 +1,19 @@
 <!-- 下载前确认发布分类与集号；选项来自已验证发布端，不保存任何密钥。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import type { EpisodeView, PlutoFishView, PublicationContext, PublicationInput, PublicationPreferences, TmdbHit } from '@shared/api'
+import type { EpisodeView, PlutoFishView, PublicationContext, PublicationInput, PublicationPreferences, Recognition, TmdbHit } from '@shared/api'
 import type { OutputNaming } from '@shared/output-naming'
 import { publisherSources } from '../../../../../../src/integrations/plutofish/sources'
+import PublicationRecognition from './PublicationRecognition.vue'
 import UploadDirectoryPicker from './UploadDirectoryPicker.vue'
 import ResourceCategorySelect from './ResourceCategorySelect.vue'
 import { publicationCategoryError } from '../../../../../../src/integrations/plutofish/categories'
 import Icon from '../../components/Icon.vue'
 import { errText, gvs } from '../../store'
 
-const props = withDefaults(defineProps<{ connection?: PlutoFishView; outputFolders?: string[]; provider: string; sourceWorkId: string; revision?: number; tmdb: TmdbHit | null; tmdbSeason?: number; naming?: OutputNaming; kind: 'movie' | 'show'; title: string; year: number; episodes: EpisodeView[]; remember?: boolean; busy?: boolean }>(), { remember: true })
+const props = withDefaults(defineProps<{ connection?: PlutoFishView; outputFolders?: string[]; recognitionFileName?: string; provider: string; sourceWorkId: string; revision?: number; tmdb: TmdbHit | null; tmdbSeason?: number; naming?: OutputNaming; kind: 'movie' | 'show'; title: string; year: number; episodes: EpisodeView[]; remember?: boolean; busy?: boolean }>(), { remember: true })
 const model = defineModel<PublicationInput>({ required: true })
-const emit = defineEmits<{ match: [hit: TmdbHit]; restore: [preferences: PublicationPreferences] }>()
+const emit = defineEmits<{ match: [hit: TmdbHit]; restore: [preferences: PublicationPreferences]; recognized: [hit: TmdbHit, season?: number] }>()
 const manualId = ref('')
 const choosingDirectory = ref(false)
 const sources = computed(() => publisherSources(props.connection?.identity))
@@ -23,6 +24,7 @@ const context = computed<PublicationContext>(() => ({ provider: props.provider, 
     sourceAccount: model.value.sourceAccountId && source.value ? { id: source.value.id, alias: source.value.alias } : null } : undefined,
   sourceAccountId: model.value.sourceAccountId }))
 const loading = ref(false)
+const recognitionPending = ref(false), applyingRecognition = ref(false)
 const error = ref('')
 const categoryError = computed(() => !source.value ? '请选择可用的上传账号' : publicationCategoryError(props.connection, model.value.category))
 const categoryValid = computed(() => !categoryError.value)
@@ -31,7 +33,7 @@ let saves = Promise.resolve()
 let hydration = Promise.resolve()
 let hydratedScope = ''
 watch(() => JSON.stringify([props.connection?.status === 'verified', props.connection?.url, props.connection?.identity?.id,
-  sources.value.map(s => [s.id, s.alias, s.enabled]), props.provider, props.sourceWorkId, props.kind, props.tmdb?.id, props.revision]), () => { hydration = hydrate() }, { immediate: true })
+  sources.value.map(s => [s.id, s.alias, s.enabled]), props.provider, props.sourceWorkId, props.kind, props.tmdb?.id, props.revision]), () => { if (!applyingRecognition.value) hydration = hydrate() }, { immediate: true })
 async function hydrate(switching = false) {
   const seq = ++sequence
   choosingDirectory.value = false
@@ -70,6 +72,7 @@ function persist(value = model.value) {
 async function ready() {
   let pending: Promise<void>
   do { pending = hydration; await pending; await nextTick() } while (pending !== hydration)
+  if (recognitionPending.value || applyingRecognition.value) throw new Error('请等待识别完成')
   if (error.value) throw new Error(error.value)
   await saves
   if (categoryError.value) throw new Error(categoryError.value)
@@ -78,7 +81,7 @@ async function save() { await ready(); await persist() }
 function remember(value = model.value) { if (props.remember !== false) void persist(value).catch(() => {}) }
 watch(() => props.tmdbSeason, () => { if (!loading.value && !props.busy) remember() })
 watch(() => JSON.stringify(props.naming), () => { if (!loading.value && !props.busy) remember() })
-defineExpose({ loading, ready, save, categoryValid })
+defineExpose({ loading: computed(() => loading.value || recognitionPending.value || applyingRecognition.value), ready, save, categoryValid })
 function changeSource(event: Event) {
   model.value = { ...model.value, sourceAccountId: (event.target as HTMLSelectElement).value, directoryId: '0', directoryPath: '/', releaseSelection: undefined }
   loading.value = true
@@ -88,6 +91,23 @@ function changeCategory(category: string) {
   const next = { ...model.value, category }
   model.value = next
   remember(next)
+}
+const recognitionScope = computed(() => JSON.stringify([props.connection?.status, props.connection?.url, props.connection?.identity?.id, source.value?.id, source.value?.alias, props.provider, props.sourceWorkId, props.revision]))
+const recognitionDraft = computed(() => JSON.stringify([context.value, model.value]))
+async function applyRecognition(result: Recognition) {
+  const work = result.work
+  if (!result.canAutoFill || !work || loading.value || props.busy) return
+  if (publicationCategoryError(props.connection, work.category.value)) { error.value = '识别分类已不可用，请刷新分类或手动选择'; return }
+  applyingRecognition.value = true
+  const scope = recognitionScope.value
+  const hit: TmdbHit = { id: Number(work.tmdbId), kind: work.mediaType === 'movie' ? 'movie' : 'show', name: work.title, title: work.englishTitle || work.originalTitle || work.title, year: work.year ?? 0, overview: '' }
+  model.value = { ...model.value, category: work.category.value, releaseSelection: undefined }
+  emit('recognized', hit, work.mediaType === 'tv' ? result.parsed.seasonNumber : undefined)
+  await nextTick()
+  applyingRecognition.value = false
+  if (scope !== recognitionScope.value) return
+  hydratedScope = JSON.stringify([props.connection?.url, props.connection?.identity?.id, props.provider, props.sourceWorkId, props.kind])
+  remember()
 }
 const directoryLabel = computed(() => model.value.directoryPath || ((!model.value.directoryId || model.value.directoryId === '0') ? '根目录 /' : `目录 ${model.value.directoryId}`))
 
@@ -122,6 +142,7 @@ function changeEpisode(vid: string, event: Event) {
         <option v-for="account in sources" :key="account.id" :value="account.id" :disabled="account.enabled === false || !!(account.provider && account.provider !== '115')">{{ account.provider === '115' || !account.provider ? '115' : account.provider }} · {{ account.name }} · {{ account.alias }}</option>
       </select>
     </label>
+    <PublicationRecognition :scope="recognitionScope" :source-account-id="source?.id ?? ''" :sample="recognitionFileName ?? ''" :draft-key="recognitionDraft" :can-auto-fill="!tmdb && !model.category && !Object.keys(naming ?? {}).length" :disabled="loading || applyingRecognition || !!busy || connection?.status !== 'verified'" @pending="recognitionPending = $event" @apply="applyRecognition" />
     <ResourceCategorySelect :model-value="model.category" :connection="connection" :disabled="loading || busy" @update:model-value="changeCategory" />
     <div class="field">上传目录
       <div class="directory-value"><span :title="directoryLabel">{{ directoryLabel }}</span>
