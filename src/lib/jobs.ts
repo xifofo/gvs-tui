@@ -1,4 +1,5 @@
 import { pickSubtitles, orderSubtitles, downloadSubtitles, attachSubtitles } from './online-subtitles.ts'
+import { fetchMediaPart } from './proxy.ts'
 import { DSNP_VIDEO_CODECS, manifestDownloadProxy, resolveManifestDownload } from './manifest-provider.ts'
 import { downloadWebVideo } from './web-video-download'
 import { userMessage, errorCode } from './user-message.ts'
@@ -1465,7 +1466,11 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
         if (!picked.some(sub => defaults.has(sub.id))) defaults.add(picked[0]!.id)
         emit('字幕', 0.99, `下载 ${picked.length} 条字幕`)
         try {
-          const files = await downloadSubtitles(picked, join(work, 'subs'), signal)
+          // 字幕 CDN 同样按地区封锁：和视频用同一条出口（桌面端为原生媒体传输）。
+          const files = await downloadSubtitles(picked, join(work, 'subs'), {
+            signal,
+            fetcher: (url, init) => fetchMediaPart(url, init, proxy),
+          })
           if (/\.mkv$/i.test(dest)) {
             const mkvmerge = await ensureMkvmerge()
             if (!mkvmerge) throw new Error('没有 mkvmerge')
@@ -1475,8 +1480,10 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
             emit('字幕', 0.995, `${files.length} 条字幕已存到 ${join(work, 'subs')}`)
           }
         } catch (e) {
-          // 字幕失败不能毁掉已经下好的视频。
-          emit('字幕', 0.995, `字幕未写入：${e instanceof Error ? e.message : String(e)}`)
+          // 字幕失败不能毁掉已经下好的视频，但要在日志里留痕，方便排查地区封锁/网络问题。
+          const why = e instanceof Error ? e.message : String(e)
+          runLog(`crunchyroll subtitles failed vid=${t.vid}: ${why}`)
+          emit('字幕', 0.995, `字幕未写入：${why}`)
         }
       }
     }

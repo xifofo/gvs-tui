@@ -69,18 +69,23 @@ export function subtitleFileName(sub: OnlineSubtitle): string {
   return `${base || sub.id}.${ext}`
 }
 
-/** 下载字幕到 work 目录。源站是签名直链，不带任何认证头。 */
+/**
+ * 下载字幕到 work 目录。源站是签名直链（不需要认证头），但 CDN 同样按地区封锁：
+ * 必须和视频走同一条出口，否则直连会 403。`fetcher` 由调用方注入（桌面端为原生媒体传输）。
+ */
 export async function downloadSubtitles(
   subs: readonly OnlineSubtitle[],
   dir: string,
-  signal?: AbortSignal,
+  options: { signal?: AbortSignal; fetcher?: (url: string, init: RequestInit) => Promise<Response> } = {},
 ): Promise<Array<{ path: string; sub: OnlineSubtitle }>> {
+  const { signal } = options
+  const fetcher = options.fetcher ?? ((url: string, init: RequestInit) => fetch(url, init))
   if (!subs.length) return []
   await mkdir(dir, { recursive: true })
   const out: Array<{ path: string; sub: OnlineSubtitle }> = []
   for (const sub of subs) {
     signal?.throwIfAborted()
-    const res = await fetch(sub.url, { signal: signal ?? AbortSignal.timeout(60_000) })
+    const res = await fetcher(sub.url, { signal: signal ?? AbortSignal.timeout(60_000) })
     if (!res.ok) throw new Error(`字幕下载失败 (${sub.label}): HTTP ${res.status}`)
     const body = new Uint8Array(await res.arrayBuffer())
     if (!body.length) throw new Error(`字幕为空 (${sub.label})`)

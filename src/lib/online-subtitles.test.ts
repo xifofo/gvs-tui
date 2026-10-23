@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { attachSubtitleArgs, chineseVariant, onlineSubtitles, orderSubtitles, pickSubtitles, subtitleFileName } from './online-subtitles.ts'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { attachSubtitleArgs, chineseVariant, downloadSubtitles, onlineSubtitles, orderSubtitles, pickSubtitles, subtitleFileName } from './online-subtitles.ts'
 
 describe('crunchyroll online subtitles', () => {
   const gateway = {
@@ -57,5 +60,35 @@ describe('crunchyroll online subtitles', () => {
     expect(args).toContain('--default-track-flag')
     expect(args.slice(-3)).toEqual(['b.ass', '-o', 'ep.mkv.subs.mkv'])
     expect(args.filter(a => a === '-o')).toHaveLength(1)
+  })
+
+  test('downloads through the injected media transport, not a bare fetch', async () => {
+    const seen: string[] = []
+    const dir = mkdtempSync(join(tmpdir(), 'gvs-subs-'))
+    try {
+      const files = await downloadSubtitles(
+        [{ id: 'zh-Hans', lang: 'zh-Hans', label: '简体中文', format: 'ass', url: 'https://cdn.example/zh.ass' }],
+        dir,
+        { fetcher: async (url) => { seen.push(url); return new Response(new Uint8Array([1, 2, 3]), { status: 200 }) } },
+      )
+      expect(seen).toEqual(['https://cdn.example/zh.ass'])
+      expect(files.map(f => f.sub.id)).toEqual(['zh-Hans'])
+      expect(readFileSync(files[0]!.path).length).toBe(3)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a failing transport surfaces as an error instead of an empty track', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gvs-subs-'))
+    try {
+      await expect(downloadSubtitles(
+        [{ id: 'zh-Hans', lang: 'zh-Hans', label: '简体中文', format: 'ass', url: 'https://cdn.example/zh.ass' }],
+        dir,
+        { fetcher: async () => new Response('blocked', { status: 403 }) },
+      )).rejects.toThrow('HTTP 403')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

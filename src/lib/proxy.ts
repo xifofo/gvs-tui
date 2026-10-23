@@ -15,6 +15,11 @@ export function fetchMediaSegment(url: string, init: RequestInit): Promise<Respo
   return fetch(url, init)
 }
 
+/** Side media files (e.g. Crunchyroll subtitles) follow the same route as the media itself. */
+export function fetchMediaPart(url: string, init: RequestInit, proxy = ''): Promise<Response> {
+  return proxy ? fetch(url, { ...init, proxy } as RequestInit & { proxy: string }) : fetch(url, init)
+}
+
 const PROXY_KEYS: Record<string, true> = {
   http_proxy: true,
   https_proxy: true,
