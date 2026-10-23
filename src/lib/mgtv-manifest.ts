@@ -1,5 +1,6 @@
 import { fetchMediaProbe } from './proxy'
 import { runLog } from './runlog'
+import { sleep } from './util.ts'
 
 type ManifestResult = { url: string; durationSeconds: number; segmentCount: number }
 
@@ -47,39 +48,51 @@ export async function verifyMgtvManifest(
     signal?.throwIfAborted()
     if (visited.has(url)) throw new Error('芒果播放清单重复，无法确认完整内容')
     visited.add(url)
-    const timeout = AbortSignal.timeout(20_000)
-    const readSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
-    let response: Response
-    let text: string
-    let httpStatus: number | undefined
-    try {
-      response = await fetchMediaProbe(url, { headers, signal: readSignal })
-      httpStatus = response.status
-      if (!response.ok || !response.body) {
-        await response.body?.cancel().catch(() => {})
-        throw new Error(`HTTP ${response.status}`)
-      }
-      const reader = response.body.getReader()
-      const chunks: Uint8Array[] = []
-      let size = 0
+    // 芒果 IP 直连节点会随机对同一个清单地址回 405（实测同一 URL 连续请求在 200/405 之间跳），
+    // 单次读取失败率约一半，所以这里对 405/408/429/5xx 做几次短重试再放弃。
+    const attempts = 3
+    let response: Response | undefined
+    let text = ''
+    for (let attempt = 1; ; attempt++) {
+      const timeout = AbortSignal.timeout(20_000)
+      const readSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
+      let httpStatus: number | undefined
       try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          size += value.byteLength
-          if (size > 1024 * 1024) throw new Error('芒果播放清单过大，无法确认完整内容')
-          chunks.push(value)
+        response = await fetchMediaProbe(url, { headers, signal: readSignal })
+        httpStatus = response.status
+        if (!response.ok || !response.body) {
+          await response.body?.cancel().catch(() => {})
+          throw new Error(`HTTP ${response.status}`)
         }
-      } finally { await reader.cancel().catch(() => {}) }
-      text = Buffer.concat(chunks).toString('utf8').replace(/^\uFEFF/, '')
-    } catch (error) {
-      signal?.throwIfAborted()
-      if (error instanceof Error && error.message.startsWith('芒果播放清单过大')) throw error
-      const rejected = httpStatus !== undefined && (httpStatus < 200 || httpStatus >= 300)
-      const reason = rejected ? `http_${httpStatus}` : readSignal.aborted ? 'timeout' : 'network'
-      // Keep the CDN host and status, never the signed path, query or headers.
-      runLog(`mgtv manifest read failed host=${new URL(url).host} http=${httpStatus ?? '-'} reason=${reason}`)
-      throw new Error(`芒果播放清单读取失败${rejected ? `（HTTP ${httpStatus}）` : ''}，无法确认完整内容；请刷新画质后重试`, { cause: error })
+        const reader = response.body.getReader()
+        const chunks: Uint8Array[] = []
+        let size = 0
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            size += value.byteLength
+            if (size > 1024 * 1024) throw new Error('芒果播放清单过大，无法确认完整内容')
+            chunks.push(value)
+          }
+        } finally { await reader.cancel().catch(() => {}) }
+        text = Buffer.concat(chunks).toString('utf8').replace(/^\uFEFF/, '')
+        break
+      } catch (error) {
+        signal?.throwIfAborted()
+        if (error instanceof Error && error.message.startsWith('芒果播放清单过大')) throw error
+        const rejected = httpStatus !== undefined && (httpStatus < 200 || httpStatus >= 300)
+        const retryable = httpStatus === 405 || httpStatus === 408 || httpStatus === 429 || (httpStatus !== undefined && httpStatus >= 500)
+        if (retryable && attempt < attempts) {
+          // Host and status only: never the signed path, query or headers.
+          runLog(`mgtv manifest retry host=${new URL(url).host} http=${httpStatus} attempt=${attempt}/${attempts}`)
+          await sleep(attempt === 1 ? 700 : 1800, signal)
+          continue
+        }
+        const reason = rejected ? `http_${httpStatus}` : readSignal.aborted ? 'timeout' : 'network'
+        runLog(`mgtv manifest read failed host=${new URL(url).host} http=${httpStatus ?? '-'} reason=${reason}`)
+        throw new Error(`芒果播放清单读取失败${rejected ? `（HTTP ${httpStatus}）` : ''}，无法确认完整内容；请刷新画质后重试`, { cause: error })
+      }
     }
     const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
     if (lines[0] !== '#EXTM3U') throw new Error('芒果返回的内容不是有效播放清单')
@@ -88,7 +101,7 @@ export async function verifyMgtvManifest(
       if (lines.filter(line => line.startsWith('#EXT-X-STREAM-INF:')).length !== 1) throw new Error('芒果主清单包含多个版本，无法确认所选画质；请重新取流')
       const child = lines[variant + 1]
       if (!child || child.startsWith('#')) throw new Error('芒果主清单缺少媒体版本')
-      url = validURL(child, response.url || url)
+      url = validURL(child, response?.url || url)
       continue
     }
     const durations: number[] = []
@@ -113,7 +126,7 @@ export async function verifyMgtvManifest(
     if (!mgtvDurationCovers(durationSeconds, expected)) {
       throw new Error('芒果播放清单明显短于整集时长，可能是试看')
     }
-    return { url: validURL(response.url || url), durationSeconds, segmentCount: durations.length }
+    return { url: validURL(response?.url || url), durationSeconds, segmentCount: durations.length }
   }
   throw new Error('芒果播放清单嵌套过深，无法确认完整内容')
 }

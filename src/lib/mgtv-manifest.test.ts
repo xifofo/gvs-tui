@@ -36,6 +36,21 @@ test('mgtv checks a redirected master with relative child and returns the verifi
   })
 })
 
+test('mgtv retries a node that answers 405 for the same playlist, then succeeds', async () => {
+  const requests: string[] = []
+  await fixture((req, res) => {
+    requests.push(req.url || '')
+    // 芒果 IP 直连节点会随机 405：前两次拒绝，第三次正常返回清单。
+    if (requests.length <= 2) { res.writeHead(405); res.end('<html>405 Not Allowed</html>'); return }
+    res.writeHead(200, {'Content-Type': 'application/vnd.apple.mpegurl'})
+    res.end(complete)
+  }, async base => {
+    expect(await verifyMgtvManifest(base + '/media', {}, 40))
+      .toEqual({ url: base + '/media', durationSeconds: 41, segmentCount: 2 })
+    expect(requests).toHaveLength(3)
+  })
+})
+
 test('mgtv rejects a ended 300-second preview for a 45-minute program before requesting segments', async () => {
   const requests: string[] = []
   await fixture((req, res) => {
