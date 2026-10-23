@@ -235,3 +235,26 @@ test('临时 HTTP、套接字和超时可重试，权限、证书、文件和取
   expect([1, 2, 3, 20].map(n => retryDelay(n, 5000, 60000))).toEqual([5000, 10000, 20000, 60000])
   expect(retryAfter(new Response('', { headers: { 'Retry-After': 'invalid' } }))).toBeUndefined()
 })
+
+test('IPv4/IPv6 聚合网络错误自动恢复，证书和未知错误不被当成临时断网', async () => {
+  const network = () => new TypeError('private transport details', { cause: new AggregateError([
+    Object.assign(new Error('private address'), { code: 'ENETUNREACH' }),
+    Object.assign(new Error('private address'), { code: 'ETIMEDOUT' }),
+  ]) })
+  expect(transportError(network()).retryable).toBe(true)
+  for (const error of [new Error('unknown'), Object.assign(new Error('certificate'), { code: 'CERT_HAS_EXPIRED' })]) {
+    expect(transportError(new TypeError('fetch failed', { cause: new AggregateError([
+      Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }), error,
+    ]) })).retryable).toBe(false)
+  }
+  let calls = 0
+  const c = connection({ autoReconnect: true, retryBaseMs: 5, verify: (value, signal) => verifyPublisher(value, signal, async () => {
+    if (++calls === 1) throw network()
+    return Response.json(publisher)
+  }) })
+  await expect(c.verify()).rejects.toThrow('无法连接')
+  expect(c.view().reconnect?.attempt).toBe(1)
+  await waitFor(() => c.ready)
+  expect(calls).toBe(2)
+  expect(c.view().reconnect).toBeUndefined()
+})
