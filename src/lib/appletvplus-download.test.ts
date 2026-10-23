@@ -133,13 +133,15 @@ test('Crunchyroll requires a local refresh token and hands it to resolve with do
   expect(out[0]?.contentKeys).toEqual([`${'a'.repeat(32)}:${'b'.repeat(32)}`])
 })
 
-test('Crunchyroll probe exposes a single auto quality without spending a licence', async () => {
+test('Crunchyroll probe reads the ladder through qualities without spending a licence', async () => {
   const calls: string[] = []
   const cli = { invoke: async (_p: string, a: string) => { calls.push(a); return {} } } as unknown as GwClient
   const out = await probeManifest(cli, {} as FileConfig, 'crunchyroll', 'G7PU4MZ1G')
+  // qualities 只读 DASH 清单、不换钥：探一次不会产生许可证请求。
+  expect(calls).toEqual(['qualities'])
+  // 空回包（旧网关 / 没有档位）时退回单条自动档，下载行为不变。
   expect(out.qualities.map(q => q.id)).toEqual(['auto'])
   expect(out.qualities[0]?.drm).toBe('widevine')
-  expect(calls).toEqual([])
 })
 
 test('Crunchyroll detail walks series → seasons → episodes for the picker', async () => {

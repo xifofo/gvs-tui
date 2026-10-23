@@ -3,12 +3,15 @@ import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
 import { asBool, isObj } from './util.ts'
 import { tierHeight } from './name.ts'
+import { onlineSubtitles, type OnlineSubtitle } from './online-subtitles.ts'
 
-export type ManifestSource = { url: string; headers: Record<string, string>; format: string; height: number; quality: string; clear: boolean; drm: string; live: boolean; contentKeys: string[]; manifest?: string }
+export type ManifestSource = { url: string; headers: Record<string, string>; format: string; height: number; quality: string; clear: boolean; drm: string; live: boolean; contentKeys: string[]; manifest?: string; subtitles?: OnlineSubtitle[] }
 const str = (v: unknown): string => typeof v === 'string' ? v : ''
 export function manifestSources(data: Record<string, unknown>): ManifestSource[] {
   const raw = isObj(data.raw) ? data.raw : {}
   const rows = Array.isArray(data.media) ? data.media : Array.isArray(raw.media) ? raw.media : []
+  // Crunchyroll 的字幕是源站单独的签名直链，不在清单里：随 resolve 一起带走。
+  const subtitles = onlineSubtitles(data)
   return rows.filter(isObj).filter(m => !m.type || m.type === 'video').map(m => {
     const meta = isObj(m.meta) ? m.meta : {}
     const drm = isObj(m.drm) ? m.drm : isObj(meta.drm) ? meta.drm : isObj(data.drm) ? data.drm : isObj(raw.drm) ? raw.drm : {}
@@ -18,7 +21,7 @@ export function manifestSources(data: Record<string, unknown>): ManifestSource[]
     try { const u = new URL(url); safe = ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password } catch {}
     const contentKeys = parseContentKeys(drm.contentKeys)
     const manifest = str(data.manifest || raw.manifest) || undefined
-    return { url: safe ? url : '', headers, format: str(m.format || meta.format), quality: str(m.quality || meta.quality), height: Number(m.height || meta.height) || 0, clear: drm.clear === true, drm: str(drm.system) || (drm.clear === true ? 'none' : 'unknown'), live: m.isLive === true || data.isLive === true || raw.isLive === true, contentKeys, manifest }
+    return { url: safe ? url : '', headers, format: str(m.format || meta.format), quality: str(m.quality || meta.quality), height: Number(m.height || meta.height) || 0, clear: drm.clear === true, drm: str(drm.system) || (drm.clear === true ? 'none' : 'unknown'), live: m.isLive === true || data.isLive === true || raw.isLive === true, contentKeys, manifest, ...(subtitles.length ? { subtitles } : {}) }
   }).filter(m => !!m.url)
 }
 export function manifestInput(provider: string, cfg: Pick<FileConfig, 'hamiClient'>, id: string, quality = 'auto'): Record<string, unknown> {
@@ -127,19 +130,37 @@ export async function probeCrunchyroll(cli: Pick<GwClient, 'invoke'>, id: string
       }
     }).filter(q => q.height > 0 || q.id === 'auto')
     if (!qualities.length) throw new Error('网关没有返回可用档位')
-    const audios: Audio[] = (Array.isArray(data.audios) ? data.audios.filter(isObj) : []).map((a, i) => {
-      const kbps = Math.round(Number(a.bitrateKbps) || 0)
-      const base = str(a.label) || str(a.lang) || `音轨 ${i + 1}`
+    // 配音：CR 的每一档配音是另一条 episode 版本，网关按 locale 换版本 id。
+    const audioRows = Array.isArray(data.audios) ? data.audios.filter(isObj) : []
+    const audios: Audio[] = audioRows.map((a, i) => {
+      const locale = str(a.lang) || str(a.locale) || str(a.id)
+      const base = str(a.label) || locale || `音轨 ${i + 1}`
+      const original = asBool(a.original)
       return {
-        id: str(a.id) || String(i + 1),
-        label: kbps ? `${base} · ${kbps}k` : base,
-        lang: str(a.lang),
+        id: str(a.id) || locale || String(i + 1),
+        label: original && locale && !/原声/.test(base) ? `${base}（原声）` : base,
+        lang: locale,
         codec: str(a.codec),
-        isDefault: i === 0,
-        selected: i === 0,
+        isDefault: asBool(a.default) || i === 0,
+        selected: asBool(a.default) || i === 0,
       }
     })
-    return { qualities, audios }
+    // 字幕：源站给的是独立签名直链，中文/英语优先选中。
+    const subRows = onlineSubtitles(data)
+    const subtitles: Subtitle[] = subRows.map(s => ({
+      id: s.id,
+      label: s.label,
+      lang: s.lang,
+      forced: false,
+      sdh: false,
+      selected: false,
+      isDefault: false,
+    }))
+    for (const want of [/^zh/i, /^en/i]) {
+      const pick = subtitles.find(s => want.test(s.lang) && !s.selected)
+      if (pick) { pick.selected = true; break }
+    }
+    return { qualities, audios, ...(subtitles.length ? { subtitles } : {}) }
   } catch {
     // 旧网关 / 探测失败：保留原来的单入口，下载照旧走最佳画质。
   }
@@ -349,6 +370,9 @@ export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg
     if (!token) throw new Error('CRUNCHYROLL_TOKEN_REQUIRED: 请先在设置里导入本人 Crunchyroll refresh_token')
     input.download = true
     input.refresh_token = token
+    // 配音是另一条 episode 版本：只认第一档（网关按 locale 换成版本 id 再取流）。
+    const audio = selection?.audio?.find(a => !!a)
+    if (audio) input.audio = audio
   }
   if (provider === 'hamivideo' || provider === 'friday' || provider === 'appletvplus' || provider === 'dsnp') input.download = true
   const sources = manifestSources(await cli.invoke(provider, 'resolve', input, undefined, { timeoutMs: 120_000 }))

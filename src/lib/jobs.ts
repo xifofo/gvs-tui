@@ -1,3 +1,4 @@
+import { pickSubtitles, downloadSubtitles, attachSubtitles } from './online-subtitles.ts'
 import { DSNP_VIDEO_CODECS, resolveManifestDownload } from './manifest-provider.ts'
 import { downloadWebVideo } from './web-video-download'
 import { userMessage, errorCode } from './user-message.ts'
@@ -1418,9 +1419,13 @@ async function markSubtitleFlags(dest: string, subs: NonNullable<DlTask['subtitl
 /** Media is fetched on this client; gateway traffic is limited to resolve calls. */
 async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, work: string, signal?: AbortSignal): Promise<void> {
   // Apple TV：把 probe 里选中的音轨/字幕序号传回网关，由它裁剪 master。
+  // Crunchyroll：配音是另一条 episode 版本，只传选中的那一档 locale；字幕由网关
+  // 随 resolve 返回签名直链，下完再挂进 MKV。
   const selection = t.provider === 'appletvplus'
     ? { audio: (t.audioTracks || []).map(a => a.id), subtitle: (t.subtitleTracks || []).map(s => s.id) }
-    : undefined
+    : t.provider === 'crunchyroll'
+      ? { audio: (t.audioTracks || []).map(a => a.id).slice(0, 1), subtitle: (t.subtitleTracks || []).map(s => s.id) }
+      : undefined
   const sources = await resolveManifestDownload(cli, cfg, t.provider, t.vid, t.quality || 'auto', selection)
   signal?.throwIfAborted()
   const source = sources[0]!
@@ -1446,6 +1451,28 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
     if (t.provider === 'dsnp' && t.subtitleTracks?.some(s => s.forced || s.isDefault) && /\.mkv$/i.test(dest)) {
       emit('封装', 0.995, '写入字幕默认 / 强制标记')
       await markSubtitleFlags(dest, t.subtitleTracks, signal)
+    }
+    if (t.provider === 'crunchyroll') {
+      // CR 的字幕不在清单里：源站给的是独立签名直链（ass/vtt/srt），下完用 mkvmerge 挂轨。
+      const picked = pickSubtitles(source.subtitles ?? [], (t.subtitleTracks || []).map(s => s.id))
+      if (picked.length) {
+        const defaults = new Set((t.subtitleTracks || []).filter(s => s.isDefault).map(s => s.id))
+        emit('字幕', 0.99, `下载 ${picked.length} 条字幕`)
+        try {
+          const files = await downloadSubtitles(picked, join(work, 'subs'), signal)
+          if (/\.mkv$/i.test(dest)) {
+            const mkvmerge = await ensureMkvmerge()
+            if (!mkvmerge) throw new Error('没有 mkvmerge')
+            emit('封装', 0.995, `挂入 ${files.length} 条字幕`)
+            await attachSubtitles(mkvmerge, dest, files.map(f => ({ ...f, isDefault: defaults.has(f.sub.id) })), signal)
+          } else {
+            emit('字幕', 0.995, `${files.length} 条字幕已存到 ${join(work, 'subs')}`)
+          }
+        } catch (e) {
+          // 字幕失败不能毁掉已经下好的视频。
+          emit('字幕', 0.995, `字幕未写入：${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
     }
   })
 }
