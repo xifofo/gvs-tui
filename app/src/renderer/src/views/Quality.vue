@@ -173,7 +173,7 @@ async function loadTmdb() {
     const saved = await gvs('publicationPreferences', { provider: v.provider, sourceWorkId: v.id, kind: v.kind })
     if (seq !== tmdbSeq || d.value !== v) return
     if (saved?.tmdb) { restorePublication(saved); return }
-    if (!store.state?.settings.tmdbKey || !canMatchTmdb.value) return
+    if (store.state?.plutofish?.status === 'verified' || !store.state?.settings.tmdbKey || !canMatchTmdb.value) return
     const hits = await gvs('tmdbSearch', v.title, v.kind !== 'movie')
     if (seq !== tmdbSeq || d.value !== v) return
     tmdbHits.value = hits
@@ -195,7 +195,7 @@ watch(tmdb, () => {
   seasonsLoading.value = false
   seasonsError.value = ''
   seasonsWarning.value = ''
-  if (tmdb.value?.kind === 'show') void loadSeasons()
+  if (tmdb.value?.kind === 'show' && store.state?.settings.tmdbKey) void loadSeasons()
 }, { flush: 'sync' })
 
 async function loadSeasons() {
@@ -268,6 +268,12 @@ function selectManualTmdb(hit: TmdbHit) {
   selectTmdb(hit)
 }
 
+function applyRecognizedPublication(hit: TmdbHit, season?: number) {
+  selectManualTmdb(hit)
+  manualTitle.value = hit.title || null
+  if (season !== undefined) manualSeason.value = String(season)
+}
+
 function restorePublication(saved: PublicationPreferences) {
   if (saved.tmdb && !tmdb.value) selectManualTmdb(saved.tmdb)
   if (saved.tmdbSeason !== undefined) { manualSeason.value = String(saved.tmdbSeason); selectedSeason.value = '' }
@@ -314,7 +320,7 @@ const request = computed<EnqueueRequest | null>(() => {
     ...(subtitles.value.length ? { subtitleIds: [...subtitleIds.value] } : {}),
     defaultAudioId: preferredAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
-    publication: { releaseSelection: publication.value.releaseSelection, category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, episodeNumbers: { ...publication.value.episodeNumbers } },
+    publication: { sourceAccountId: publication.value.sourceAccountId, releaseSelection: publication.value.releaseSelection, category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, episodeNumbers: { ...publication.value.episodeNumbers } },
     tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
     accountId: store.accountPick[v.provider] || undefined,
   }
@@ -684,7 +690,7 @@ async function applyRule() {
           <div class="output-heading"><h3>发布与保存</h3></div>
           <div class="publication-grid">
             <div class="publication-settings-group">
-              <PublicationFields v-if="d" ref="publicationFields" v-model="publication" class="publication-settings" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @match="selectManualTmdb" @restore="restorePublication" />
+              <PublicationFields v-if="d" ref="publicationFields" v-model="publication" class="publication-settings" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :recognition-file-name="!namingLoading && !namingError ? naming?.file : undefined" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="starting || tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @recognized="applyRecognizedPublication" @match="selectManualTmdb" @restore="restorePublication" />
               <div class="save-paths">
                 <div class="blk"><span class="lab">本地保存目录</span>
                   <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">

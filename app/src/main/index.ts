@@ -243,6 +243,7 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   detail: (p, id, hint) => core.detail(p, id, hint),
   detailFromLink: (l, hint) => core.detailFromLink(l, hint),
   probe: (p, eps, accountId) => probeWithAccounts(p, eps, accountId),
+  recognizePublication: (source, name) => core.recognizePublication(source, name),
   publicationReleases: (r) => core.publicationReleases(r),
   namingPreview: (r) => core.namingPreview(r),
   publicationPreferences: (context) => core.publicationPreferences(context),

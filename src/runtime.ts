@@ -1,3 +1,5 @@
+import { recognizeFile } from './integrations/plutofish/recognition'
+import { publicationSource } from './integrations/plutofish/sources'
 import { PublicationWorker } from './integrations/plutofish/publication-worker.ts'
 import { verifiedGatewayKey } from './integrations/plutofish/gateway.ts'
 import { PlutoFishConnection } from './integrations/plutofish/connection.ts'
@@ -453,7 +455,9 @@ export class Runtime {
         this.updateFilters(k)
         break
       case 'confirm':
+        if (this.searching && k !== 'esc') break
         if (k === 'esc') {
+          this.requestGeneration++; this.searching = false
           this.scene = 'quality'
         } else if (k === 'enter') {
           try { if (this.pending.length) this.enqueueAll(this.pending) }
@@ -461,6 +465,11 @@ export class Runtime {
         } else if (k === 'o') {
           this.editField = '确认下载目录'
           this.editValue = this.cfg.outDir
+          this.scene = 'edit'
+        } else if (k.toLowerCase() === 'r') {
+          if (this.searching) break
+          this.editField = '识别并替换作品与分类'
+          this.editValue = this.confirmation().name
           this.scene = 'edit'
         } else if (k.toLowerCase() === 'c') {
           const options = ['', ...(this.plutofish.view().identity?.categories ?? []).map(c => c.value)]
@@ -1320,7 +1329,7 @@ export class Runtime {
       name: naming && first ? usesMeasuredNaming(first)
         ? namingPreviewFilename(naming, first.provider, this.qualities[this.qIdx], first.audioTracks) : filename(naming) : '',
       note: [first && usesMeasuredNaming(first) ? NAMING_PREVIEW_NOTE : '',
-        `PlutoFish 分类：${this.plutofish.view().identity?.categories?.find(c => c.value === this.publicationCategory)?.label || '待补全'}（C 切换）`,
+        `PlutoFish 分类：${this.plutofish.view().identity?.categories?.find(c => c.value === this.publicationCategory)?.label || '待补全'}（C 切换 / R 文件名识别）`,
         `资料：${first?.tmdbId ? 'TMDB ' + first.tmdbId : '平台原始资料'} · 上传到绑定源账号根目录（0）并登记草稿；任务页 U 继续 / P 暂停上传`].filter(Boolean).join('\n'),
     }
   }
@@ -1916,7 +1925,7 @@ export class Runtime {
       this.editValue = ''
       this.iqLoginUsername = ''
       this.iqLoginAreaCode = ''
-      this.scene = this.editField === '确认下载目录' ? 'confirm' : 'settings'
+      this.scene = ['确认下载目录', '识别并替换作品与分类'].includes(this.editField) ? 'confirm' : 'settings'
       return
     }
     if (k === 'enter') void this.commitEdit(this.editField === 'IQ 登录密码' ? this.editValue : this.editValue.trim())
@@ -2258,6 +2267,11 @@ export class Runtime {
       'mewatch profile': {provider:'mewatch',op:'profile',profileId:v.split(' ')[0],pin:v.split(' ')[1]},
     }
     if (commands[this.editField]) { this.editValue = ''; this.scene = 'settings'; this.emit(); await this.providerLogin(commands[this.editField]!); return }
+    if (this.editField === '识别并替换作品与分类') {
+      this.scene = 'confirm'
+      await this.recognizePending(v)
+      return
+    }
     if (this.editField === '确认下载目录') {
       const next = normalizeOutDir(v)
       if (!next) {
@@ -2469,6 +2483,7 @@ export class Runtime {
     const generation = this.requestGeneration
     this.detailCursor = this.cursor
     this.pending = tasks
+    this.publicationCategory = ''
     this.scene = 'quality'
     this.probeFailed = false
     this.qualities = []
@@ -2668,6 +2683,11 @@ export class Runtime {
         return
       }
     }
+    if (!this.simulated && this.plutofish.ready && this.plutofish.view().identity && !this.pending[0]?.tmdbId && !this.publicationCategory) {
+      this.searching = false
+      await this.recognizePending(this.confirmation().name)
+      return
+    }
     if (
       !this.simulated &&
       supportsTmdb(this.detailProv) &&
@@ -2681,6 +2701,39 @@ export class Runtime {
     this.searching = false
     this.scene = 'confirm'
     this.emit()
+  }
+
+  /** 当前待下载文件名交给服务端识别；不触碰媒体内容，旧页面和人工变更均使响应失效。 */
+  private async recognizePending(fileName: string): Promise<void> {
+    if (this.searching || !this.pending.length) return
+    const generation = this.requestGeneration, tasks = this.pending
+    const before = JSON.stringify([tasks, this.publicationCategory])
+    this.searching = true
+    this.say('正在识别作品与分类…', 'info'); this.emit()
+    try {
+      const view = this.plutofish.view(), source = publicationSource(view)
+      const result = await recognizeFile(this.plutofish, { url: view.url, publisherId: view.identity!.id, sourceAccount: source }, fileName)
+      if (generation !== this.requestGeneration || tasks !== this.pending || before !== JSON.stringify([tasks, this.publicationCategory])) return
+      const work = result.work
+      if (!result.canAutoFill || !work || !view.identity!.categories?.some(c => c.value === work.category.value)) {
+        this.say('识别结果需要确认或分类不可用 · R 修改文件名重试 / C 手动选择分类', 'warn')
+      } else {
+        const movie = work.mediaType === 'movie'
+        this.setTitleKind(movie ? 'movie' : 'show')
+        for (const task of tasks) {
+          task.tmdbId = Number(work.tmdbId); task.series = work.title; task.nameDots = dots(work.title)
+          task.filenameTitle = work.englishTitle || work.originalTitle || work.title
+          task.year = work.year || task.year
+          task.season = movie ? 0 : result.parsed.seasonNumber!
+        }
+        this.publicationCategory = work.category.value
+        this.say(`已识别：${work.title} · ${work.category.label} · R 可输入文件名重新识别`, 'ok')
+      }
+    } catch (error) {
+      if (generation === this.requestGeneration && tasks === this.pending) this.say(`${userMessage(error, '作品识别失败')} · R 重试 / C 手动分类`, 'warn')
+    } finally {
+      if (generation === this.requestGeneration && tasks === this.pending) { this.searching = false; this.scene = 'confirm'; this.emit() }
+    }
   }
 
   private async matchTMDB(): Promise<void> {

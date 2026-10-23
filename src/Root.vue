@@ -343,7 +343,7 @@ const hints = computed((): Array<[string, string]> => {
       return [['r', '重试'], ['s', '跳过'], ['esc', '返回画质']]
   }
   if (state.value.scene === 'confirm')
-    return [['⏎', '加入队列'], ['c', '发布分类'], ...(state.value.canSelectTmdbSeason ? [['t', 'TMDB 季号'] as [string, string]] : []), ['o', '改目录'], ['esc', '返回画质']]
+    return [['⏎', '加入队列'], ['c', '发布分类'], ['r', '文件名识别'], ...(state.value.canSelectTmdbSeason ? [['t', 'TMDB 季号'] as [string, string]] : []), ['o', '改目录'], ['esc', '返回画质']]
   if (state.value.scene === 'quality' && !audios.value.length)
     return [
       ['⏎', '继续'],
