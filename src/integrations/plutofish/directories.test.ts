@@ -41,7 +41,7 @@ test('目录加载中换绑会丢弃旧账号响应', async () => {
   await start
   await f.rebind()
   release()
-  expect((await pending)?.message).toContain('绑定不一致')
+  expect((await pending)?.message).toContain('连接已变更')
 })
 
 test('停用发布端锁定入口，网盘凭据过期只显示固定安全错误', async () => {
@@ -100,5 +100,35 @@ test('创建失败不重发，目录错名、错归属或换绑响应不能被�
   const g = await fixture(async () => { start(); await wait; return Response.json(page) })
   const pending = g.connection.createDirectories('source', '0', ['红果']).catch(e => e as Error)
   await started; await g.rebind(); release()
-  expect((await pending as Error).message).toContain('绑定不一致')
+  expect((await pending as Error).message).toContain('连接已变更')
+})
+
+test('重连立即取消未返回的目录请求，旧权限失败不能锁住已恢复连接', async () => {
+  let release!: () => void, start!: () => void, calls = 0
+  const started = new Promise<void>(r => { start = r }), wait = new Promise<void>(r => { release = r })
+  const f = await fixture(async () => {
+    if (++calls === 1) { start(); await wait; return Response.json({}, { status: 401 }) }
+    return Response.json(page)
+  })
+  const pending = f.connection.directories('source', '9007199254740993').then(() => null, error => error as Error)
+  await started
+  f.connection.cancelRequests()
+  const error = await Promise.race([pending, Bun.sleep(500).then(() => new Error('旧请求仍在等待'))])
+  expect(error?.message).toContain('旧请求已取消')
+  await f.connection.verify()
+  release()
+  expect(await f.connection.directories('source', '9007199254740993')).toEqual(page)
+  expect(f.connection.ready).toBe(true)
+})
+
+test('定时身份校验成功不会取消进行中的目录读取', async () => {
+  let release!: () => void, start!: () => void
+  const started = new Promise<void>(r => { start = r }), wait = new Promise<void>(r => { release = r })
+  const f = await fixture(async () => { start(); await wait; return Response.json(page) })
+  const pending = f.connection.directories('source', '9007199254740993')
+  await started
+  await f.connection.verify(undefined, true)
+  release()
+  expect(await pending).toEqual(page)
+  expect(f.connection.ready).toBe(true)
 })
