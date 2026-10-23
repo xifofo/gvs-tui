@@ -136,6 +136,12 @@ describe('manifest provider client contracts', () => {
     expect(out.subtitles?.find(s => s.id === 'en-US')?.isDefault).toBe(true)
   })
 
+  test('crunchyroll surfaces the stream-limit error instead of an empty ladder', async () => {
+    const limit = Object.assign(new Error('该账号同时播放的会话数已达上限'), { errorCode: 'TOO_MANY_QUEUED_STREAMS', httpStatus: 429 })
+    const cli = {invoke: async () => { throw limit }} as unknown as GwClient
+    await expect(probeManifest(cli, {} as FileConfig, 'crunchyroll', 'G69P9MD9Y')).rejects.toThrow('会话数已达上限')
+  })
+
   test('crunchyroll falls back to the single auto entry on old gateways', async () => {
     const cli = {invoke: async () => { throw new Error('INVALID_PARAM: crunchyroll 支持 …') }} as unknown as GwClient
     const out = await probeManifest(cli, {} as FileConfig, 'crunchyroll', 'G69P9MD9Y')

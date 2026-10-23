@@ -173,8 +173,13 @@ export async function probeCrunchyroll(cli: Pick<GwClient, 'invoke'>, id: string
       if (english) { english.selected = true; english.isDefault = true }
     }
     return { qualities, audios, ...(subtitles.length ? { subtitles } : {}) }
-  } catch {
+  } catch (e) {
     // 旧网关 / 探测失败：保留原来的单入口，下载照旧走最佳画质。
+    // 但「账号并发播放会话已满」必须让用户看见——否则画质页只剩一条「自动」，
+    // 看起来像"不显示画质列表"，实际是 CR 上游返回 420（网关转成 429）。
+    const code = (e as { errorCode?: string } | null)?.errorCode || ''
+    const status = (e as { httpStatus?: number } | null)?.httpStatus
+    if (code === 'TOO_MANY_QUEUED_STREAMS' || status === 429) throw e
   }
   return { qualities: [{ id: 'auto', label: '自动（最佳画质）', title: 'DASH · 本机直连 CDN', size: 0, width: 0, height: 0, codec: '', drm: 'widevine', stream: 'auto', tier: 0 }], audios: [] }
 }
