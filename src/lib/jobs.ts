@@ -1412,21 +1412,44 @@ export function youkuAudioFetchPlan(
 }
 
 /**
+ * 是否需要给已封装的字幕轨回写「轨名 / 默认 / 强制」：
+ * Apple TV+ 的字幕由网关按序号裁进 master，轨名和默认标记只能我们自己写；
+ * Disney+ 只在勾了 forced 或默认档时才写（保持原有行为）。
+ */
+export function shouldMarkSubtitleFlags(
+  provider: string,
+  subs: NonNullable<DlTask['subtitleTracks']> | undefined,
+): boolean {
+  if (!subs?.length) return false
+  if (provider === 'appletvplus') return true
+  return provider === 'dsnp' && subs.some(s => s.forced || s.isDefault)
+}
+
+/**
  * Sets MKV default / forced-display flags on the muxed subtitle tracks (mkvmerge remux; no mkvpropedit is bundled).
  * RE muxes the selected renditions in playlist order, which is the order of `subs`; a count mismatch leaves the file untouched.
+ * `defaultFirst` 在没有任何一条标了默认时把第一条设为默认，避免播放器打开是空字幕。
  */
-async function markSubtitleFlags(dest: string, subs: NonNullable<DlTask['subtitleTracks']>, signal?: AbortSignal): Promise<void> {
+async function markSubtitleFlags(
+  dest: string,
+  subs: NonNullable<DlTask['subtitleTracks']>,
+  signal?: AbortSignal,
+  provider = 'dsnp',
+  defaultFirst = false,
+): Promise<void> {
   const { execFile } = await import('node:child_process')
   const { rename, rm } = await import('node:fs/promises')
   const run = (bin: string, args: string[]) => new Promise<string>((ok, fail) => execFile(bin, args, { maxBuffer: 64 << 20, signal, windowsHide: true }, (e, out) => e ? fail(e) : ok(String(out))))
   const mkvmerge = await ensureMkvmerge()
   const info = JSON.parse(await run(mkvmerge, ['-J', dest])) as { tracks?: Array<{ id: number; type: string; properties?: { track_name?: string } }> }
   const tracks = (info.tracks || []).filter(x => x.type === 'subtitles')
-  if (tracks.length !== subs.length) { runLog(`dsnp subtitle flags skipped: ${tracks.length} muxed vs ${subs.length} selected`); return }
+  if (tracks.length !== subs.length) { runLog(`${provider} subtitle flags skipped: ${tracks.length} muxed vs ${subs.length} selected`); return }
   const args = ['-o', `${dest}.flags.mkv`]
+  const firstDefault = defaultFirst && !subs.some(s => s.isDefault) ? 0 : -1
   tracks.forEach((x, i) => {
     const s = subs[i]!
-    args.push('--default-track-flag', `${x.id}:${s.isDefault ? 1 : 0}`, '--forced-display-flag', `${x.id}:${s.forced ? 1 : 0}`, '--track-name', `${x.id}:${s.label}`)
+    const isDefault = s.isDefault || i === firstDefault
+    args.push('--default-track-flag', `${x.id}:${isDefault ? 1 : 0}`, '--forced-display-flag', `${x.id}:${s.forced ? 1 : 0}`, '--track-name', `${x.id}:${s.label}`)
   })
   args.push(dest)
   try {
@@ -1434,7 +1457,7 @@ async function markSubtitleFlags(dest: string, subs: NonNullable<DlTask['subtitl
     await rename(`${dest}.flags.mkv`, dest)
   } catch (e) {
     await rm(`${dest}.flags.mkv`, { force: true })
-    runLog(`dsnp subtitle flags failed: ${e instanceof Error ? e.message : String(e)}`)
+    runLog(`${provider} subtitle flags failed: ${e instanceof Error ? e.message : String(e)}`)
   }
 }
 
@@ -1483,9 +1506,9 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
       concurrentStreams: ['appletvplus', 'dsnp', 'crunchyroll'].includes(t.provider),
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
     })
-    if (t.provider === 'dsnp' && t.subtitleTracks?.some(s => s.forced || s.isDefault) && /\.mkv$/i.test(dest)) {
-      emit('封装', 0.995, '写入字幕默认 / 强制标记')
-      await markSubtitleFlags(dest, t.subtitleTracks, signal)
+    if (shouldMarkSubtitleFlags(t.provider, t.subtitleTracks) && /\.mkv$/i.test(dest)) {
+      emit('封装', 0.995, '写入字幕轨名与默认标记')
+      await markSubtitleFlags(dest, t.subtitleTracks!, signal, t.provider, t.provider === 'appletvplus')
     }
     if (t.provider === 'crunchyroll') {
       // CR 的字幕不在清单里：源站给的是独立签名直链（ass/vtt/srt），下完用 mkvmerge 挂轨。

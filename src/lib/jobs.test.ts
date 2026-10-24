@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JobHub, tencentCipher, tencentMirrors, bindYoukuAudioTracksToTask, cleanupOutputCaches, jobNaming, jobTitle, muxTrackTitle, patchJob, trackVid, youkuAudioFetchPlan, youkuDRM, MEDIA_PROBE_PROVIDERS, type DlTask, originalAudioLanguage } from './jobs.ts'
+import { JobHub, tencentCipher, tencentMirrors, bindYoukuAudioTracksToTask, cleanupOutputCaches, jobNaming, jobTitle, muxTrackTitle, patchJob, trackVid, youkuAudioFetchPlan, youkuDRM, MEDIA_PROBE_PROVIDERS, shouldMarkSubtitleFlags, type DlTask, originalAudioLanguage } from './jobs.ts'
 import { youkuAudioPlaylist, youkuUsesSeparateAudio, youkuVideoPlaylist } from './media.ts'
 import { defaultConfig, type FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
@@ -339,5 +339,27 @@ describe('MEDIA_PROBE_PROVIDERS', () => {
     for (const provider of ['mgtv', 'iq', 'iqcn', 'youku', 'bilibili', 'migu', 'crunchyroll', 'appletvplus', 'dsnp']) {
       expect(MEDIA_PROBE_PROVIDERS).toContain(provider)
     }
+  })
+})
+
+describe('shouldMarkSubtitleFlags', () => {
+  const sub = (over: Partial<{ forced: boolean; isDefault: boolean }> = {}) =>
+    ({ id: 'en', label: 'English', lang: 'en-US', forced: false, sdh: false, isDefault: false, ...over })
+
+  test('apple tv+ always writes names and default, even without forced/default picks', () => {
+    expect(shouldMarkSubtitleFlags('appletvplus', [sub()])).toBe(true)
+    expect(shouldMarkSubtitleFlags('appletvplus', [sub({ forced: true })])).toBe(true)
+  })
+
+  test('disney+ keeps its original narrow trigger', () => {
+    expect(shouldMarkSubtitleFlags('dsnp', [sub()])).toBe(false)
+    expect(shouldMarkSubtitleFlags('dsnp', [sub({ isDefault: true })])).toBe(true)
+    expect(shouldMarkSubtitleFlags('dsnp', [sub({ forced: true })])).toBe(true)
+  })
+
+  test('other providers and empty selections do nothing', () => {
+    expect(shouldMarkSubtitleFlags('crunchyroll', [sub()])).toBe(false)
+    expect(shouldMarkSubtitleFlags('appletvplus', [])).toBe(false)
+    expect(shouldMarkSubtitleFlags('appletvplus', undefined)).toBe(false)
   })
 })
