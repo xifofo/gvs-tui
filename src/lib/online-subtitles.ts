@@ -107,7 +107,10 @@ export function attachSubtitleArgs(
 ): string[] {
   const args = [video]
   for (const f of files) {
-    const lang = mkvLang(f.sub.lang || f.sub.id)
+    // 简繁用带脚本的 IETF 标签（zh-Hans / zh-Hant），播放器才能按语言自动选轨；
+    // 其它语言仍用 Matroska 的 ISO 639-2 代码。
+    const variant = chineseVariant(f.sub.lang, f.sub.label, f.sub.id)
+    const lang = variant === 'hans' ? 'zh-Hans' : variant === 'hant' ? 'zh-Hant' : mkvLang(f.sub.lang || f.sub.id)
     args.push('--language', `0:${lang}`, '--track-name', `0:${f.sub.label || f.sub.id}`)
     args.push('--default-track-flag', `0:${f.isDefault ? 1 : 0}`, '--forced-display-flag', '0:0')
     args.push('--sub-charset', '0:UTF-8', f.path)

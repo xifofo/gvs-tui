@@ -55,11 +55,20 @@ describe('crunchyroll online subtitles', () => {
       { path: 'b.ass', sub: { id: 'en-US', lang: 'en-US', label: '英语', format: 'ass', url: 'u' }, isDefault: false },
     ])
     expect(args[0]).toBe('ep.mkv')
-    expect(args).toContain('0:chi')
+    // 简体走带脚本的 IETF 标签，英语仍用 ISO 639-2
+    expect(args).toContain('0:zh-Hans')
     expect(args).toContain('0:eng')
+    expect(args).not.toContain('0:chi')
     expect(args).toContain('--default-track-flag')
     expect(args.slice(-3)).toEqual(['b.ass', '-o', 'ep.mkv.subs.mkv'])
     expect(args.filter(a => a === '-o')).toHaveLength(1)
+  })
+
+  test('traditional Chinese subtitles carry zh-Hant so players can auto-select', () => {
+    const args = attachSubtitleArgs('ep.mkv', 'out.mkv', [
+      { path: 'c.ass', sub: { id: 'zh-HK', lang: 'zh-HK', label: '繁體中文（香港）', format: 'ass', url: 'u' } },
+    ])
+    expect(args).toContain('0:zh-Hant')
   })
 
   test('downloads through the injected media transport, not a bare fetch', async () => {
