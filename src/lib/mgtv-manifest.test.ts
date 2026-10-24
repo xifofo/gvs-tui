@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mgtvDurationCovers, mgtvExpectedDuration, verifyMgtvManifest } from './mgtv-manifest'
+import { mgtvDurationCovers, mgtvExpectedDuration, mgtvRetryableStatus, verifyMgtvManifest } from './mgtv-manifest'
 
 const complete = '#EXTM3U\n#EXTINF:20,\na.ts\n#EXTINF:21,\nb.ts\n#EXT-X-ENDLIST\n'
 async function fixture(body: (req: IncomingMessage, res: ServerResponse) => void, check: (base: string) => Promise<void>) {
@@ -103,9 +103,10 @@ test('mgtv refuses ambiguous variants, loops and invalid child URLs', async () =
 })
 
 test('mgtv bounds playlist reads and reports CDN 403/405 without leaking the URL', async () => {
+  let denied = 0
   await fixture((req, res) => {
     if (req.url === '/large') res.end('x'.repeat(1024 * 1024 + 1))
-    else { res.writeHead(req.url?.startsWith('/tv-cdn') ? 405 : 403); res.end('denied') }
+    else { denied++; res.writeHead(req.url?.startsWith('/tv-cdn') ? 405 : 403); res.end('denied') }
   }, async base => {
     await expect(verifyMgtvManifest(base + '/large', {}, 40)).rejects.toThrow('清单过大')
     await expect(verifyMgtvManifest(base + '/private?token=secret', {}, 40)).rejects.toThrow('清单读取失败')
@@ -115,11 +116,19 @@ test('mgtv bounds playlist reads and reports CDN 403/405 without leaking the URL
       expect((error as Error).message).not.toContain('secret')
     }
     await expect(verifyMgtvManifest(base + '/tv-cdn?token=secret', {}, 40)).rejects.toThrow('HTTP 405')
+    // 403/405 现在按"节点拒绝"重试 3 次（每次失败的请求都记一次）
+    expect(denied).toBe(3 * 3)
   })
-})
+}, 30000)
 
 test('mgtv preserves cancellation rather than treating a pause as a preview failure', async () => {
   const controller = new AbortController()
   controller.abort('pause')
   await expect(verifyMgtvManifest('http://127.0.0.1:1/unused', {}, 40, controller.signal)).rejects.toBe('pause')
+})
+
+test('mgtv treats node-level 403/405 refusals as retryable but not real client errors', () => {
+  for (const status of [403, 405, 408, 429, 500, 502, 503]) expect(mgtvRetryableStatus(status)).toBe(true)
+  for (const status of [400, 401, 404, 410]) expect(mgtvRetryableStatus(status)).toBe(false)
+  expect(mgtvRetryableStatus(undefined)).toBe(false)
 })

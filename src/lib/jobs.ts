@@ -186,6 +186,7 @@ export class JobHub {
   private active = 0
   private youkuActive = 0
   private readonly running = new Map<number, { ctrl: AbortController; settled: Promise<void> }>()
+  private mgtvActive = 0
 
   constructor(
     private readonly onEvt: (e: JobEvt) => void,
@@ -251,9 +252,16 @@ export class JobHub {
         i++
         continue
       }
+      // 芒果批量下载时同一出口 IP 并发太多会整段 405/403；同一时间只跑一条，
+      // 换取清单与分片读取的成功率。
+      if (item.provider === 'mgtv' && this.mgtvActive > 0) {
+        i++
+        continue
+      }
       this.q.splice(i, 1)
       this.active += 1
       if (item.provider === 'youku') this.youkuActive += 1
+      if (item.provider === 'mgtv') this.mgtvActive += 1
       const ctrl = new AbortController()
       // The Youku slot guards download/decrypt only: mixed RE/Shaka temp names
       // and mixed CENC keys exist while downloading, not while muxing the
@@ -276,6 +284,7 @@ export class JobHub {
           youkuHeld = false
           this.youkuActive -= 1
         }
+        if (item.provider === 'mgtv') this.mgtvActive = Math.max(0, this.mgtvActive - 1)
         this.active -= 1
         this.running.delete(item.id)
         settled.resolve()

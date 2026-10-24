@@ -50,7 +50,25 @@ export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileCo
     // Some TV CDN endpoints reject a web Referer with HTTP 405. Keep only
     // provider-supplied Referer/UA and use identical headers for probe and RE.
     const headers = headersFor('', 0, source.headers)
-    const checked = await verifyMgtvManifest(source.url, headers, expected, signal)
+    // 芒果的 CDN 节点会整段时间拒绝（IP 节点回 405、域名节点回 403），批量下载时尤其明显。
+    // 死磕同一个 URL 没用，重新取流往往换到另一个节点，所以校验失败就重取再试。
+    let checked: Awaited<ReturnType<typeof verifyMgtvManifest>>
+    let current = source
+    for (let attempt = 1; ; attempt++) {
+      try {
+        checked = await verifyMgtvManifest(current.url, headers, expected, signal)
+        break
+      } catch (error) {
+        signal?.throwIfAborted()
+        const message = error instanceof Error ? error.message : ''
+        if (attempt >= 3 || !/HTTP (?:403|405|408|429|5\d\d)/.test(message)) throw error
+        emit('校验', .03, `芒果清单被 CDN 拒绝，重新取流（第 ${attempt} 次）`)
+        const fresh = await cli.invoke('mgtv', 'play', { vid: task.vid, quality: task.quality, ...mgtvCapabilities })
+        const next = webTracks(fresh).find(t => t.type === 'video')
+        if (!next) throw error
+        current = next
+      }
+    }
     await downloadPlaylist({src:checked.url,dest,ref:'',headers,threads:cfg.threads,select:'muxed',muxTracks:true,releaseGroup:releaseGroup(task,cfg),
       // RE can synthesize an English language tag for an unlabeled TS audio
       // stream. A matched original language must be applied during our mux.

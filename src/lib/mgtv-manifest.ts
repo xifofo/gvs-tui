@@ -4,6 +4,14 @@ import { sleep } from './util.ts'
 
 type ManifestResult = { url: string; durationSeconds: number; segmentCount: number }
 
+/**
+ * 芒果 IP:直连节点整段时间回 405，域名节点（pcvideo*.titan.mgtv.com）会回 403，
+ * 都属于"这个节点现在不给"，换节点/稍后再说就能过，因此按可重试处理。
+ */
+export function mgtvRetryableStatus(status: number | undefined): boolean {
+  return status === 403 || status === 405 || status === 408 || status === 429 || (status !== undefined && status >= 500)
+}
+
 /** Ignore missing, boolean and malformed duration fields; preserve fractional seconds. */
 export function mgtvExpectedDuration(...values: unknown[]): number | undefined {
   const seconds = values.map(value => {
@@ -82,7 +90,7 @@ export async function verifyMgtvManifest(
         signal?.throwIfAborted()
         if (error instanceof Error && error.message.startsWith('芒果播放清单过大')) throw error
         const rejected = httpStatus !== undefined && (httpStatus < 200 || httpStatus >= 300)
-        const retryable = httpStatus === 405 || httpStatus === 408 || httpStatus === 429 || (httpStatus !== undefined && httpStatus >= 500)
+        const retryable = mgtvRetryableStatus(httpStatus)
         if (retryable && attempt < attempts) {
           // Host and status only: never the signed path, query or headers.
           runLog(`mgtv manifest retry host=${new URL(url).host} http=${httpStatus} attempt=${attempt}/${attempts}`)
