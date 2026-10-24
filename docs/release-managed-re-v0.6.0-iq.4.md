@@ -14,6 +14,15 @@
 
 ## 验证
 
-- 复现样本：Apple TV+ 960p（`ec-3`, 16/JOC, 40 分片）。
-  旧二进制：`正在拼接 2 个独立初始化的点播段...` → `ipod` 报错 → Failed。
-  新二进制：拼接产出 `.mka`，封装 MKV 成功（CI 产物实测，见桌面端 v0.1.88 发布说明）。
+- 复现样本：Apple TV+ 960p（`ec-3`, 16/JOC, 40 分片，真实凭证/密钥）。
+  旧二进制：`正在拼接 2 个独立初始化的点播段...` → `[ipod] Could not find tag for codec eac3` → Failed，无产物。
+  新二进制（CI 产物 `osx-arm64`，版本串 `0.6.0-gvs-iq.3+1bb9fc6`）：
+  ```
+  cli.mkv  237 MB
+  h264 video 1920x960
+  eac3 audio 6ch
+  ffmpeg -f null: 0 error
+  ```
+  日志中仅剩历史性的 `skd`/`data` key URI 警告（走 key-text-file，不影响解密）。
+
+> 资产文件名仍带 `gvs-iq.3`（构建脚本取 `gvs-source.json` 的版本字段），二进制版本串含本次提交 `1bb9fc6`；客户端按 release 标签 + runtime id 取包，不受文件名影响。
