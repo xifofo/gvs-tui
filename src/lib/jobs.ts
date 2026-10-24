@@ -1,7 +1,7 @@
 import { pickSubtitles, orderSubtitles, downloadSubtitles, attachSubtitles } from './online-subtitles.ts'
 import { fetchMediaPart } from './proxy.ts'
 import { DSNP_VIDEO_CODECS, manifestDownloadProxy, resolveManifestDownload } from './manifest-provider.ts'
-import { downloadWebVideo } from './web-video-download'
+import { downloadWebVideo, mgtvBlockedFor } from './web-video-download'
 import { userMessage, errorCode } from './user-message.ts'
 import { youkuMediaError } from './media-output.ts'
 import { decryptYoukuTs } from './youku-ts.ts'
@@ -255,6 +255,11 @@ export class JobHub {
       // 芒果批量下载时同一出口 IP 并发太多会整段 405/403；同一时间只跑一条，
       // 换取清单与分片读取的成功率。
       if (item.provider === 'mgtv' && this.mgtvActive > 0) {
+        i++
+        continue
+      }
+      // 出口已经被芒果拒了的话，先让芒果任务在队列里等冷却结束，别再一起撞。
+      if (item.provider === 'mgtv' && mgtvBlockedFor() > 0) {
         i++
         continue
       }
