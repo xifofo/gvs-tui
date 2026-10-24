@@ -117,6 +117,13 @@ export type JobEvt = {
 export type StopReason = 'pause' | 'cancel'
 
 /** Lets the hub release per-provider resources as soon as downloading is done. */
+/**
+ * 下载页的「实测规格」行（分辨率 · 编码 · 帧率 · 动态范围 · 视频码率 · 大小）
+ * 只读成片本身。这里列出完成后会做本机探测的 provider；
+ * 腾讯虽然不在列表里，它的规格来自 actualVersion 版本档案。
+ */
+export const MEDIA_PROBE_PROVIDERS: readonly string[] = ['youku', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu', 'crunchyroll', 'appletvplus', 'dsnp']
+
 export type JobHooks = { downloaded?: () => void }
 
 type JobRunner = (
@@ -457,7 +464,7 @@ export async function runTask(
         log('版本档案未能保存')
       }
     }
-    if (['youku', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(t.provider)) {
+    if (MEDIA_PROBE_PROVIDERS.includes(t.provider)) {
       try {
         completedMedia = await finishedMediaRecord(out, signal, finishedMedia)
       } catch {

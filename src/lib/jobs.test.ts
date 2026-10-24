@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JobHub, tencentCipher, tencentMirrors, bindYoukuAudioTracksToTask, cleanupOutputCaches, jobNaming, jobTitle, muxTrackTitle, patchJob, trackVid, youkuAudioFetchPlan, youkuDRM, type DlTask, originalAudioLanguage } from './jobs.ts'
+import { JobHub, tencentCipher, tencentMirrors, bindYoukuAudioTracksToTask, cleanupOutputCaches, jobNaming, jobTitle, muxTrackTitle, patchJob, trackVid, youkuAudioFetchPlan, youkuDRM, MEDIA_PROBE_PROVIDERS, type DlTask, originalAudioLanguage } from './jobs.ts'
 import { youkuAudioPlaylist, youkuUsesSeparateAudio, youkuVideoPlaylist } from './media.ts'
 import { defaultConfig, type FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
@@ -331,5 +331,13 @@ describe('originalAudioLanguage', () => {
     expect(originalAudioLanguage({ audioTracks: [{ id: 'en-US', lang: 'en-US' }] } as never)).toBe('')
     expect(originalAudioLanguage({ audioTracks: [] } as never)).toBe('')
     expect(originalAudioLanguage({} as never)).toBe('')
+  })
+})
+
+describe('MEDIA_PROBE_PROVIDERS', () => {
+  test('covers the providers whose downloads page needs a probed spec line', () => {
+    for (const provider of ['mgtv', 'iq', 'iqcn', 'youku', 'bilibili', 'migu', 'crunchyroll', 'appletvplus', 'dsnp']) {
+      expect(MEDIA_PROBE_PROVIDERS).toContain(provider)
+    }
   })
 })
