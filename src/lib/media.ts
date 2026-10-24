@@ -784,6 +784,11 @@ export function reWorkPhase(text: string, workDir?: string, listedTotal?: number
   return phase
 }
 
+/** `-mt`: N_m3u8DL-RE is sequential per stream unless told otherwise. */
+export function streamConcurrencyArgs(enabled: boolean): string[] {
+  return enabled ? ['-mt'] : []
+}
+
 /** Byte progress for RE merge / Shaka decrypt. Demux has no output yet. */
 export function reSidecarProgress(dir: string, phase: 'merge' | 'decrypt'): { ratio: number; log: string } {
   const part = rePartSidecar(dir)
@@ -1115,6 +1120,9 @@ export async function downloadPlaylist(opts: {
   /** Only set when the gateway explicitly says the selected track is clear. */
   clear?: boolean
   threads?: number
+  /** Download/decrypt each selected stream concurrently (`-mt`); N_m3u8DL-RE is
+   *  sequential by default, so audio waits for the whole video track. */
+  concurrentStreams?: boolean
   cb?: ProgressCB
   select?: 'video' | 'audio' | 'muxed'
   /** Combine separate audio/video from a clear master HLS or DASH into MKV. */
@@ -1226,6 +1234,7 @@ export async function downloadPlaylist(opts: {
       '--disable-update-check',
       '--log-file-path', logFile,
       '--thread-count', String(threads),
+      ...streamConcurrencyArgs(!!opts.concurrentStreams),
       '--download-retry-count', String(opts.refreshSource ? 0 : MAX_ATTEMPTS - 1),
       ...(opts.refreshSource ? ['--http-request-timeout', '360'] : []),
     ]

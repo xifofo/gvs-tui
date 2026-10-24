@@ -1446,6 +1446,9 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
       // appletvplus: 网关已按序号裁剪 master，不再用 url= 选择（所有配音同名）。
       manifestText: source.manifest, videoHeight: source.height || undefined, videoCodecs, audioUris, threads: cfg.threads,
       select: 'muxed', muxTracks: true, releaseGroup: releaseGroup(t,cfg), transport: 're', workDir: work, workTag: 'manifest', signal,
+      // DRM OTT 源：音轨往往要等整条视频下完才轮到（RE 默认逐流串行），
+      // 打开 -mt 让视频/音轨并行下载与解密；网关/源站对这两家是常规并发。
+      concurrentStreams: ['appletvplus', 'dsnp', 'crunchyroll'].includes(t.provider),
       cb: (n,total,info) => { const p = total > 1 ? n / total : n; emit(playlistStatus('下载', info?.phase || 'download'), 0.05 + 0.88 * p, info?.log || '本机直连 CDN') },
     })
     if (t.provider === 'dsnp' && t.subtitleTracks?.some(s => s.forced || s.isDefault) && /\.mkv$/i.test(dest)) {
