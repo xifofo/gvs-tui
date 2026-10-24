@@ -795,7 +795,7 @@ export function reSidecarProgress(dir: string, phase: 'merge' | 'decrypt'): { ra
   if (part?.phase === phase) return part
   if (phase === 'merge') {
     const total = reDownloadedSegments(dir)?.bytes ?? dirFileSizes(join(dir, 'download'), name => !name.endsWith('.json'))
-    const done = Math.max(...['mp4', 'ts', 'mkv', 'm4a', 'webm'].map(ext => fileSize(join(dir, `download.${ext}`))))
+    const done = Math.max(...['mp4', 'ts', 'mkv', 'm4a', 'mka', 'webm'].map(ext => fileSize(join(dir, `download.${ext}`))))
     if (!total) return { ratio: 0, log: '合并' }
     return { ratio: Math.min(1, done / total), log: `合并 ${human(done)}/${human(total)}` }
   }
@@ -1322,7 +1322,7 @@ export async function downloadPlaylist(opts: {
     if (!found && opts.muxTracks) {
       // Use our mux for language correction, or when RE disables its own mux
       // for Dolby Vision. Complete downloaded tracks remain at the root.
-      const inputs = readdirSync(workDir).filter(name => /^download(?:\.[\w-]+)*\.(?:mp4|m4a|aac|ac3|eac3|ts|webm|srt|vtt|ass)$/i.test(name))
+      const inputs = readdirSync(workDir).filter(name => /^download(?:\.[\w-]+)*\.(?:mp4|mka|mkv|m4a|aac|ac3|eac3|ts|webm|srt|vtt|ass)$/i.test(name))
         .map(name => join(workDir,name)).filter(path=>fileSize(path)>0)
       if (inputs.length) {
         const merged = join(workDir,'download.MUX.mkv')
