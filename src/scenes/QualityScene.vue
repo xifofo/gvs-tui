@@ -11,12 +11,12 @@ import type { Col } from '../lib/rows.ts'
 import { column, displayWidth } from '../lib/text.ts'
 import { c } from '../lib/theme.ts'
 import { qualityCaptionText, qualityFpsText, qualityHdrText, qualityResolution } from '../lib/quality.ts'
-import { episodeRanges, qualityColumns, selectedAudioText } from '../lib/ui-layout.ts'
+import { episodeRanges, qualityColumns, selectedAudioText, selectedSubtitleText } from '../lib/ui-layout.ts'
 import { resolveDefaultAudioId } from '../lib/audio-selection.ts'
 import { iqcnAudioGroups } from '../lib/iqcn-audio-ui.ts'
 import { human } from '../lib/util.ts'
-import { audioTab, optionWindow } from '../lib/view.ts'
-import type { Audio, Quality, Snapshot } from '../types.ts'
+import { audioTab, optionWindow, subtitleTab } from '../lib/view.ts'
+import type { Audio, Quality, Snapshot, Subtitle } from '../types.ts'
 
 /** Chrome above the first data row: header, tabs, head and hairline. */
 const CHROME_ROWS = 5
@@ -36,6 +36,12 @@ const bodyH = computed(() => props.height)
 
 const qualities = computed(() => props.state.qualities ?? [])
 const audios = computed(() => props.state.audios ?? [])
+const subtitles = computed(() => props.state.subtitles ?? [])
+const subtitlePicked = computed(() => subtitles.value.filter((s) => s.selected).length)
+/** Which table the cursor is in; a platform without tracks never selects it. */
+const activeTab = computed<'quality' | 'audio' | 'subtitle'>(() =>
+  subtitleTab(props.state) ? 'subtitle' : audioTab(props.state) ? 'audio' : 'quality',
+)
 const audioTitles = computed(() => new Map(iqcnAudioGroups(audios.value.filter(audio => audio.id.startsWith('iqcn:'))).flatMap(group => group.items.map(row => [row.audio.id, row.title] as const))))
 const detail = computed(() => props.state.detail)
 const isMovie = computed(() =>
@@ -60,7 +66,7 @@ const qualityAction = computed(() => {
     .filter(Boolean)
     .join(' · ')
 })
-const onAudioTab = computed(() => audioTab(props.state))
+const onAudioTab = computed(() => activeTab.value === 'audio')
 const audioPicked = computed(
   () => audios.value.filter((a) => a.selected).length,
 )
@@ -100,6 +106,16 @@ const qualityView = computed(() =>
 const audioView = computed(() =>
   optionWindow(audios.value, props.state.audioIndex, bodyH.value - 3),
 )
+const subtitleView = computed(() =>
+  optionWindow(subtitles.value, props.state.subtitleIndex ?? 0, bodyH.value - 3),
+)
+/** The tab that owns the cursor; the template renders one table at a time. */
+const tableRows = computed(() =>
+  activeTab.value === 'subtitle' ? subtitleView.value.rows : activeTab.value === 'audio' ? audioView.value.rows : qualityView.value.rows,
+)
+const tableIndex = computed(() =>
+  activeTab.value === 'subtitle' ? (props.state.subtitleIndex ?? 0) : activeTab.value === 'audio' ? props.state.audioIndex : props.state.qualityIndex,
+)
 
 /** Rows of `画质 / 音轨` tabs, with the `←→ 切换` hint pinned right. */
 const tabsLine = computed(() => {
@@ -116,10 +132,14 @@ const tabsLine = computed(() => {
         onAudioTab.value,
       ),
     )
+  if (subtitles.value.length)
+    chunks.push(
+      ...tabChunks(`字幕 ${subtitles.value.length} 条 · 已选 ${subtitlePicked.value}`, activeTab.value === 'subtitle'),
+    )
   return colsLine(
     [
       { chunks: () => chunks, cells: chunks.reduce((n, ch) => n + displayWidth(ch.text), 0) },
-      { text: audios.value.length ? '←→ 切换' : '', grow: true, align: 'right', color: c.faint },
+      { text: audios.value.length || subtitles.value.length ? '←→ 切换' : '', grow: true, align: 'right', color: c.faint },
     ],
     bodyW.value,
   )
@@ -239,6 +259,66 @@ function audioLine(row: Audio, selected: boolean): StyledText {
     selected,
   )
 }
+
+const SUBTITLE_COLS = { label: 20, lang: 10, tags: 18 }
+
+function subtitleHeader(): StyledText {
+  return colsLine(
+    [
+      { text: ' '.repeat(4), cells: 4 },
+      { text: '字幕', cells: SUBTITLE_COLS.label, color: c.faint },
+      { text: '', cells: 2 },
+      { text: '语言', cells: SUBTITLE_COLS.lang, color: c.faint },
+      { text: '', cells: 2 },
+      { text: '标记', cells: SUBTITLE_COLS.tags, color: c.faint },
+    ],
+    bodyW.value,
+  )
+}
+
+function subtitleLine(row: Subtitle, selected: boolean): StyledText {
+  const tags: TextChunk[] = []
+  if (row.isDefault) tags.push(...chipChunks('平台默认', c.dim))
+  if (row.forced) tags.push(...chipChunks('强制', c.warn))
+  if (row.sdh) tags.push(...chipChunks('SDH', c.dim))
+  return colsLine(
+    [
+      markCol(selected),
+      {
+        text: row.selected ? '✓ ' : '□ ',
+        cells: 2,
+        color: row.selected ? c.ok : c.faint,
+      },
+      {
+        text: row.label || row.lang || row.id,
+        cells: SUBTITLE_COLS.label,
+        color: selected ? c.text : c.dim,
+        bold: selected,
+      },
+      { text: '', cells: 2 },
+      { text: row.lang || '—', cells: SUBTITLE_COLS.lang, color: c.dim },
+      { text: '', cells: 2 },
+      {
+        chunks: () => tags,
+        cells: tags.reduce((n, ch) => n + displayWidth(ch.text), 0),
+      },
+      { text: '', grow: true },
+    ],
+    bodyW.value,
+    selected,
+  )
+}
+
+/** Header and one data row for whichever table the cursor is in. */
+function tableHeader(): StyledText {
+  return activeTab.value === 'subtitle' ? subtitleHeader() : activeTab.value === 'audio' ? audioHeader() : qualityTable(true)
+}
+
+function rowContent(item: unknown, index: number): StyledText {
+  if (activeTab.value === 'subtitle') return subtitleLine(item as Subtitle, index === (props.state.subtitleIndex ?? 0))
+  if (activeTab.value === 'audio') return audioLine(item as Audio, index === props.state.audioIndex)
+  return qualityTable(false, item as Quality, index === props.state.qualityIndex)
+}
 </script>
 
 <template>
@@ -253,7 +333,7 @@ function audioLine(row: Audio, selected: boolean): StyledText {
     />
     <Text
       :height="1"
-      :content="onAudioTab ? audioHeader() : qualityTable(true)"
+      :content="tableHeader()"
       :width="bodyW"
       wrapMode="none"
       :truncate="false"
@@ -268,26 +348,19 @@ function audioLine(row: Audio, selected: boolean): StyledText {
       hint="esc 返回，或稍后重试"
     />
     <Text
-      v-for="entry in onAudioTab ? audioView.rows : qualityView.rows"
-      :key="`${onAudioTab ? 'a' : 'q'}-${entry.index}`"
+      v-for="entry in tableRows"
+      :key="`${activeTab}-${entry.index}`"
       :width="bodyW"
       :height="1"
       wrapMode="none"
       :truncate="false"
-      :bg="
-        entry.index === (onAudioTab ? state.audioIndex : state.qualityIndex)
-          ? c.sel
-          : undefined
-      "
-      :content="
-        onAudioTab
-          ? audioLine(entry.item as Audio, entry.index === state.audioIndex)
-          : qualityTable(false, entry.item as Quality, entry.index === state.qualityIndex)
-      "
+      :bg="entry.index === tableIndex ? c.sel : undefined"
+      :content="rowContent(entry.item, entry.index)"
     />
     <Box flexDirection="column" :width="bodyW" :marginTop="1">
       <Text :content="`已选画质：${qualities[state.qualityIndex]?.label || '—'}`" :width="bodyW" :height="1" :truncate="true" wrapMode="none" />
       <Text :content="`已选音轨：${selectedAudioText(audios)}`" :width="bodyW" :height="1" :truncate="true" wrapMode="none" />
+      <Text v-if="subtitles.length" :content="`已选字幕：${selectedSubtitleText(subtitles)}`" :width="bodyW" :height="1" :truncate="true" wrapMode="none" />
     </Box>
   </Box>
 </template>

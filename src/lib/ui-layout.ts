@@ -1,4 +1,4 @@
-import type { Audio, Job, Quality, Snapshot } from '../types'
+import type { Audio, Job, Quality, Snapshot, Subtitle } from '../types'
 import { clip, displayWidth, wrapLines } from './text'
 import { isMovieDetail } from './view'
 
@@ -77,6 +77,12 @@ export function episodeRanges(numbers: number[]): string {
 export function selectedAudioText(audios: Audio[]): string {
   const picked = audios.filter(a => a.selected)
   return picked.length ? picked.map(a => [a.lang && a.lang !== '—' ? a.lang : '', a.label].filter(Boolean).join(' ')).join(' / ') : '平台默认音轨'
+}
+
+/** What the quality screen shows for subtitles; empty selection means no tracks. */
+export function selectedSubtitleText(subs: Subtitle[]): string {
+  const picked = subs.filter(s => s.selected)
+  return picked.length ? picked.map(s => [s.lang && s.lang !== '—' ? s.lang : '', s.label].filter(Boolean).join(' ')).join(' / ') : '不下载字幕'
 }
 
 export function boundedLines(lines: string[], width: number, height: number, more = '更多内容请查看详情'): string[] {

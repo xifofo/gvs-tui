@@ -32,6 +32,7 @@ import {
 import { GwClient, ReloginRequired, type KeyInfo } from './lib/client.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from './lib/vault-migrate.ts'
 import { selectAudioTracks } from './lib/audio-selection.ts'
+import { subtitleDownloadTracks } from './lib/subtitle-selection.ts'
 import { previewFilename, usesMeasuredNaming } from './lib/completed-naming.ts'
 import { normalizeHttpProxy } from './lib/proxy.ts'
 import {
@@ -90,6 +91,7 @@ import type {
   Row,
   Scene,
   Snapshot,
+  Subtitle,
   StatusKind,
   TMDBHit,
   VipProbe,
@@ -164,6 +166,8 @@ export class Runtime {
   private qualities: Quality[] = []
   private audios: Audio[] = []
   private audioIdx = 0
+  private subtitles: Subtitle[] = []
+  private subtitleIdx = 0
   private optionTab: OptionTab = 'quality'
   private probeFailed = false
   private detailInfo: Detail | null = null
@@ -798,6 +802,7 @@ export class Runtime {
       providerIndex: this.provIdx,
       qualityIndex: this.qIdx,
       audioIndex: this.audioIdx,
+      subtitleIndex: this.subtitleIdx,
       optionTab: this.optionTab,
       providers: this.providers(),
       homeItems: this.homeItems(),
@@ -808,6 +813,7 @@ export class Runtime {
       episodeGroup: this.episodeGroup,
       qualities: this.qualities,
       audios: this.audios.map((a) => ({ ...a })),
+      subtitles: this.subtitles.map((s) => ({ ...s })),
       tmdbHits: this.tmdbHits,
       tmdbState: this.tmdbState === 'loading' && this.tmdbGeneration !== this.requestGeneration ? 'idle' : this.tmdbState,
       tmdbError: this.tmdbError,
@@ -1127,8 +1133,10 @@ export class Runtime {
           tasks: this.pending.map((t) => ({ ...t })),
           qualities: this.qualities,
           audios: this.audios,
+          subtitles: this.subtitles,
           qIdx: this.qIdx,
           audioIdx: this.audioIdx,
+          subtitleIdx: this.subtitleIdx,
           optionTab: this.optionTab,
         },
         detail: {
@@ -1167,8 +1175,10 @@ export class Runtime {
           tasks: DlTask[]
           qualities: Quality[]
           audios: Audio[]
+          subtitles: Subtitle[]
           qIdx: number
           audioIdx: number
+          subtitleIdx: number
           optionTab: OptionTab
         }
         detail?: {
@@ -1191,8 +1201,10 @@ export class Runtime {
         this.pending = p.draft.tasks
         this.qualities = p.draft.qualities
         this.audios = p.draft.audios
+        this.subtitles = p.draft.subtitles ?? []
         this.qIdx = p.draft.qIdx
         this.audioIdx = p.draft.audioIdx
+        this.subtitleIdx = p.draft.subtitleIdx ?? 0
         this.optionTab = p.draft.optionTab
       }
       if (
@@ -1587,7 +1599,7 @@ export class Runtime {
   private updateQuality(k: string): void {
     const nq = this.qualities.length
     const na = this.audios.length
-    const hasAudio = na > 0
+    const ns = this.subtitles.length
     if (k === 'esc') {
       this.requestGeneration++
       this.searching = false
@@ -1597,15 +1609,19 @@ export class Runtime {
       return
     }
     if (this.searching) return
-    if (
-      hasAudio &&
-      (k === 'tab' || k === 'left' || k === 'right' || k === 'h' || k === 'l')
-    ) {
-      this.optionTab = this.optionTab === 'quality' ? 'audio' : 'quality'
+    // ←/→/tab cycle the columns that actually have rows: 画质 → 音轨 → 字幕.
+    const tabs: OptionTab[] = ['quality']
+    if (na) tabs.push('audio')
+    if (ns) tabs.push('subtitle')
+    if (tabs.length > 1 && (k === 'tab' || k === 'left' || k === 'right' || k === 'h' || k === 'l')) {
+      const step = k === 'left' || k === 'h' ? -1 : 1
+      const at = Math.max(0, tabs.indexOf(this.optionTab))
+      this.optionTab = tabs[(at + step + tabs.length) % tabs.length]!
       return
     }
-    const onAudio = hasAudio && this.optionTab === 'audio'
-    const n = onAudio ? na : nq
+    const onAudio = na > 0 && this.optionTab === 'audio'
+    const onSubtitle = ns > 0 && this.optionTab === 'subtitle'
+    const n = onAudio ? na : onSubtitle ? ns : nq
     if (!n) {
       if (k === 'enter' || k === 'r') void this.queueEpisodes(this.pending)
       return
@@ -1613,6 +1629,11 @@ export class Runtime {
     if (onAudio && (k === ' ' || k === 'space')) {
       const row = this.audios[this.audioIdx]
       if (row && !row.embedded) row.selected = !row.selected
+      return
+    }
+    if (onSubtitle && (k === ' ' || k === 'space')) {
+      const row = this.subtitles[this.subtitleIdx]
+      if (row) row.selected = !row.selected
       return
     }
     if (onAudio && k === 'a') {
@@ -1623,23 +1644,29 @@ export class Runtime {
       for (const row of this.audios) if (!row.embedded) row.selected = false
       return
     }
+    if (onSubtitle && k === 'a') {
+      for (const row of this.subtitles) row.selected = true
+      return
+    }
+    if (onSubtitle && k === 'c') {
+      for (const row of this.subtitles) row.selected = false
+      return
+    }
     if (['pageup', 'pagedown', 'home', 'end'].includes(k)) {
-      if (onAudio)
-        this.audioIdx = moveCursor(
-          this.audioIdx,
-          k,
-          n,
-          viewMetrics(this.viewport.width, this.viewport.height).qualityRows,
-        )
-      else this.qIdx = moveCursor(this.qIdx, k, n, viewMetrics(this.viewport.width, this.viewport.height).qualityRows)
+      const rows = viewMetrics(this.viewport.width, this.viewport.height).qualityRows
+      if (onAudio) this.audioIdx = moveCursor(this.audioIdx, k, n, rows)
+      else if (onSubtitle) this.subtitleIdx = moveCursor(this.subtitleIdx, k, n, rows)
+      else this.qIdx = moveCursor(this.qIdx, k, n, rows)
       this.syncEmbeddedAudio()
       return
     }
     if (k === 'j' || k === 'down') {
       if (onAudio) this.audioIdx = Math.min(n - 1, this.audioIdx + 1)
+      else if (onSubtitle) this.subtitleIdx = Math.min(n - 1, this.subtitleIdx + 1)
       else this.qIdx = Math.min(n - 1, this.qIdx + 1)
     } else if (k === 'k' || k === 'up') {
       if (onAudio) this.audioIdx = Math.max(0, this.audioIdx - 1)
+      else if (onSubtitle) this.subtitleIdx = Math.max(0, this.subtitleIdx - 1)
       else this.qIdx = Math.max(0, this.qIdx - 1)
     } else if (k === 'enter') {
       this.applyOptions()
@@ -1682,6 +1709,9 @@ export class Runtime {
       t.audioTracks = t.provider === 'youku'
         ? bindYoukuAudioTracksToTask(tracks, t)
         : tracks.map((a) => ({ ...a }))
+      // Apple TV / Disney+ hand the subtitle picker's indexes to resolve; other
+      // providers never populate `subtitles`, so their tasks stay untouched.
+      if (this.subtitles.length) t.subtitleTracks = subtitleDownloadTracks(this.subtitles)
     }
     this.probeFailed = false
     if (q) {
@@ -2461,8 +2491,10 @@ export class Runtime {
     this.probeFailed = false
     this.qualities = []
     this.audios = []
+    this.subtitles = []
     this.qIdx = 0
     this.audioIdx = 0
+    this.subtitleIdx = 0
     if (this.simulated) {
       const demo = demoSnapshot('quality', 0)
       this.adoptOptions(
@@ -2545,7 +2577,7 @@ export class Runtime {
   }
 
   private adoptOptions(
-    opts: { qualities: Quality[]; audios: Audio[]; vip?: VipProbe },
+    opts: { qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[]; vip?: VipProbe },
     count: number,
   ): void {
     if (!opts.qualities.length || opts.vip?.canPlay === false) {
@@ -2554,6 +2586,8 @@ export class Runtime {
     }
     this.qualities = opts.qualities
     this.audios = opts.qualities[0]?.audios ?? opts.audios
+    this.subtitles = opts.subtitles ?? []
+    this.subtitleIdx = 0
     this.vipProbe = opts.vip ?? null
     this.qIdx = 0
     this.audioIdx = Math.max(

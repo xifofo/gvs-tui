@@ -134,3 +134,8 @@ export function selectedEpisodeCount(episodes: Episode[] | undefined): number {
 export function audioTab(state: Snapshot): boolean {
   return state.optionTab === 'audio' && (state.audios?.length ?? 0) > 0
 }
+
+/** The quality screen is driving the subtitle column instead of the quality list. */
+export function subtitleTab(state: Snapshot): boolean {
+  return state.optionTab === 'subtitle' && (state.subtitles?.length ?? 0) > 0
+}

@@ -107,7 +107,7 @@ export type VipProbe = {
 }
 
 /** Which column the quality screen is driving. */
-export type OptionTab = 'quality' | 'audio'
+export type OptionTab = 'quality' | 'audio' | 'subtitle'
 
 export type Snapshot = {
   scene: string
@@ -155,6 +155,7 @@ export type Snapshot = {
   providerIndex: number
   qualityIndex: number
   audioIndex: number
+  subtitleIndex?: number
   optionTab: OptionTab
   providers?: string[]
   homeItems?: string[]
@@ -166,6 +167,8 @@ export type Snapshot = {
   episodes?: Episode[]
   qualities?: Quality[]
   audios?: Audio[]
+  /** Apple TV / Disney+ subtitle renditions; empty when the platform has none. */
+  subtitles?: Subtitle[]
   tmdbHits?: TMDBHit[]
   tmdbState?: 'idle' | 'loading' | 'ready' | 'error'
   tmdbError?: string
