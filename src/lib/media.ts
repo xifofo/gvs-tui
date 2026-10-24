@@ -10,6 +10,7 @@ import { asString, combinedSignal, human, isObj, sleep } from './util.ts'
 import { mkvmergeRemux, mkvmergeTrackFiles } from './mkvmerge.ts'
 import { ensureFFmpeg, ensureM3u8dl, ensureMkvmerge, ensurePackager } from './tools.ts'
 import { createHlsRelay, type RelayEvent } from './hls-relay.ts'
+import { normalizeHttpProxy } from './proxy.ts'
 import { moveFileSync } from './file-move.ts'
 import { runLog } from './runlog.ts'
 import { assertCencMp4Output, isMpegTsFile } from './media-output.ts'
@@ -1128,6 +1129,8 @@ export async function downloadPlaylist(opts: {
   /** Only set when the gateway explicitly says the selected track is clear. */
   clear?: boolean
   threads?: number
+  /** Explicit HTTP proxy for RE (providers whose CDN requires a fixed exit IP). */
+  proxy?: string
   /** Download/decrypt each selected stream concurrently (`-mt`); N_m3u8DL-RE is
    *  sequential by default, so audio waits for the whole video track. */
   concurrentStreams?: boolean
@@ -1267,6 +1270,7 @@ export async function downloadPlaylist(opts: {
     }
     if (ffmpeg) args.push('--ffmpeg-binary-path', ffmpeg)
     if (relay) args.push('--use-system-proxy', 'false')
+    else if (opts.proxy) args.push('--custom-proxy', normalizeHttpProxy(opts.proxy))
     if (opts.cipher) args.push('--custom-hls-method', opts.cipher.method, '--custom-hls-key', opts.cipher.key, '--custom-hls-iv', opts.cipher.iv)
     for (const [name, value] of Object.entries(headersFor(opts.ref, 0, opts.headers))) args.push('--header', `${name.toLowerCase()}: ${value}`)
     if (opts.key) {

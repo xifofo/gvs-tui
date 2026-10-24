@@ -6,6 +6,11 @@ import { tierHeight } from './name.ts'
 import { mediaDownloadProxy } from './proxy.ts'
 import { chineseVariant, onlineSubtitles, type OnlineSubtitle } from './online-subtitles.ts'
 
+/** 需要固定出口的源（目前只有 Crunchyroll）把媒体请求也走配置的代理。 */
+export function manifestDownloadProxy(provider: string, cfg: Pick<FileConfig, 'gatewayProxy'>): string {
+  return provider === 'crunchyroll' ? mediaDownloadProxy(cfg.gatewayProxy) : ''
+}
+
 export type ManifestSource = { url: string; headers: Record<string, string>; format: string; height: number; quality: string; clear: boolean; drm: string; live: boolean; contentKeys: string[]; manifest?: string; subtitles?: OnlineSubtitle[] }
 const str = (v: unknown): string => typeof v === 'string' ? v : ''
 export function manifestSources(data: Record<string, unknown>): ManifestSource[] {

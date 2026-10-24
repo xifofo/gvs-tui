@@ -23,7 +23,7 @@ import { episodeTitle, filename, folder, sourceTag } from './name.ts'
 import type { MediaKind, Naming } from './name.ts'
 import { writeEpisodeNFO, writeTvShowNFO } from './nfo.ts'
 import {
-  CdnDenied, downloadPlaylist, downloadProgress, firstLivePlaylist, hlsSegmentsEncrypted, pickDouyinURL, pickTencentDownload, playlistSpeedCB, playlistStatus, referer, speedCB,
+  CdnDenied, downloadPlaylist, downloadProgress, firstLivePlaylist, hlsSegmentsEncrypted, pickDouyinURL, pickTencentDownload, playlistStatus, referer, speedCB,
   youkuAudioPlaylist, youkuAudioStreamType, youkuSpokenLangKey, youkuUsesSeparateAudio, youkuVideoPlaylist,
 } from './media.ts'
 import type { HlsCipher, RetryNote, ProgressCB } from './media.ts'
@@ -1490,9 +1490,12 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
   if (!['dash','hls'].includes(source.format.toLowerCase()) && !new URL(source.url).pathname.match(/[.](mpd|m3u8)$/i)) {
     throw new Error('该源不是已接入的 DASH/HLS 清单；拒绝伪装封装格式')
   }
-  emit('下载', 0.05, '源站 CDN → 本机；网关不转发视频')
+  // Crunchyroll 的媒体（清单/分片/字幕）必须走配置的代理出口，其它源直连。
+  const proxy = manifestDownloadProxy(t.provider, cfg)
+  emit('下载', 0.05, proxy ? '源站 CDN → 已配置代理 → 本机；网关不转发视频' : '源站 CDN → 本机；网关不转发视频')
   await writeFinal(out, async dest => {
     await downloadPlaylist({ src: source.url, dest, ref, headers: source.headers, contentKeys: source.contentKeys,
+      proxy,
       keepSubtitles: t.provider === 'appletvplus' || t.provider === 'dsnp',
       subtitleUris: t.provider === 'dsnp' && t.subtitleTracks ? t.subtitleTracks.map(s => s.id) : undefined,
       // appletvplus: 网关已按序号裁剪 master，不再用 url= 选择（所有配音同名）。

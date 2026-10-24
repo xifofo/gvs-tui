@@ -42,6 +42,11 @@ export function normalizeHttpProxy(value: string): string {
   }
 }
 
+/** Explicit media exception for providers that require the service's exit IP. */
+export function mediaDownloadProxy(savedProxy = ''): string {
+  return normalizeHttpProxy(process.env.GVS_PROXY?.trim() || savedProxy)
+}
+
 /** Saved gateway routing is separate from TMDB and media downloads. The tunnel reads the same proxy itself. */
 export async function fetchGateway(url: string, init: RequestInit, savedProxy = ''): Promise<Response> {
   if (isLocalGateway(url)) return fetch(url, init)
