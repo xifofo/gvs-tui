@@ -247,6 +247,7 @@ function audioView(a: Audio): AudioView {
     isDefault: a.isDefault,
     selected: a.selected,
     embedded: !!a.embedded,
+    audioDescription: !!a.audioDescription,
   }
 }
 
