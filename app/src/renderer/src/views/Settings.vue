@@ -40,7 +40,6 @@ const form = reactive({
   outDir: '',
   tmpDir: '',
   releaseGroup: '',
-  includeEpisodeTitle: true,
   tmdbKey: '',
   tmdbLang: '',
   threads: 4,
@@ -315,19 +314,6 @@ const plat = (p: Provider) => hasProvider(p)
           <div class="srow">
             <div class="sl"><span class="st">发布组</span><span class="sd">文件名结尾的组名后缀；新下载的 MKV 同步写入 GROUP 标签。</span></div>
             <div class="sc"><input v-model="form.releaseGroup" class="input" style="width: 200px" @change="save({ releaseGroup: form.releaseGroup }, 'rg')" /></div>
-          </div>
-
-          <div class="srow">
-            <div class="sl">
-              <span class="st">文件名包含单集标题</span>
-              <span class="sd">在季集号后加入平台单集标题，默认开启。关闭后省略这段标题；仅影响新建任务，电影不受影响。</span>
-            </div>
-            <div class="sc">
-              <label class="toggle">
-                <input v-model="form.includeEpisodeTitle" type="checkbox" aria-label="文件名包含单集标题" :disabled="saving === 'episode-title'" @change="save({ includeEpisodeTitle: form.includeEpisodeTitle }, 'episode-title')" />
-                <span class="track"><span class="knob" /></span>
-              </label>
-            </div>
           </div>
 
           <div class="srow wrap">

@@ -36,7 +36,7 @@ test('domestic terminal tasks opt into measured naming and preview with IQIYI', 
     state.scene = 'confirm'
     state.emit()
     const preview = runtime.snapshot.confirmation
-    expect(preview?.name).toBe('国内节目.2026.S00E298.特别篇.2160p.IQIYI.WEB-DL.HEVC-WF.mkv')
+    expect(preview?.name).toBe('国内节目.2026.S00E298.2160p.IQIYI.WEB-DL.H.265-WF.mkv')
     expect(preview?.note).toContain('封装后按实际规格')
     state.cfg.includeEpisodeTitle = false
     const withoutTitle = state.taskFromEp(0)

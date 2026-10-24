@@ -443,7 +443,7 @@ bun run scripts/check-detect.ts     # TUI 会怎么说（账号行 + 画质页�
   "host": "https://你的网关",
   "key": "sk_live_...",
   "outDir": "D:\\GVS",
-  "releaseGroup": "ADWeb",
+  "releaseGroup": "PFWEB",
   "tmdbKey": "",
   "tmdbLang": "zh-CN",
   "tmdbProxy": "",
@@ -468,7 +468,18 @@ TMDB 由客户端请求（优先 `api.tmdb.org`，网络失败后尝试 `api.the
 而不是降级。客户端会**先让网关自动续期并重试一次**（stoken/ptoken 续期，不用重新扫码），
 仍失败就提示去「设置 → 优酷扫码」。签名由网关按 API Key 绑定，本地没有可清的字段。
 
-命名例：`NameDots.S01E02.单集标题.1080p.YK.WEB-DL.H265-ADWeb.mkv`。单集标题取自平台详情，在季集编号之后、年份之前；空标题或重复节目名时省略，电影不追加。确认页和下载共用 `jobNaming` / `filename`。红果/抖音短剧放在剧名目录下。
+新建电影和剧集任务使用以下命名顺序（`quality` 为分辨率，`source` 为平台）：
+
+```yaml
+output_template:
+  movies: '{title}.{year}.{quality}.{source}.WEB-DL.{audio}.{video}-PFWEB'
+  series: '{title}.{year}.{season_episode}.{quality}.{source}.WEB-DL.{audio}.{video}-PFWEB'
+  use_last_audio: false
+```
+
+例如：`Tigers.Sniff.the.Rose.2026.S01E01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP.5.1.H.265-PFWEB.mkv`。不追加平台单集标题；已有的 MAXPLUS/HQ、HDR/DV 和高帧率标签仍保留在音视频编码之前。音频沿用输出默认音轨，不取末轨；视频按已知规格显示 `H.265` / `H.264` 等编码，封装后按实际规格校正。未知字段省略，不虚构编码。
+
+新安装默认发布组为 `PFWEB`，已有配置的发布组和自定义值继续保留。上述 YAML 用于说明内置命名规则，不是新增的可导入配置。未记录 `namingOrder: title-year` 的旧队列沿用原命名和单集标题选择；旧 `includeEpisodeTitle` 配置仍可读取。红果/抖音短剧沿用原规则。
 
 ---
 

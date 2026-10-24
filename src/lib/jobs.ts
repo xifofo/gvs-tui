@@ -307,7 +307,7 @@ export function jobNaming(t: DlTask, cfg: FileConfig): Naming {
     episode: t.episode,
     episodeTitle: t.includeEpisodeTitle === false ? undefined : t.title,
     height: t.height,
-    codec: t.codec || 'H264',
+    codec: t.codec || (t.namingOrder === 'title-year' ? '' : 'H264'),
     edition: t.edition,
     collection: t.collection,
     source: sourceTag(t.provider),

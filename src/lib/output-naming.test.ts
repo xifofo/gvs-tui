@@ -14,8 +14,8 @@ test('manual naming validates and retains zero, while empty title restores autom
 test('new tasks place year immediately after title in preview and fallback, while legacy order remains stable', () => {
   const n: Naming = { kind: 'show', title: '中文名', filenameTitle: 'English Name', nameDots: '', namingOrder: 'title-year',
     year: 2024, season: 0, episode: 2, episodeTitle: '单集标题', height: 1080, codec: 'H264', source: 'TX', group: 'GVS', tmdbId: 123, container: 'mkv' }
-  expect(filename(n)).toStartWith('English.Name.2024.S00E02.单集标题.')
-  expect(completedFilename(n, { status: 'unavailable' })).toStartWith('English.Name.2024.S00E02.单集标题.')
+  expect(filename(n)).toStartWith('English.Name.2024.S00E02.1080p.')
+  expect(completedFilename(n, { status: 'unavailable' })).toStartWith('English.Name.2024.S00E02.TX.')
   expect(completedFilename({ ...n, kind: 'movie' }, { status: 'unavailable' })).toStartWith('English.Name.2024.TX.')
   expect(completedFilename({ ...n, year: 0 }, { status: 'unavailable' })).toStartWith('English.Name.S00E02.')
   expect(completedFilename({ ...n, namingOrder: undefined }, { status: 'unavailable' })).toStartWith('English.Name.S00E02.单集标题.2024.')

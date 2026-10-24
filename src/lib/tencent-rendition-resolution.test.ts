@@ -60,6 +60,17 @@ test('canonical codec aliases and 59.94fps retain their 60fps rendition', () => 
   expect(equivalentTencentRendition(expected, [{ ...row, profile: '', vencoding: 'h265', vfps: 59.94 }])?.formatId).toBe('322455')
 })
 
+test('explicit codecs and legacy numeric profiles match without treating numbers as codec aliases', () => {
+  const explicit = { ...row, vencoding: 'hvc1.2.4.L153' }
+  expect(equivalentTencentRendition({ ...choice, codec: 'H265' }, [explicit])?.formatId).toBe('322455')
+  expect(equivalentTencentRendition(choice, [explicit])?.formatId).toBe('322455')
+  // Neither a profile-only catalog nor a codec-only catalog proves the other identity.
+  expect(equivalentTencentRendition({ ...choice, codec: 'H265' }, [row])).toBeUndefined()
+  expect(equivalentTencentRendition(choice, [{ ...explicit, profile: '' }])).toBeUndefined()
+  expect(equivalentTencentRendition({ ...choice, codec: 'H264' }, [explicit])).toBeUndefined()
+  expect(equivalentTencentRendition(choice, [{ ...explicit, profile: '1' }])).toBeUndefined()
+})
+
 test('portrait orientation and small crop differences preserve the selected resolution', () => {
   expect(equivalentTencentRendition(choice, [{ ...row, width: 2160, height: 3840 }])?.formatId).toBe('322455')
   expect(equivalentTencentRendition(choice, [{ ...row, height: 2158 }])?.formatId).toBe('322455')

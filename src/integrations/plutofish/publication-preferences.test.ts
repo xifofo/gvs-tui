@@ -120,3 +120,36 @@ test('invalid manual years do not replace saved work preferences', () => {
   expect(() => store.save(connection, { ...context, naming: { year: 24 } }, publication)).toThrow('年份')
   expect(readFileSync(path, 'utf8')).toBe(before)
 })
+
+
+test('manual creation keeps its original parent and work directory across restart without enabling automatic work', () => {
+  const { store, path } = harness()
+  const created = { ...publication, directoryCreation: { parentId: '42', parentPath: '/发布资源', targetId: publication.directoryId, workKey: '["show",296203,1]', workDirectoryId: '43', workDirectoryPath: '/发布资源/电视剧/作品' } }
+  store.save(connection, context, created)
+  const restored = new PublicationPreferenceStore(path)
+  expect(restored.get(connection, context)!.publication).toEqual(created)
+  restored.get(connection, context)!.publication.directoryCreation!.parentId = '99'
+  expect(restored.get(connection, context)!.publication.directoryCreation!.parentId).toBe('42')
+  restored.save(connection, context, publication)
+  expect(restored.get(connection, context)!.publication.directoryCreation).toBeUndefined()
+})
+
+test('invalid created-directory metadata cannot replace selected upload directory', () => {
+  const { store, path } = harness()
+  store.save(connection, context, publication)
+  const before = readFileSync(path, 'utf8')
+  for (const directoryCreation of [null, [], {}, { parentId: 123, parentPath: '/', targetId: '2', workKey: 'work' }, { parentId: '1', parentPath: '/', targetId: '2', workKey: 'work', workDirectoryId: '../1' }]) {
+    expect(() => store.save(connection, context, { ...publication, directoryCreation } as never)).toThrow('目录')
+  }
+  expect(readFileSync(path, 'utf8')).toBe(before)
+})
+
+
+test('successful manual creation remembers effective platform season without using a later uncreated season', () => {
+  const { store } = harness()
+  const created = { ...publication, directoryCreation: { parentId: '1', parentPath: '/', targetId: publication.directoryId, workKey: '["show",296203,2]' } }
+  store.save(connection, { ...context, tmdbSeason: undefined }, created)
+  expect(store.get(connection, context)!.tmdbSeason).toBe(2)
+  store.save(connection, { ...context, tmdbSeason: undefined, tmdb: { ...context.tmdb!, id: 42 } }, created)
+  expect(store.get(connection, { ...context, tmdb: { ...context.tmdb!, id: 42 } })!.tmdbSeason).toBeUndefined()
+})

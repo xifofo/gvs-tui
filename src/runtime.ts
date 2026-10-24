@@ -631,7 +631,6 @@ export class Runtime {
     const f = ['隧道', '网关', '网关代理', 'Key', '下载目录', '下载线程']
     if (this.has('youku') || this.has('tencent') || this.has('hongguo') || this.has('huangguo') || this.has('mgtv') || this.has('bilibili') || this.has('migu'))
       f.push('发布组')
-    f.push('文件名单集标题')
     if (this.providers().some(supportsTmdb)) f.push('TMDB Key', 'TMDB 代理')
     if (this.has('youku')) f.push('优酷扫码', '优酷登录')
     if (this.has('tencent')) f.push('腾讯双扫码', '腾讯 Cookie', '腾讯登录')
@@ -710,8 +709,6 @@ export class Runtime {
         return `${this.cfg.threads} 路并发`
       case '发布组':
         return this.cfg.releaseGroup || '未设'
-      case '文件名单集标题':
-        return this.cfg.includeEpisodeTitle === false ? '关 · 新任务省略单集标题' : '开 · 新任务包含单集标题'
       case 'TMDB Key':
         return this.cfg.tmdbKey ? '已配置' : '未配置'
       case 'TMDB 代理':
@@ -1932,13 +1929,6 @@ export class Runtime {
   }
 
   private async openSetting(f: string): Promise<void> {
-    if (f === '文件名单集标题') {
-      this.cfg.includeEpisodeTitle = this.cfg.includeEpisodeTitle === false
-      this.persistConfig()
-      this.say(`新任务文件名${this.cfg.includeEpisodeTitle ? '包含' : '省略'}单集标题`, 'ok')
-      this.emit()
-      return
-    }
     if (f === 'IQ 账号密码登录') {
       this.iqLoginUsername = ''; this.iqLoginAreaCode = ''; this.editField = 'IQ 登录账号'; this.editValue = ''; this.scene = 'edit'
       this.say('输入本人 IQ 邮箱或手机号，下一步输入密码'); this.emit(); return

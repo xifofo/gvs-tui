@@ -2,10 +2,12 @@ import { expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { tencentActualVersion, type MediaSpecs } from './actual-version.ts'
 import { finalizeCompletedName, iqcnNamingEvidence, renameCompletedFile, reserveOutputPath, tencentNamingEvidence, usesMeasuredNaming, youkuNamingEvidence } from './completed-naming.ts'
 import { completedFilename, filename, folder, sourceTag, type Naming } from './name.ts'
 import { finishedVersionRecord, saveVersionRecord } from './gvs-record.ts'
+import { lookHostFFmpeg } from './tools.ts'
 
 const naming = (patch: Partial<Naming> = {}): Naming => ({ kind: 'show', title: '节目', nameDots: '', year: 2026,
   season: 1, episode: 1, height: 2160, codec: 'H265', source: 'TX', group: 'WF', tmdbId: 0, container: 'mkv', ...patch })
@@ -235,4 +237,22 @@ test('cancellation during the optional naming stage leaves the source intact', a
   await expect(finalizeCompletedName('/unused.mkv', naming(), {}, ctrl.signal, async () => {
     ctrl.abort('pause'); return media()
   })).rejects.toBe('pause')
+})
+
+test.skipIf(process.env.GVS_MEDIA_TESTS !== '1')('template finalization measures local H.264 and uses the default audio instead of the last track', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gvs-template-media-'))
+  try {
+    const file = join(root, 'provisional.mkv')
+    execFileSync(lookHostFFmpeg() || 'ffmpeg', ['-nostdin', '-v', 'error',
+      '-f', 'lavfi', '-i', 'color=s=320x240:r=60:d=1', '-f', 'lavfi', '-i', 'sine=duration=1',
+      '-map', '0:v', '-map', '1:a', '-map', '1:a', '-c:v', 'libx264', '-preset', 'ultrafast',
+      '-x264-params', 'colorprim=bt709:transfer=bt709:colormatrix=bt709',
+      '-c:a:0', 'aac', '-c:a:1', 'ac3', '-disposition:a:0', 'default', '-disposition:a:1', '0', file], { windowsHide: true })
+    const named = await finalizeCompletedName(file, naming({ title: '尚公主', filenameTitle: 'Tigers Sniff the Rose',
+      namingOrder: 'title-year', episodeTitle: '尚公主 第01集', group: 'PFWEB', codec: 'H265' }), { marker: 'MAXPLUS' })
+    expect(basename(named.output)).toBe('Tigers.Sniff.the.Rose.2026.S01E01.360p.TX.WEB-DL.MAXPLUS.SDR.60fps.AAC.1.0.H.264-PFWEB.mkv')
+    expect(named.media.codec).toBe('h264')
+    expect(named.media.audio).toMatchObject({ codec: 'aac', index: 0, status: 'confirmed' })
+    expect(readdirSync(root)).toEqual([basename(named.output)])
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

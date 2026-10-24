@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { moviePlayables, probeOptions, youkuAudiosFromPlay, youkuEditionLabel, youkuEditionsFromDetail, youkuMergeEditionAudios, youkuMoviePick } from './quality.ts'
 import type { FileConfig } from './config.ts'
 import type { GwClient } from './client.ts'
+import { namingPreviewFilename } from './naming-preview.ts'
 describe('youkuAudiosFromPlay', () => {
   test('format priority, platform default within a format, stable ties and all selected', () => {
     const rows = youkuAudiosFromPlay({ audio_tracks: [
@@ -346,6 +347,51 @@ import {
 import { clip, column, displayWidth } from './text.ts'
 
 describe('qualitiesFromTencentFormats', () => {
+  test('explicit video encoding is not hidden by an opaque numeric profile', () => {
+    const formats = [
+      { name: 'maxplus', id: 'hevc', profile: '4', vencoding: 'h265', width: 3840, height: 2160 },
+      { name: 'fhd', id: 'avc', profile: 1, codec: 'avc1.640028', width: 1920, height: 1080 },
+      { name: 'fhd', id: 'av1', profile: '4', vencoding: 'av01.0.12M.10', width: 1920, height: 1080 },
+      { name: 'fhd', id: 'vp9', profile: '4', codec: 'vp09.00.50.08', width: 1920, height: 1080 },
+    ]
+    const before = JSON.stringify(formats)
+    const rows = qualitiesFromTencentFormats(formats)
+    expect(Object.fromEntries(rows.map(q => [q.formatId, q.codec])))
+      .toEqual({ hevc: 'H265', avc: 'H264', av1: 'AV1', vp9: 'VP9' })
+    expect(JSON.stringify(formats)).toBe(before)
+  })
+
+  test('normalizes explicit profile aliases and prefers the reported stream encoding', () => {
+    for (const [profile, expected] of [['H.265', 'H265'], ['HVC1.2.4.L153', 'H265'], ['HEV1', 'H265'],
+      ['DVH1', 'DVH1'], ['DVHE.05.06', 'DVHE'], ['H.264', 'H264'], ['AVC3.640028', 'H264'], ['AV01.0.12M.10', 'AV1']]) {
+      expect(qualitiesFromTencentFormats([{ name: 'fhd', profile }])[0]?.codec).toBe(expected)
+    }
+    expect(qualitiesFromTencentFormats([{ name: 'maxplus', profile: '4', vencoding: 'avc1.640028', codec: 'hevc' }])[0]?.codec)
+      .toBe('H264')
+    expect(qualitiesFromTencentFormats([{ name: 'fhd', profile: 'unknown', vencoding: 'h264' }])[0]?.codec).toBe('H264')
+  })
+
+  test('does not infer codec from MAXPLUS, HDR, resolution or numeric profiles', () => {
+    const metadata = { name: 'maxplus', hdr: 'hdr', width: 3840, height: 2160, persona: '2741517771455_硬' }
+    expect(qualitiesFromTencentFormats([metadata])[0]?.codec).toBe('—')
+    expect(qualitiesFromTencentFormats([{ ...metadata, profile: '4' }])[0]?.codec).toBe('4')
+    expect(qualitiesFromTencentFormats([{ ...metadata, profile: 1 }])[0]?.codec).toBe('1')
+    expect(qualitiesFromTencentFormats([{ ...metadata, codec: 'unknown-h265-fallback' }])[0]?.codec).toBe('—')
+  })
+
+  test('explicit Dolby Vision codec tags retain the preview range and obey explicit SDR', () => {
+    const naming = { kind: 'show' as const, title: 'Demo', nameDots: 'Demo', namingOrder: 'title-year' as const,
+      year: 2026, season: 1, episode: 1, height: 1080, codec: '', source: 'TX', group: 'PFWEB', tmdbId: 0, container: 'mkv' }
+    for (const raw of [{ profile: 'DVH1' }, { profile: '4', vencoding: 'dvhe.05.06' }, { profile: 'unknown', codec: 'DVH1' }]) {
+      const format = { name: 'fhd', width: 1920, height: 1080, ...raw }
+      const q = qualitiesFromTencentFormats([format])[0]!
+      expect(namingPreviewFilename(naming, 'tencent', q)).toContain('.WEB-DL.DV.H.265-')
+      const sdr = qualitiesFromTencentFormats([{ ...format, hdr: 'sdr' }])[0]!
+      expect(namingPreviewFilename(naming, 'tencent', sdr)).toContain('.WEB-DL.SDR.H.265-')
+      expect(namingPreviewFilename(naming, 'tencent', sdr)).not.toContain('.DV.')
+    }
+  })
+
   test('maps soft/hard ladder with real sizes and pairs by name', () => {
     const rows = qualitiesFromTencentFormats([
       { id: 3, name: 'fhd', cname: '蓝光', caption: 'hard', width: 1920, height: 1080, vfps: 25, fs: 1_200_000_000, persona: 'l3_hard' },
