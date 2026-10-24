@@ -1418,6 +1418,13 @@ async function markSubtitleFlags(dest: string, subs: NonNullable<DlTask['subtitl
 }
 
 /** Media is fetched on this client; gateway traffic is limited to resolve calls. */
+/** 源站把单条原声音轨错标成英文时，用任务里选中的 locale 纠正（返回空=不动）。 */
+export function originalAudioLanguage(t: Pick<DlTask, 'audioTracks'>): string {
+  const lang = (t.audioTracks?.[0]?.lang || '').trim()
+  if (!lang || /^(en|eng)(?:[-_]|$)/i.test(lang)) return ''
+  return lang
+}
+
 async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out: string, emit: (s: string, p: number, l: string) => void, work: string, signal?: AbortSignal): Promise<void> {
   // Apple TV：把 probe 里选中的音轨/字幕序号传回网关，由它裁剪 master。
   // Crunchyroll：配音是另一条 episode 版本，只传选中的那一档 locale；字幕由网关
@@ -1447,6 +1454,9 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
       // appletvplus: 网关已按序号裁剪 master，不再用 url= 选择（所有配音同名）。
       manifestText: source.manifest, videoHeight: source.height || undefined, videoCodecs, audioUris, threads: cfg.threads,
       select: 'muxed', muxTracks: true, releaseGroup: releaseGroup(t,cfg), transport: 're', workDir: work, workTag: 'manifest', signal,
+      // CR 的 cbr 版把音轨在 MP4 里标成 eng（实测 init 段 mdhd=eng），MPD 里其实是
+      // AdaptationSet lang="ja-JP"。单音轨且被标成英文/未知时用任务里的原声 locale 纠正。
+      muxOriginalAudioLanguage: originalAudioLanguage(t),
       // DRM OTT 源：音轨往往要等整条视频下完才轮到（RE 默认逐流串行），
       // 打开 -mt 让视频/音轨并行下载与解密；网关/源站对这两家是常规并发。
       concurrentStreams: ['appletvplus', 'dsnp', 'crunchyroll'].includes(t.provider),
