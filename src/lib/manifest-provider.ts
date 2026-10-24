@@ -75,7 +75,10 @@ export async function probeManifest(cli: GwClient, cfg: FileConfig, provider: st
       lang: str(a.language),
       codec: '',
       isDefault: asBool(a.default),
-      selected: asBool(a.default) || i === 0,
+      // Apple marks main audio and audio description DEFAULT=YES alike; only the
+      // main track may be preselected or every download muxes a second AD track.
+      audioDescription: asBool(a.audioDescription),
+      selected: (asBool(a.default) && !asBool(a.audioDescription)) || i === 0,
     }))
     const subtitles: Subtitle[] = (Array.isArray(data.subtitles) ? data.subtitles : []).filter(isObj).map((s, i) => ({
       id: str(s.id) || String(i + 1),

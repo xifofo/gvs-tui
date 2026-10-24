@@ -226,6 +226,7 @@ function audioHeader(): StyledText {
 function audioLine(row: Audio, selected: boolean): StyledText {
   const muxDefault = resolveDefaultAudioId(audios.value, audios.value.filter(a => a.selected).map(a => a.id)) === row.id
   const tags: TextChunk[] = []
+  if (row.audioDescription) tags.push(...chipChunks('口述影像', c.warn))
   if (muxDefault) tags.push(...chipChunks('默认播放', c.ok))
   if (row.isDefault) {
     if (tags.length) tags.push({ __isChunk: true, text: ' ' })
