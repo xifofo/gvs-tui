@@ -1,6 +1,7 @@
 import QRCode from 'qrcode'
 import { userMessage, userFacing } from './lib/user-message.ts'
 import { ProviderSessions, type SessionCommand } from './lib/provider-session.ts'
+import { crLogin } from './lib/cr-login.ts'
 import { manifestDetail } from './lib/manifest-detail.ts'
 import { providerLink } from './lib/manifest-provider.ts'
 import { isWebVideoProvider, webVideoLink, webVideoDetail } from './lib/web-video-providers'
@@ -119,6 +120,8 @@ export class Runtime {
   private readonly providerSessions = new ProviderSessions((p,a,input) => { if (!this.cli) throw new Error('请先连接网关'); return this.cli.invoke(p,a,input) })
   private mewatchQR = false
   private providerLoginBusy = false
+  private crLoginEmail = ''
+  private crLoggingIn = false
   private providerLoginGeneration = 0
   private cfg: FileConfig
   private cli: GwClient | null = null
@@ -341,7 +344,7 @@ export class Runtime {
   }
 
   set(field: string, value: string): void {
-    if (this.scene === 'edit' && this.editField === 'IQ 登录密码') {
+    if (this.scene === 'edit' && (this.editField === 'IQ 登录密码' || this.editField === 'CR 登录密码')) {
       if (field === 'secretAppend') this.editValue = (this.editValue + value.replace(/[\r\n]/g, '')).slice(0, 256)
       if (field === 'secretBackspace') this.editValue = [...this.editValue].slice(0, -1).join('')
       this.emit(); return
@@ -586,7 +589,7 @@ export class Runtime {
     if (this.has('mgtv')) f.push('芒果扫码','芒果状态','芒果退出')
     if (this.has('bilibili')) f.push('B 站扫码','B 站 Cookie','B 站状态','B 站退出')
     if (this.has('migu')) f.push('咪咕 App 扫码','咪咕 App 状态','咪咕 App 退出','咪咕 TV 扫码','咪咕 TV 状态','咪咕 TV 退出')
-    if (this.has('crunchyroll')) f.push('CR 令牌')
+    if (this.has('crunchyroll')) f.push('CR 令牌', 'CR 网页会话')
     if (this.has('tencent')) f.push('腾讯诊断日志')
     f.push('运行日志')
     return f
@@ -636,6 +639,10 @@ export class Runtime {
       case 'CR 令牌': {
         const t = (this.cfg.crunchyrollToken || '').trim()
         return t ? `已保存 · ${t.slice(0, 6)}… · 回车替换/清空` : '未导入 · 回车粘贴 refresh_token'
+      }
+      case 'CR 网页会话': {
+        const s = (this.cfg.crunchyrollSession || '').trim()
+        return s ? `已登录 · ${s.slice(0, 8)}… · 回车重新登录/清空` : '未登录 · 回车自动登录（需本机 Chrome）'
       }
       case 'Key':
         if (this.simulated) return '演示模式，无需 Key'
@@ -702,6 +709,8 @@ export class Runtime {
     switch (f) {
       case 'CR 令牌':
         return this.cfg.crunchyrollToken || ''
+      case 'CR 网页会话':
+        return ''
       case '网关代理':
         return this.cfg.gatewayProxy || ''
       case '网关':
@@ -822,7 +831,7 @@ export class Runtime {
       keyFocused: this.keyFocused,
       keyConfigured: Boolean(this.cfg.key.trim()),
       editField: this.editField,
-      editValue: this.editField === 'IQ 登录密码' ? '•'.repeat(this.editValue.length) : this.editValue,
+      editValue: (this.editField === 'IQ 登录密码' || this.editField === 'CR 登录密码') ? '•'.repeat(this.editValue.length) : this.editValue,
       qrAscii: this.qrAscii,
       qrPngPaths: this.qrPngPaths,
       qrHint: this.qrHint,
@@ -1827,7 +1836,7 @@ export class Runtime {
       this.scene = this.editField === '确认下载目录' ? 'confirm' : 'settings'
       return
     }
-    if (k === 'enter') void this.commitEdit(this.editField === 'IQ 登录密码' ? this.editValue : this.editValue.trim())
+    if (k === 'enter') void this.commitEdit(this.editField === 'IQ 登录密码' || this.editField === 'CR 登录密码' ? this.editValue : this.editValue.trim())
   }
 
   private async openSetting(f: string): Promise<void> {
@@ -2091,6 +2100,7 @@ export class Runtime {
     if (f === 'TMDB 代理') this.say('填写 HTTP/HTTPS 代理地址；仅用于 TMDB，留空使用默认网络')
     if (f === '网关代理') this.say('填写 HTTP/HTTPS 代理地址，保存后用于网关请求和隧道；留空直连')
     if (f === 'CR 令牌') this.say('粘贴本人 Crunchyroll refresh_token；只存本机配置，网关不落盘；留空清除')
+    if (f === 'CR 网页会话') this.say('回车自动登录：启动/复用本机 Chrome，填入邮箱密码并读取 etp_rt；也可直接粘贴 etp_rt；留空则自动登录')
     this.emit()
   }
 
@@ -2143,7 +2153,79 @@ export class Runtime {
     finally { this.providerLoginBusy = false; this.emit() }
   }
 
+  /** 自动登录：驱动 Chrome 取 etp_rt，存本机配置，并让网关验证一次。 */
+  private async crAutoLogin(email: string, password: string): Promise<void> {
+    if (this.crLoggingIn) { this.say('正在登录中，请稍候', 'warn'); this.emit(); return }
+    this.crLoggingIn = true
+    this.say('正在启动/复用 Chrome 并登录 Crunchyroll…', 'info')
+    this.emit()
+    try {
+      const session = await crLogin({
+        email,
+        password,
+        onStatus: (m) => { this.say(m, 'info'); this.emit() },
+      })
+      this.cfg.crunchyrollSession = session
+      this.cfg.crunchyrollToken = ''
+      this.persistConfig()
+      this.say(`CR 网页会话已保存 · ${session.slice(0, 8)}…（仅本机配置）`, 'ok')
+      if (this.cli && !this.simulated) {
+        try {
+          const data = await this.cli.invoke('crunchyroll', 'login', { session })
+          const token = typeof data.token === 'string' ? data.token : ''
+          this.say(`网关校验通过${token ? ' · ' + token.slice(0, 10) + '…' : ''}`, 'ok')
+        } catch (e) {
+          this.say(`会话已保存，但网关校验失败：${e instanceof Error ? e.message : String(e)}`, 'warn')
+        }
+      }
+    } catch (e) {
+      this.say(e instanceof Error ? e.message : 'CR 自动登录失败', 'err')
+    } finally {
+      this.crLoggingIn = false
+      this.emit()
+    }
+  }
+
   private async commitEdit(v: string): Promise<void> {
+    if (this.editField === 'CR 网页会话') {
+      const pasted = v.trim()
+      if (pasted) {
+        if (pasted.length < 8 || pasted.length > 4096) { this.say('etp_rt 长度不对', 'warn'); this.emit(); return }
+        this.cfg.crunchyrollSession = pasted
+        this.cfg.crunchyrollToken = ''
+        this.persistConfig()
+        this.say(`已保存 CR 网页会话 · ${pasted.slice(0, 8)}…（仅本机配置）`, 'ok')
+        this.emit()
+        return
+      }
+      this.editField = 'CR 登录邮箱'
+      this.editValue = ''
+      this.scene = 'edit'
+      this.say('输入 Crunchyroll 邮箱；密码只用于本次自动登录，不保存')
+      this.emit()
+      return
+    }
+    if (this.editField === 'CR 登录邮箱') {
+      const email = v.trim()
+      if (!email.includes('@') || email.length > 256) { this.say('邮箱格式不对', 'warn'); this.emit(); return }
+      this.crLoginEmail = email
+      this.editField = 'CR 登录密码'
+      this.editValue = ''
+      this.scene = 'edit'
+      this.say('输入密码，回车后启动 Chrome 自动登录（约 20–60s，不要关闭弹出的窗口）')
+      this.emit()
+      return
+    }
+    if (this.editField === 'CR 登录密码') {
+      const email = this.crLoginEmail
+      const password = v
+      this.crLoginEmail = ''
+      this.editValue = ''
+      this.scene = 'settings'
+      this.emit()
+      await this.crAutoLogin(email, password)
+      return
+    }
     if (this.editField === 'IQ 登录账号') {
       if (!v.trim()) { this.say('账号不能为空', 'warn'); return }
       this.iqLoginUsername = v.trim(); this.editField = v.includes('@') ? 'IQ 登录密码' : 'IQ 登录区号'; this.editValue = ''; this.emit(); return
@@ -2187,6 +2269,7 @@ export class Runtime {
         const token = v.trim()
         if (token.length > 4096) { this.say('refresh_token 过长', 'warn'); this.emit(); return }
         this.cfg.crunchyrollToken = token
+        if (token) this.cfg.crunchyrollSession = ''
         this.say(token ? '已保存 Crunchyroll 令牌（仅本机配置）' : '已清除 Crunchyroll 令牌', 'ok')
         break
       }

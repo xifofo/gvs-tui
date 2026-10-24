@@ -357,7 +357,7 @@ export function parseContentKeys(value: unknown): string[] {
   return [...keys].map(([kid, key]) => `${kid}:${key}`)
 }
 
-export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient' | 'crunchyrollToken'>, provider: string, id: string, quality = 'auto', selection?: { audio?: string[]; subtitle?: string[] }): Promise<ManifestSource[]> {
+export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg: Pick<FileConfig, 'hamiClient' | 'crunchyrollToken' | 'crunchyrollSession'>, provider: string, id: string, quality = 'auto', selection?: { audio?: string[]; subtitle?: string[] }): Promise<ManifestSource[]> {
   const input = manifestInput(provider, cfg, id, quality)
   if (provider === 'appletvplus' && selection) {
     // 序号取自 probe；网关据此裁剪 master，RE 只需 --select-audio best。
@@ -366,10 +366,13 @@ export async function resolveManifestDownload(cli: Pick<GwClient, 'invoke'>, cfg
   }
   if (provider === 'crunchyroll') {
     // 网关只换钥并发放短期 token；媒体由本机直连 CDN（不过网关带宽）。
+    // 网页会话（etp_rt）优先：SSO 设备授权已失效时这是唯一可自动拿到的登录态。
+    const session = (cfg.crunchyrollSession || '').trim()
     const token = (cfg.crunchyrollToken || '').trim()
-    if (!token) throw new Error('CRUNCHYROLL_TOKEN_REQUIRED: 请先在设置里导入本人 Crunchyroll refresh_token')
+    if (!session && !token) throw new Error('CRUNCHYROLL_TOKEN_REQUIRED: 请先在设置里自动登录 CR 网页会话，或导入 refresh_token')
     input.download = true
-    input.refresh_token = token
+    if (session) input.session = session
+    else input.refresh_token = token
     // 配音是另一条 episode 版本：只认第一档（网关按 locale 换成版本 id 再取流）。
     const audio = selection?.audio?.find(a => !!a)
     if (audio) input.audio = audio
