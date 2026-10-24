@@ -28,7 +28,10 @@ export function equivalentTencentRendition(choice: TencentQualityChoice & { code
     return q ? [{ raw, q }] : []
   })
   const equivalent = ({ raw, q }: typeof rows[number]): boolean => {
-    const actualCodec = [q.codec, asString(raw.vencoding), asString(raw.codec)].map(codecKey).filter(Boolean)
+    // Saved tasks may retain a numeric profile while newer catalogs also carry
+    // an explicit codec. Preserve that exact profile identity without treating
+    // the number as a codec alias for catalogs that do not report it.
+    const actualCodec = [q.codec, asString(raw.vencoding), asString(raw.codec), asString(raw.profile)].map(codecKey).filter(Boolean)
     return !!q.formatId && q.stream?.toLowerCase() === input.stream.toLowerCase()
       && tencentPersonaKey(q.persona || '').toLowerCase() === tencentPersonaKey(selected.persona!).toLowerCase()
       && (!selected.group || q.group === selected.group)

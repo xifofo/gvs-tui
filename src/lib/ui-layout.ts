@@ -96,7 +96,7 @@ export function jobSummary(job: Job | undefined, width: number): string[] {
 
 export function settingGroup(label: string): string {
   if (['隧道', '网关', '网关代理', 'Key'].includes(label)) return '连接'
-  if (['下载目录', '下载线程', '发布组', '文件名单集标题'].includes(label)) return '下载'
+  if (['下载目录', '下载线程', '发布组'].includes(label)) return '下载'
   if (label.startsWith('TMDB')) return '匹配'
   if (label.startsWith('优酷')) return '优酷'
   if (['腾讯 caption=all', '腾讯探测原画', '腾讯 encode=all'].includes(label)) return '腾讯高级'
@@ -120,7 +120,6 @@ export function settingDescription(label: string): string {
     '下载目录': '成品保存目录。完整路径显示在下方。',
     '下载线程': '每个下载使用的连接数：1–16。',
     '发布组': '追加到成品文件名末尾的发布组名称。',
-    '文件名单集标题': '在季集号后加入平台单集标题。默认开启，回车切换；仅影响新任务，已入队任务沿用创建时的设置，电影不受影响。',
     'TMDB Key': '支持 API Key 或 API Read Access Token。',
     'TMDB 代理': '仅用于 TMDB 的 HTTP/HTTPS 代理。留空使用默认网络；不要填写 PAC 地址。',
     '优酷登录': '回车续期并刷新会员状态。', '腾讯登录': '回车刷新账号与会员状态。',

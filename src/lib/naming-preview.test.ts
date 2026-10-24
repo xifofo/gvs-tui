@@ -5,6 +5,7 @@ import { selectAudioTracks } from './audio-selection.ts'
 import { completedFilename, filename, folder, type Naming } from './name.ts'
 import { jobNaming } from './jobs.ts'
 import { namingPreviewFilename } from './naming-preview.ts'
+import { qualitiesFromTencentFormats } from './quality.ts'
 
 const naming: Naming = { kind: 'show', title: '此处通往繁星', nameDots: '此处通往繁星', year: 2026,
   season: 1, episode: 1, height: 2160, codec: 'DVH1', source: 'YK', group: 'FPWeb', tmdbId: 296203, container: 'mp4' }
@@ -63,7 +64,7 @@ test('Good Night preview and finished filename retain confirmed SDR, but never i
   const n: Naming = { ...naming, filenameTitle: 'Good Night', namingOrder: 'title-year', height: 360 }
   const q = quality({ id: 'mp4sd', label: '360P', title: '', width: 640, height: 360, fps: 25, codec: 'HEVC', hdr: 'sdr' })
   const specs = { status: 'probed' as const, width: 640, height: 360, fps: 25, codec: 'hevc', dynamicRange: 'SDR' }
-  const expected = 'Good.Night.2026.S01E01.360p.YOUKU.WEB-DL.SDR.HEVC-FPWeb.mp4'
+  const expected = 'Good.Night.2026.S01E01.360p.YOUKU.WEB-DL.SDR.H.265-FPWeb.mp4'
   expect(namingPreviewFilename(n, 'youku', q)).toBe(expected)
   expect(completedFilename(n, specs)).toBe(expected)
   expect(namingPreviewFilename(n, 'youku', { ...q, hdr: undefined })).not.toContain('.SDR.')
@@ -116,7 +117,36 @@ test('terminal confirmation uses selected specs and preserves S00 and edited epi
     state.scene = 'confirm'
     state.emit()
     expect(runtime.snapshot.confirmation?.name)
-      .toBe('此处通往繁星.2026.S00E298.2160p.YOUKU.WEB-DL.HQ.DV.60fps.HEVC.DTS.5.1-FPWeb.mp4')
+      .toBe('此处通往繁星.2026.S00E298.2160p.YOUKU.WEB-DL.HQ.DV.60fps.DTS.5.1.H.265-FPWeb.mp4')
     expect(runtime.snapshot.confirmation?.note).toContain('封装后按实际规格')
   } finally { runtime.close() }
 })
+
+test('Tencent screenshot uses the movie/series template and preserves codec past a numeric profile', () => {
+  const q = qualitiesFromTencentFormats([{ name: 'maxplus', id: '123', profile: '4', vencoding: 'hvc1.2.4.L153',
+    width: 3840, height: 2160, vfps: 60, hdr: 'hdr' }])[0]!
+  const n: Naming = { ...naming, title: '尚公主', filenameTitle: 'Tigers Sniff the Rose', namingOrder: 'title-year',
+    episodeTitle: '尚公主 第01集', codec: q.codec, source: 'TX', group: 'PFWEB', container: 'mkv' }
+  const tracks = [
+    { id: 'default', codec: 'E-AC-3', label: 'DDP 5.1', isDefault: true },
+    { id: 'last', codec: 'AAC', label: 'AAC 2.0' },
+  ]
+  const media = { status: 'probed' as const, width: 3840, height: 2160, codec: 'hevc', dynamicRange: 'HDR', fps: 60,
+    audio: { status: 'confirmed' as const, codec: 'eac3', channels: 6 } }
+  const expected = 'Tigers.Sniff.the.Rose.2026.S01E01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP.5.1.H.265-PFWEB.mkv'
+  expect(namingPreviewFilename(n, 'tencent', q, tracks)).toBe(expected)
+  expect(completedFilename(n, media, 'MAXPLUS')).toBe(expected)
+  expect(namingPreviewFilename({ ...n, episodeTitle: '真正的单集标题' }, 'tencent', q, tracks)).toBe(expected)
+  expect(namingPreviewFilename(n, 'tencent', q, tracks.map(({ isDefault, ...a }) => a))).toBe(expected)
+  expect(namingPreviewFilename({ ...n, kind: 'movie' }, 'tencent', q, tracks))
+    .toBe('Tigers.Sniff.the.Rose.2026.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP.5.1.H.265-PFWEB.mkv')
+  expect(namingPreviewFilename(n, 'tencent', { ...q, codec: 'unknown' }, tracks)).not.toContain('H.265')
+})
+
+test.each(['H264', 'AVC1.640028', 'H.264', 'H265', 'HEVC', 'H.265', 'AV1', 'VP9'])(
+  'template fallback keeps known %s encoding and places audio before video', codec => {
+    const n = { ...naming, namingOrder: 'title-year' as const, codec, audio: 'AAC.2.0', source: 'TX', group: 'PFWEB' }
+    const expectedCodec = /264|avc/i.test(codec) ? 'H.264' : /265|hevc/i.test(codec) ? 'H.265' : codec
+    expect(filename(n)).toEndWith(`.WEB-DL.AAC.2.0.${expectedCodec}-PFWEB.mp4`)
+  },
+)

@@ -17,7 +17,7 @@ export type PublicationContext = {
   naming?: OutputNaming
 }
 export type PublicationPreferences = {
-  publication: Pick<PublicationInput, 'category' | 'directoryId' | 'directoryPath' | 'sourceAccountId'>
+  publication: Pick<PublicationInput, 'category' | 'directoryId' | 'directoryPath' | 'directoryCreation' | 'sourceAccountId'>
   tmdb: PublicationTmdb | null
   tmdbSeason?: number
   naming?: OutputNaming
@@ -80,11 +80,18 @@ export class PublicationPreferenceStore {
   }
 
   private input(input: PublicationPreferences['publication']): PublicationPreferences['publication'] {
-    const { category, directoryId = '0', directoryPath = '/', sourceAccountId } = input
+    const { category, directoryId = '0', directoryPath = '/', sourceAccountId, directoryCreation } = input
     if (sourceAccountId !== undefined && (typeof sourceAccountId !== 'string' || !sourceAccountId || sourceAccountId.length > 256)) throw new Error('上传账号无效')
     if (typeof category !== 'string' || category.length > 256 || typeof directoryId !== 'string' || !/^(0|[1-9][0-9]{0,39})$/.test(directoryId)
       || typeof directoryPath !== 'string' || directoryPath.length > 4096 || /[\x00-\x1f\x7f]/.test(directoryPath)) throw new Error('发布分类或上传目录无效')
-    return { category, directoryId, directoryPath, ...(sourceAccountId === undefined ? {} : { sourceAccountId }) }
+    if (directoryCreation !== undefined && (!directoryCreation || typeof directoryCreation !== 'object' || Array.isArray(directoryCreation)
+      || typeof directoryCreation.parentId !== 'string' || !/^(0|[1-9][0-9]{0,39})$/.test(directoryCreation.parentId)
+      || typeof directoryCreation.targetId !== 'string' || !/^[1-9][0-9]{0,39}$/.test(directoryCreation.targetId)
+      || typeof directoryCreation.parentPath !== 'string' || directoryCreation.parentPath.length > 4096 || /[\x00-\x1f\x7f]/.test(directoryCreation.parentPath)
+      || typeof directoryCreation.workKey !== 'string' || !directoryCreation.workKey || directoryCreation.workKey.length > 1024
+      || (directoryCreation.workDirectoryId !== undefined && (typeof directoryCreation.workDirectoryId !== 'string' || !/^[1-9][0-9]{0,39}$/.test(directoryCreation.workDirectoryId)))
+      || (directoryCreation.workDirectoryPath !== undefined && (typeof directoryCreation.workDirectoryPath !== 'string' || directoryCreation.workDirectoryPath.length > 4096 || /[\x00-\x1f\x7f]/.test(directoryCreation.workDirectoryPath))))) throw new Error('已创建目录记录无效')
+    return { category, directoryId, directoryPath, ...(directoryCreation ? { directoryCreation: { ...directoryCreation } } : {}), ...(sourceAccountId === undefined ? {} : { sourceAccountId }) }
   }
 
   private tmdb(value: PublicationTmdb | null | undefined): PublicationTmdb | null {
@@ -100,12 +107,23 @@ export class PublicationPreferenceStore {
     const publication = this.input(input)
     if (publication.category && !connection.identity?.categories?.some(c => c.value === publication.category)) throw new Error('所选发布分类已不可用，请重新选择')
     if (context.tmdbSeason != null && (!Number.isInteger(context.tmdbSeason) || context.tmdbSeason < 0 || context.tmdbSeason > 10000)) throw new Error('季号无效')
+    let tmdbSeason = context.tmdbSeason
+    // A successful manual creation knows the effective platform season even without an override.
+    // Keep that exact season for subscription editing and later enqueue preference saves.
+    const creation = publication.directoryCreation
+    if (tmdbSeason === undefined && creation && creation.targetId === publication.directoryId) {
+      try {
+        const key = JSON.parse(creation.workKey)
+        if (Array.isArray(key) && key[0] === 'show' && key[1] === context.tmdb?.id && context.kind === 'show'
+          && Number.isInteger(key[2]) && key[2] >= 0 && key[2] <= 10000) tmdbSeason = key[2]
+      } catch { /* Older local records without a structured key keep the explicit season only. */ }
+    }
     const previous = this.load()
     const naming = outputNaming(context.naming ?? previous.entries[keys.entry]?.naming)
     if (seed && previous.entries[keys.entry] && previous.aliases[keys.alias]) return
     const entry: Entry = { sourceWorkId: context.sourceWorkId, publication, tmdb: this.tmdb(context.tmdb),
       ...(Object.keys(naming).length ? { naming } : {}),
-      ...(context.tmdbSeason != null ? { tmdbSeason: context.tmdbSeason } : {}) }
+      ...(tmdbSeason != null ? { tmdbSeason } : {}) }
     const next: File = { version: 1, entries: { ...previous.entries }, aliases: { ...previous.aliases }, targets: { ...previous.targets } }
     if (!seed && input.sourceAccountId) next.targets![keys.target] = { id: keys.source.id, alias: keys.source.alias }
     if (!seed || !next.entries[keys.entry]) next.entries[keys.entry] = entry

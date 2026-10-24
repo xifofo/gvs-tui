@@ -320,7 +320,7 @@ const request = computed<EnqueueRequest | null>(() => {
     ...(subtitles.value.length ? { subtitleIds: [...subtitleIds.value] } : {}),
     defaultAudioId: preferredAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
-    publication: { sourceAccountId: publication.value.sourceAccountId, releaseSelection: publication.value.releaseSelection, category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, episodeNumbers: { ...publication.value.episodeNumbers } },
+    publication: { sourceAccountId: publication.value.sourceAccountId, releaseSelection: publication.value.releaseSelection, category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, directoryCreation: publication.value.directoryCreation ? { ...publication.value.directoryCreation } : undefined, episodeNumbers: { ...publication.value.episodeNumbers } },
     tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
     accountId: store.accountPick[v.provider] || undefined,
   }
@@ -690,7 +690,7 @@ async function applyRule() {
           <div class="output-heading"><h3>发布与保存</h3></div>
           <div class="publication-grid">
             <div class="publication-settings-group">
-              <PublicationFields v-if="d" ref="publicationFields" v-model="publication" class="publication-settings" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :recognition-file-name="!namingLoading && !namingError ? naming?.file : undefined" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="starting || tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @recognized="applyRecognizedPublication" @match="selectManualTmdb" @restore="restorePublication" />
+              <PublicationFields v-if="d" ref="publicationFields" v-model="publication" class="publication-settings" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :recognition-file-name="!namingLoading && !namingError ? naming?.file : undefined" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :effective-season="naming?.season" :directory-preview-ready="!namingLoading && !namingError && !namingInputError" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="starting || tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @recognized="applyRecognizedPublication" @match="selectManualTmdb" @restore="restorePublication" />
               <div class="save-paths">
                 <div class="blk"><span class="lab">本地保存目录</span>
                   <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">

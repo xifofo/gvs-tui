@@ -9,6 +9,7 @@ import { PlutoFishConnection } from './connection.ts'
 import { PublicationWorker } from './publication-worker.ts'
 import type { PublicationDraft } from './publication-types.ts'
 import type { OSSFactory } from './oss-upload.ts'
+import type { UploadBudget } from './upload-traffic.ts'
 
 test('最多两个 PUT，排队文件提前哈希，暂停一路不影响另一路，实时发送不落盘', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'publisher-two-'))
@@ -17,6 +18,7 @@ test('最多两个 PUT，排队文件提前哈希，暂停一路不影响另一�
   await connection.verify()
   const views = new Map<string, PublicationDraft>(), phases = new Set<string>(), clients = new Set<string>()
   const gates = new Map<string, () => void>(), active = new Set<string>()
+  const budgets = new Map<string, UploadBudget>()
   let maximum = 0, live = 0
   connection.request = async <T>(_binding: unknown, route: string, body: unknown): Promise<T> => {
     const input = body as { action?: string; taskKey: string; clientId?: string }
@@ -25,7 +27,7 @@ test('最多两个 PUT，排队文件提前哈希，暂停一路不影响另一�
     if (route === 'files/report' || route === 'files/ed2k') return { accepted: true } as T
     if (route === 'uploads/prepare') {
       expect(input.clientId).toBeDefined(); clients.add(input.clientId!)
-      if (input.action === 'credentials') return { credentials: { accessKeyId: 'ID', accessKeySecret: 'SECRET', securityToken: 'TOKEN', expiration: new Date(Date.now() + 3600000).toISOString(), endpoint: 'https://up-file.115.com', rate: 0, rateScope: 'shared' } } as T
+      if (input.action === 'credentials') return { credentials: { accessKeyId: 'ID', accessKeySecret: 'SECRET', securityToken: 'TOKEN', expiration: new Date(Date.now() + 3600000).toISOString(), endpoint: 'https://up-file.115.com', rate: 51200, rateScope: input.taskKey } } as T
       if (input.action === 'verify') return { dispatch: { status: 'ready', fileId: '123', pickCode: input.taskKey } } as T
       return { dispatch: { status: 'uploading', pickCode: input.taskKey, bucket: 'bucket', object: input.taskKey, endpoint: 'https://up-file.115.com', callback: '{}' } } as T
     }
@@ -35,6 +37,8 @@ test('最多两个 PUT，排队文件提前哈希，暂停一路不影响另一�
     async initMultipartUpload() { return { uploadId: dispatch.object } as OSS.InitMultipartUploadResult },
     async listParts() { return { uploadId: dispatch.object, bucket: 'bucket', name: dispatch.object, parts: [], isTruncated: false } as unknown as OSS.ListPartsResult },
     async uploadPart(name, _id, _part, buffer) {
+      expect(traffic?.budget.limit).toBe(51200)
+      budgets.set(name, traffic!.budget)
       active.add(name); maximum = Math.max(maximum, active.size)
       traffic?.sent(buffer.length / 2)
       try {
@@ -69,6 +73,7 @@ test('最多两个 PUT，排队文件提前哈希，暂停一路不影响另一�
     }
     await until(() => active.size === 2 && phases.has(keys[3]!) && live > 0)
     expect(maximum).toBe(2)
+    expect(budgets.get(keys[0]!)).not.toBe(budgets.get(keys[1]!))
     expect(views.get(keys[0]!)!.progress!.uploadedBytes).toBe(0)
     expect(views.get(keys[0]!)!.progress!.transfer!.sentBytes).toBe(128 * 1024)
     for (const file of readdirSync(directory).filter(name => name.endsWith('.state.json'))) expect(readFileSync(join(directory, file), 'utf8')).not.toContain('bytesPerSecond')

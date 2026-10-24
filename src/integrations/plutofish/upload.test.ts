@@ -83,7 +83,8 @@ test('范围校验闭区间、前 128 KiB 校验及文件变更拒绝', async ()
   await expect(challengeHash(path, '0-10', file, signal)).rejects.toThrow('改变')
 })
 
-test.each([false, true])('失败后只补传缺失分片并保留地址和回调，旧版区域地址=%s', async legacy => {
+test.each([0, 51200, 102400, 204800])('失败后只补传缺失分片并保留地址、回调和分配额度，rate=%s', async rate => {
+  const legacy = rate === 0
   const path = join(temp(), 'media.bin'), data = Buffer.alloc(350000)
   for (let i = 0; i < data.length; i++) data[i] = i % 251
   writeFileSync(path, data)
@@ -91,12 +92,13 @@ test.each([false, true])('失败后只补传缺失分片并保留地址和回调
   let cp: UploadCheckpoint = { file, partSize: 128 * 1024, parts: [] }
   let saved = '', fail = true, initCount = 0, listCount = 0
   let activeDispatch = legacy ? { ...dispatch, endpoint: undefined } : dispatch
-  const getCredentials = async () => ({ ...await credentials(), ...(legacy ? { endpoint: 'https://oss-cn-shenzhen.aliyuncs.com', rate: 0 } : {}) })
+  const getCredentials = async () => ({ ...await credentials(), rate, ...(legacy ? { endpoint: 'https://oss-cn-shenzhen.aliyuncs.com' } : {}) })
   const progress: number[] = []
   const calls: number[] = [], remote = new Map<number, Buffer>()
-  const factory: OSSFactory = (route, token) => {
+  const factory: OSSFactory = (route, token, _signal, traffic) => {
     expect(route.endpoint).toBe(activeDispatch.endpoint || 'https://oss-cn-shenzhen.aliyuncs.com')
     expect(token.accessKeySecret).toBe('TEMP-SECRET')
+    expect(traffic?.budget.limit).toBe(rate)
     return { close() {}, client: {
       async initMultipartUpload() { initCount++; return { uploadId: 'UPLOAD-1' } as OSS.InitMultipartUploadResult },
       async listParts(_name, id) {
@@ -108,7 +110,7 @@ test.each([false, true])('失败后只补传缺失分片并保留地址和回调
         calls.push(n); expect(id).toBe('UPLOAD-1'); expect(start).toBe(0); expect(end).toBe(buffer.length)
         const trafficLimit = (options as unknown as { headers: Record<string, string> }).headers['x-oss-traffic-limit']
         if (legacy) expect(trafficLimit).toBeUndefined()
-        else expect(trafficLimit).toBe('819200')
+        else expect(trafficLimit).toBe(String(Math.max(102400, rate) * 8))
         if (n === 2 && fail) throw new Error('simulated network loss')
         remote.set(n, Buffer.from(buffer))
         return { etag: digest(buffer) } as OSS.UploadPartResult

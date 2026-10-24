@@ -6,8 +6,8 @@ import Icon from '../../components/Icon.vue'
 import { useDialogFocus } from '../../dialog-focus'
 import { errText, gvs, store } from '../../store'
 
-const props = defineProps<{ sourceAccountId: string; sourceName: string; directoryId: string; outputFolders?: string[] }>()
-const emit = defineEmits<{ cancel: []; select: [directory: { id: string; path: string }] }>()
+const props = defineProps<{ sourceAccountId: string; sourceName: string; directoryId: string; outputFolders?: string[]; creation?: { folders: string[]; existingWorkId?: string; seasonFolder?: string } }>()
+const emit = defineEmits<{ cancel: []; select: [directory: { id: string; path: string }]; created: [result: { page: PublisherDirectoryPage; parent: { id: string; path: string } }]; busy: [value: boolean] }>()
 const dialog = ref<HTMLElement | null>(null)
 const page = ref<PublisherDirectoryPage | null>(null)
 const busy = ref(false)
@@ -28,24 +28,28 @@ const remainingFolders = computed(() => {
   }
   return names
 })
+const createFoldersHere = computed(() => props.creation ? (current.value?.id === props.creation.existingWorkId && props.creation.seasonFolder ? [props.creation.seasonFolder] : props.creation.folders) : remainingFolders.value)
+const creationPath = computed(() => [path.value.replace(/\/$/, ''), ...createFoldersHere.value].join('/'))
 function cancel() { if (!creating.value) emit('cancel') }
 useDialogFocus(dialog, cancel)
 
 async function createFolders() {
-  if (busy.value || error.value || !current.value || !remainingFolders.value.length) return
-  const request = ++sequence
+  if (busy.value || error.value || !current.value || !createFoldersHere.value.length) return
+  const request = ++sequence, selectedParent = { id: current.value.id, path: path.value }, folders = [...createFoldersHere.value]
   busy.value = true
   creating.value = true
+  emit('busy', true)
   createError.value = ''
   try {
-    const next = await gvs('createPublisherDirectories', props.sourceAccountId, current.value.id, [...remainingFolders.value])
+    const next = await gvs('createPublisherDirectories', props.sourceAccountId, selectedParent.id, folders)
     if (request !== sequence) return
     page.value = next
-    emit('select', { id: next.path.at(-1)!.id, path: '/' + next.path.slice(1).map(d => d.name).join('/') })
+    if (props.creation) emit('created', { page: next, parent: selectedParent })
+    else emit('select', { id: next.path.at(-1)!.id, path: '/' + next.path.slice(1).map(d => d.name).join('/') })
   } catch (e) {
     if (request === sequence) createError.value = errText(e)
   } finally {
-    if (request === sequence) { busy.value = false; creating.value = false }
+    if (request === sequence) { busy.value = false; creating.value = false; emit('busy', false) }
   }
 }
 
@@ -76,15 +80,15 @@ function select() {
 }
 
 onMounted(() => { store.dialogCount++; void load(props.directoryId) })
-onBeforeUnmount(() => { ++sequence; store.dialogCount-- })
+onBeforeUnmount(() => { ++sequence; store.dialogCount--; emit('busy', false) })
 </script>
 
 <template>
   <Teleport to="body">
     <div class="directory-scrim" @click.self="cancel">
-      <section ref="dialog" class="directory-dialog" role="dialog" aria-modal="true" aria-label="选择 115 上传目录" tabindex="-1">
+      <section ref="dialog" class="directory-dialog" role="dialog" aria-modal="true" :aria-label="creation ? '选择创建上级目录' : '选择 115 上传目录'" tabindex="-1">
         <header>
-          <div><h2>选择 115 上传目录</h2><p class="small muted">{{ sourceName }}</p></div>
+          <div><h2>{{ creation ? '选择创建上级目录' : '选择 115 上传目录' }}</h2><p class="small muted">{{ sourceName }}</p></div>
           <button class="btn sm icon" type="button" aria-label="关闭目录选择" data-dialog-cancel :disabled="creating" @click="cancel"><Icon name="x" /></button>
         </header>
         <nav class="breadcrumbs" aria-label="当前网盘路径">
@@ -108,7 +112,13 @@ onBeforeUnmount(() => { ++sequence; store.dialogCount-- })
           <p v-if="page && !page.items.length && !busy && !error" class="empty">此目录没有子文件夹，可以直接选择。</p>
           <button v-if="page?.nextCursor" class="btn more" type="button" :disabled="busy" @click="load(current!.id, page.nextCursor)">{{ busy ? '读取中…' : '加载更多文件夹' }}</button>
         </div>
-        <div v-if="outputFolders?.length && page" class="create-output" aria-label="创建输出文件夹">
+        <div v-if="creation && page" class="create-output" aria-label="确认创建网盘文件夹">
+          <div class="create-heading"><Icon name="folder" :size="18" /><strong>将创建以下完整路径</strong></div>
+          <p class="output-folders mono" aria-label="完整创建路径">{{ creationPath }}</p>
+          <p class="small muted">在当前上级目录下创建，已有同名文件夹会复用。</p>
+          <p v-if="createError" class="directory-error" role="alert">{{ createError }}</p>
+        </div>
+        <div v-else-if="outputFolders?.length && page" class="create-output" aria-label="创建输出文件夹">
           <div class="create-heading"><Icon name="folder" :size="18" /><strong>按输出预览创建文件夹</strong></div>
           <p class="output-folders mono">{{ outputFolders.join(' / ') }}</p>
           <div class="create-action">
@@ -118,10 +128,11 @@ onBeforeUnmount(() => { ++sequence; store.dialogCount-- })
           <p v-if="createError" class="directory-error" role="alert">{{ createError }}</p>
         </div>
         <footer>
-          <p class="selected small" :title="path">{{ page ? `上传至：${path}` : '请选择上传位置' }}</p>
+          <p class="selected small" :title="path">{{ page ? `${creation ? '上级目录' : '上传至'}：${path}` : creation ? '请选择创建位置' : '请选择上传位置' }}</p>
           <div class="actions">
             <button class="btn" type="button" :disabled="creating" @click="cancel">取消</button>
-            <button class="btn primary" type="button" :disabled="busy || !!error || !current" @click="select">选择此目录</button>
+            <button v-if="creation" class="btn primary" type="button" :disabled="busy || !!error || !current || !createFoldersHere.length" @click="createFolders">{{ creating ? '正在创建…' : '确认创建' }}</button>
+            <button v-else class="btn primary" type="button" :disabled="busy || !!error || !current" @click="select">选择此目录</button>
           </div>
         </footer>
       </section>

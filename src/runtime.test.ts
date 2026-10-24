@@ -43,7 +43,7 @@ for (const [provider, vid] of [['youku', 'XNjUzMzM0MDI1Ng=='], ['tencent', 'g410
   })
 }
 
-test('TUI episode-title toggle applies to new IQ tasks and previews while existing tasks keep their choice', async () => {
+test('TUI movie/series template omits episode titles while saved legacy tasks keep their choice', async () => {
   const r = await start()
   const x = r as any
   x.detailProv = 'iq'
@@ -51,27 +51,22 @@ test('TUI episode-title toggle applies to new IQ tasks and previews while existi
   x.detailInfo = { kind: 'show', year: 2026 }
   x.eps = [{ vid: 'one', title: '雨夜重逢', season: 2, number: 3, languages: [] }]
   r.handleKey('f4')
-  x.setIdx = x.settingFields().indexOf('文件名单集标题')
-  x.emit()
-  expect(r.snapshot.settings?.find(s => s.label === '文件名单集标题')?.value).toStartWith('开')
-  expect(x.taskFromEp(0).includeEpisodeTitle).toBe(true)
-  r.handleKey('enter')
-  expect(r.snapshot.settings?.find(s => s.label === '文件名单集标题')?.value).toStartWith('关')
-  const off = x.taskFromEp(0)
-  expect(off.includeEpisodeTitle).toBe(false)
-  x.pending = [off]
-  x.scene = 'confirm'
-  x.emit()
-  expect(r.snapshot.confirmation?.name).toContain('海外节目.2026.S02E03.')
-  expect(r.snapshot.confirmation?.name).not.toContain('雨夜重逢')
-  r.handleKey('f4')
-  x.setIdx = x.settingFields().indexOf('文件名单集标题')
-  r.handleKey('space')
-  expect(x.cfg.includeEpisodeTitle).toBe(true)
-  const on = x.taskFromEp(0)
-  expect(completedFilename(jobNaming(on, x.cfg), { status: 'unavailable' })).toContain('.2026.S02E03.雨夜重逢.')
-  const restored = JSON.parse(JSON.stringify(off))
-  expect(jobNaming(restored, x.cfg).episodeTitle).toBeUndefined()
+  expect(r.snapshot.settings?.some(s => s.label === '文件名单集标题')).toBe(false)
+  for (const includeEpisodeTitle of [true, false]) {
+    x.cfg.includeEpisodeTitle = includeEpisodeTitle
+    const task = x.taskFromEp(0)
+    x.pending = [task]
+    x.scene = 'confirm'
+    x.emit()
+    expect(r.snapshot.confirmation?.name).toContain('海外节目.2026.S02E03.')
+    expect(r.snapshot.confirmation?.name).not.toContain('雨夜重逢')
+    expect(completedFilename(jobNaming(task, x.cfg), { status: 'unavailable' })).not.toContain('雨夜重逢')
+
+    const legacy = JSON.parse(JSON.stringify({ ...task, namingOrder: undefined }))
+    const restoredName = completedFilename(jobNaming(legacy, x.cfg), { status: 'unavailable' })
+    if (includeEpisodeTitle) expect(restoredName).toContain('.S02E03.雨夜重逢.2026.')
+    else expect(restoredName).not.toContain('雨夜重逢')
+  }
 })
 
 test.each(['iq', 'iqcn'] as const)('%s-only scope exposes TMDB settings and matching corrects a movie title, year, folder and filename', async (provider) => {
@@ -143,10 +138,13 @@ test.each(['iq', 'iqcn'] as const)('%s series TMDB matching keeps the platform s
     expect(x.pending.map((t: any) => [t.series, t.year, t.tmdbId, t.season, t.episode])).toEqual([
       ['正式剧名', 2023, 900002, 2, 1], ['正式剧名', 2023, 900002, 2, 2],
     ])
-    expect(r.snapshot.confirmation?.name).toContain('Matched.Series.2023.S02E01.雨夜重逢.')
+    expect(r.snapshot.confirmation?.name).toContain('Matched.Series.2023.S02E01.')
+    expect(r.snapshot.confirmation?.name).not.toContain('雨夜重逢')
     expect(r.snapshot.confirmation?.directory).toEndWith(join('正式剧名 (2023) {tmdb-900002}', 'Season 02'))
     const restored = JSON.parse(JSON.stringify(x.pending[1]))
-    expect(completedFilename(jobNaming(restored, x.cfg), { status: 'unavailable' })).toContain('Matched.Series.2023.S02E02.携手同行.')
+    const restoredName = completedFilename(jobNaming(restored, x.cfg), { status: 'unavailable' })
+    expect(restoredName).toContain('Matched.Series.2023.S02E02.')
+    expect(restoredName).not.toContain('携手同行')
   } finally { x.simulated = true; titleLookup.mockRestore() }
 })
 
@@ -200,7 +198,8 @@ test.each(['tencent', 'iqcn'] as const)('%s matched final season can use TMDB S0
   r.handleKey('end')
   r.handleKey('enter')
   expect(x.pending.map((t: any) => [t.vid, t.season, t.episode])).toEqual([['ep10', 4, 10], ['ep11', 4, 11]])
-  expect(r.snapshot.confirmation?.name).toContain('诛仙.2022.S04E10.诛仙.最终季.第10话.')
+  expect(r.snapshot.confirmation?.name).toContain('诛仙.2022.S04E10.')
+  expect(r.snapshot.confirmation?.name).not.toContain('最终季')
   expect(r.snapshot.confirmation?.directory).toEndWith(join('诛仙 (2022) {tmdb-206484}', 'Season 04'))
   const restored = JSON.parse(JSON.stringify(x.pending[1]))
   expect(completedFilename(jobNaming(restored, x.cfg), { status: 'probed', height: 2160, codec: 'HEVC' })).toContain('.S04E11.')
@@ -866,7 +865,8 @@ test('switching a movie back to a series preserves an explicit special season ze
   internal.tmdbHits = [{ id: 123, name: '心动的信号', title: '', year: 2018, kind: 'show' }]
   r.handleKey('enter')
   expect(internal.pending[0].season).toBe(0)
-  expect(r.snapshot.confirmation?.name).toContain('.S00E298.雨夜重逢.')
+  expect(r.snapshot.confirmation?.name).toContain('.S00E298.')
+  expect(r.snapshot.confirmation?.name).not.toContain('雨夜重逢')
   expect(r.snapshot.confirmation?.directory).toEndWith('Season 00')
 })
 
@@ -1061,7 +1061,7 @@ test('PageDown advances one visible grid page and resizing rewraps job details',
 })
 
 
-test('batch episode titles survive TMDB matching and share preview and download naming', async () => {
+test('batch episode titles remain in task labels while preview and download filenames omit them', async () => {
   const r = await start()
   const internal = r as any
   const subtitles = ['名场面特辑：狼人有救了！', '加更篇：一起出发']
@@ -1070,16 +1070,20 @@ test('batch episode titles survive TMDB matching and share preview and download 
   r.handleKey('a')
   r.handleKey('enter')
   r.handleKey('enter')
-  expect(r.snapshot.confirmation?.name).toContain('.S03E01.名场面特辑.狼人有救了.')
+  expect(r.snapshot.confirmation?.name).toContain('.S03E01.')
+  expect(r.snapshot.confirmation?.name).not.toContain('名场面特辑')
   internal.scene = 'tmdb'
   internal.tmdbHits = [{ id: 123, name: '现在就出发', title: '现在就出发', year: 2026, kind: 'show' }]
   r.handleKey('enter')
   const tasks = internal.pending
   const names = tasks.map((task: any) => filename(jobNaming(task, internal.cfg)))
-  expect(names[0]).toContain('现在就出发.2026.S03E01.名场面特辑.狼人有救了.')
-  expect(names[1]).toContain('现在就出发.2026.S03E02.加更篇.一起出发.')
+  expect(names[0]).toContain('现在就出发.2026.S03E01.')
+  expect(names[0]).not.toContain('名场面特辑')
+  expect(names[1]).toContain('现在就出发.2026.S03E02.')
+  expect(names[1]).not.toContain('加更篇')
   // Measured naming: the preview uses the post-probe naming function, not the provisional name.
-  expect(r.snapshot.confirmation?.name).toContain('现在就出发.2026.S03E01.名场面特辑.狼人有救了.')
+  expect(r.snapshot.confirmation?.name).toContain('现在就出发.2026.S03E01.')
+  expect(r.snapshot.confirmation?.name).not.toContain('名场面特辑')
   expect(r.snapshot.confirmation?.name).not.toContain('DVH1')
   expect(r.snapshot.confirmation?.directory).toBe(folder(jobNaming(tasks[0], internal.cfg), internal.cfg.outDir))
   r.handleKey('enter')

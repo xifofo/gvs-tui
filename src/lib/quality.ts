@@ -564,6 +564,23 @@ export function qualityFormatId(q: Pick<Quality, 'id' | 'formatId'>): string {
   return '—'
 }
 
+/** A numeric profile is a rendition attribute, not an established codec name. */
+function tencentFormatCodec(raw: Record<string, unknown>): string {
+  for (const value of [raw.vencoding, raw.codec, raw.profile]) {
+    const codec = asString(value).trim().toLowerCase()
+    // Preserve Dolby Vision signaling for the preview's range inference.
+    const dolby = /^(dvhe|dvh1)(?:\.|$)/.exec(codec)
+    if (dolby) return dolby[1]!.toUpperCase()
+    if (/^(?:hevc|h\.?265|x265|hvc1|hev1)(?:\.|$)/.test(codec)) return 'H265'
+    if (/^(?:avc|h\.?264|x264|avc1|avc3)(?:\.|$)/.test(codec)) return 'H264'
+    if (/^(?:av1|av01)(?:\.|$)/.test(codec)) return 'AV1'
+    if (/^(?:vp9|vp09)(?:\.|$)/.test(codec)) return 'VP9'
+  }
+  // Keep opaque profiles for exact rendition matching; previews omit unknown
+  // codecs instead of guessing from MAXPLUS, HDR, resolution or device persona.
+  return asString(raw.profile).trim().toUpperCase()
+}
+
 /** Map gateway play `formats[]` → Quality rows (exported for tests). Skips audio-only. */
 export function qualitiesFromTencentFormats(formats: unknown): Quality[] {
   if (!Array.isArray(formats)) return []
@@ -590,9 +607,7 @@ export function qualitiesFromTencentFormats(formats: unknown): Quality[] {
     const fps = anyInt(raw.vfps) || anyInt(raw.fps)
     const size = anyInt(raw.fs) || anyInt(raw.size)
     const hdr = tencentFormatHDR(raw)
-    const profile = asString(raw.profile)
-    let codec = profile.toUpperCase()
-    if (!codec && /hevc|h265|hvc/i.test(asString(raw.vencoding) + asString(raw.codec))) codec = 'H265'
+    const codec = tencentFormatCodec(raw)
     out.push({
       id,
       label,

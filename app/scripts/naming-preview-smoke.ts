@@ -7,6 +7,10 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Core } from '../src/main/core'
+import { qualitiesFromTencentFormats } from '../../src/lib/quality'
+import { completedFilename } from '../../src/lib/name'
+import { jobNaming } from '../../src/lib/jobs'
+import { matchRelease } from '../../src/integrations/plutofish/release-selection'
 import { DEFAULT_UI_PREFS } from '../src/shared/ui-prefs'
 import type { Audio, Quality } from '../../src/types'
 import type { EnqueueRequest } from '../src/shared/api'
@@ -56,9 +60,9 @@ async function main() {
   internal.probes.set(701, { provider: 'youku', qualities, audios })
   const before = JSON.stringify({ qualities, audios })
   assert.equal((await core.namingPreview(request)).file,
-    'The.Road.to.the.Stars.2026.S01E01.2160p.YOUKU.WEB-DL.HQ.DV.60fps.HEVC.DDP.5.1.Atmos-FPWeb.mp4')
-  assert.ok((await core.namingPreview({ ...request, defaultAudioId: 'zh-aac' })).file.endsWith('.HEVC.AAC.2.0-FPWeb.mp4'))
-  assert.ok((await core.namingPreview({ ...request, quality: 1 })).file.includes('.1080p.YOUKU.WEB-DL.SDR.AVC.DDP.5.1.Atmos-'))
+    'The.Road.to.the.Stars.2026.S01E01.2160p.YOUKU.WEB-DL.HQ.DV.60fps.DDP.5.1.Atmos.H.265-FPWeb.mp4')
+  assert.ok((await core.namingPreview({ ...request, defaultAudioId: 'zh-aac' })).file.endsWith('.AAC.2.0.H.265-FPWeb.mp4'))
+  assert.ok((await core.namingPreview({ ...request, quality: 1 })).file.includes('.1080p.YOUKU.WEB-DL.SDR.DDP.5.1.Atmos.H.264-'))
   const special = await core.namingPreview({ ...request, tmdbSeason: 0, publication: { category: '', episodeNumbers: { ep1: 298 } } })
   assert.ok(special.file.includes('.S00E298.'))
   assert.ok(special.folder.endsWith('Season 00'))
@@ -75,6 +79,28 @@ async function main() {
   assert.equal(JSON.stringify({ qualities, audios }), before)
   assert.equal(core.jobList().length, 0)
   await assert.rejects(() => core!.namingPreview({ ...request, token: -1 }), /过期/)
+
+  // Reproduce the screenshot through the production task builder, including an
+  // opaque Tencent profile and an already enabled legacy episode-title option.
+  Object.assign(internal.cfg, { releaseGroup: 'PFWEB', includeEpisodeTitle: true })
+  internal.probes.set(702, { provider: 'tencent', qualities: qualitiesFromTencentFormats([
+    { id: '123', name: 'maxplus', profile: '4', vencoding: 'h265', width: 3840, height: 2160, vfps: 60, hdr: 'hdr' },
+  ]), audios })
+  const tencentRequest: EnqueueRequest = { ...request, token: 702,
+    detail: { ...request.detail, provider: 'tencent', title: '尚公主' },
+    tmdb: null, naming: { title: 'Tigers Sniff the Rose' },
+    episodes: [{ ...request.episodes[0]!, title: '尚公主 第01集' }],
+  }
+  const tencentPreview = await core.namingPreview(tencentRequest)
+  assert.equal(tencentPreview.file,
+    'Tigers.Sniff.the.Rose.2026.S01E01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP.5.1.Atmos.H.265-PFWEB.mkv')
+  const savedTask = JSON.parse(JSON.stringify(internal.buildTasks(tencentRequest).tasks[0]))
+  assert.equal(completedFilename(jobNaming(savedTask, internal.cfg), { status: 'probed', width: 3840, height: 2160,
+    codec: 'hevc', dynamicRange: 'HDR', fps: 60, audio: { status: 'confirmed', codec: 'eac3', channels: 6, atmos: true } }, 'MAXPLUS'), tencentPreview.file)
+  const versionName = `S01.${tencentPreview.file.slice(tencentPreview.file.indexOf('2160p.')).replace(/\.mkv$/, '')}`
+  assert.deepEqual(matchRelease([{ id: 'existing', name: 'S01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.HEVC.DDP.5.1.Atmos-PFWEB',
+    resolution: '2160p', dynamicRange: 'HDR', status: 'published' }], versionName), { matchedId: 'existing', match: 'specs' })
+  Object.assign(internal.cfg, { releaseGroup: 'FPWeb', includeEpisodeTitle: false })
 
   ipcMain.handle('naming-preview-smoke', (_event, req) => core!.namingPreview(req))
   let preload = readFileSync(resolve('scripts/ui-flow-smoke-preload.cjs'), 'utf8')
@@ -124,10 +150,10 @@ async function main() {
     await wait('document.querySelector(".filename-preview code")')
     await run('Array.from(document.querySelectorAll("main button")).find(e => e.textContent.trim().startsWith("手动选择画质"))?.click()')
     await wait('document.querySelectorAll("input[name=quality]").length === 2')
-    await wait('document.querySelector(".filename-preview code")?.textContent.includes("HQ.DV.60fps.HEVC.AAC.2.0")')
+    await wait('document.querySelector(".filename-preview code")?.textContent.includes("HQ.DV.60fps.AAC.2.0.H.265")')
     await run('document.querySelectorAll("details").forEach(e => e.open = true)')
     await clickSelector('button[aria-label="国语 DDP 5.1 · 杜比全景声 设为默认"]')
-    await wait('document.querySelector(".filename-preview code")?.textContent.includes("HQ.DV.60fps.HEVC.DDP.5.1.Atmos")')
+    await wait('document.querySelector(".filename-preview code")?.textContent.includes("HQ.DV.60fps.DDP.5.1.Atmos.H.265")')
     await wait('document.querySelector(".filename-preview code")?.textContent.startsWith("The.Road.to.the.Stars.2026.S01E01.")')
     const fill = async (selector: string, value: string) => {
       await run(`(() => { const input = document.querySelector(${JSON.stringify(selector)}); input.value = ${JSON.stringify(value)}; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
@@ -158,7 +184,7 @@ async function main() {
     const overflow = await run('({ page: document.documentElement.scrollWidth > innerWidth + 1, name: document.querySelector(".filename-preview").scrollWidth > document.querySelector(".filename-preview").clientWidth + 1 })')
     assert.deepEqual(overflow, { page: false, name: false })
     await click('document.querySelectorAll("input[name=quality]")[1]')
-    await wait('document.querySelector(".filename-preview code")?.textContent.includes("1080p.YOUKU.WEB-DL.SDR.AVC.DDP.5.1.Atmos")')
+    await wait('document.querySelector(".filename-preview code")?.textContent.includes("1080p.YOUKU.WEB-DL.SDR.DDP.5.1.Atmos.H.264")')
     assert.ok(!await run('document.querySelector(".filename-preview code").textContent.includes("HQ.DV")'))
     win.destroy(); win = undefined
   }

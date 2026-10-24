@@ -149,7 +149,27 @@ test('desktop proxy defaults to system routing and persists independently of TUI
   }
 })
 
-test('episode-title naming defaults on in old configs and persists an explicit off/on choice', () => {
+test('default release group is PFWEB while saved release groups keep their exact value', () => {
+  const appdata = mkdtempSync(join(tmpdir(), 'gvs-release-group-'))
+  const previous = process.env.APPDATA
+  process.env.APPDATA = appdata
+  try {
+    expect(defaultConfig().releaseGroup).toBe('PFWEB')
+    expect(loadConfig().releaseGroup).toBe('PFWEB')
+    const file = join(appdata, 'gvs', 'tui.json')
+    mkdirSync(dirname(file), { recursive: true })
+    for (const releaseGroup of [undefined, '', 'ADWeb', 'SmartWeb', 'PFWEB']) {
+      writeFileSync(file, JSON.stringify({ outDir: join(appdata, 'library'), releaseGroup }))
+      expect(loadConfig().releaseGroup).toBe(releaseGroup || 'PFWEB')
+    }
+  } finally {
+    if (previous === undefined) delete process.env.APPDATA
+    else process.env.APPDATA = previous
+    rmSync(appdata, { recursive: true, force: true })
+  }
+})
+
+test('legacy episode-title preference remains readable and persists an explicit off/on choice', () => {
   const appdata = mkdtempSync(join(tmpdir(), 'gvs-name-setting-'))
   const previous = process.env.APPDATA
   process.env.APPDATA = appdata
