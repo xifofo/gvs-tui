@@ -4,6 +4,25 @@ import { sleep } from './util.ts'
 
 type ManifestResult = { url: string; durationSeconds: number; segmentCount: number }
 
+const STRIPPED_HEADERS = new Set(['user-agent', 'referer'])
+/** 非浏览器 UA：实测芒果对 Mozilla/Chrome 之外的 UA 一律放行。 */
+export const MgtvUserAgent = 'gvs/1.0'
+
+/**
+ * 芒果清单与分片的签名都在 URL 里（`...m3u8?arange=0&pm=...`），
+ * **不需要 UA、也不需要 Referer**。实测（同一分集各 3 次）：
+ *   IP 直连节点 219.154.x.x：带 Chrome UA → 405，不带 → 200
+ *   域名节点 pcvideo*：带 Referer → 403，不带 → 200
+ * 所以默认不带这两个头，其它（Accept / 网关给的 token 等）原样保留。
+ */
+export function mgtvRequestHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  const kept = Object.fromEntries(Object.entries(headers).filter(([name]) => !STRIPPED_HEADERS.has(name.toLowerCase())))
+  // 浏览器 UA（Mozilla/…Chrome）会被拒，非浏览器串（curl/8.7.1、gvs/1.0、空值）全通；
+  // Electron 的 fetch 会自带 Mozilla UA，所以这里显式换掉，不能只是"不设置"。
+  kept['User-Agent'] = MgtvUserAgent
+  return kept
+}
+
 /**
  * 芒果 IP:直连节点整段时间回 405，域名节点（pcvideo*.titan.mgtv.com）会回 403，
  * 都属于"这个节点现在不给"，换节点/稍后再说就能过，因此按可重试处理。
@@ -58,15 +77,17 @@ export async function verifyMgtvManifest(
     visited.add(url)
     // 芒果 IP 直连节点会随机对同一个清单地址回 405（实测同一 URL 连续请求在 200/405 之间跳），
     // 单次读取失败率约一半，所以这里对 405/408/429/5xx 做几次短重试再放弃。
-    const attempts = 3
+    const attempts = 4
     let response: Response | undefined
     let text = ''
     for (let attempt = 1; ; attempt++) {
       const timeout = AbortSignal.timeout(20_000)
       const readSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
       let httpStatus: number | undefined
+      // 优先不带 UA/Referer；仍被拒时才带上原本的头试一次（个别节点策略相反）。
+      const attemptHeaders = attempt === 2 || attempt === 4 ? headers : mgtvRequestHeaders(headers)
       try {
-        response = await fetchMediaProbe(url, { headers, signal: readSignal })
+        response = await fetchMediaProbe(url, { headers: attemptHeaders, signal: readSignal })
         httpStatus = response.status
         if (!response.ok || !response.body) {
           await response.body?.cancel().catch(() => {})
@@ -93,8 +114,8 @@ export async function verifyMgtvManifest(
         const retryable = mgtvRetryableStatus(httpStatus)
         if (retryable && attempt < attempts) {
           // Host and status only: never the signed path, query or headers.
-          runLog(`mgtv manifest retry host=${new URL(url).host} http=${httpStatus} attempt=${attempt}/${attempts}`)
-          await sleep(attempt === 1 ? 700 : 1800, signal)
+          runLog(`mgtv manifest retry host=${new URL(url).host} http=${httpStatus} attempt=${attempt}/${attempts} ua=${attempt === 2 || attempt === 4 ? 'yes' : 'no'}`)
+          await sleep(attempt === 1 ? 700 : attempt === 2 ? 1500 : 2500, signal)
           continue
         }
         const reason = rejected ? `http_${httpStatus}` : readSignal.aborted ? 'timeout' : 'network'

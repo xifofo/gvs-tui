@@ -9,7 +9,7 @@ import { mkvmergeMux, mkvmergeRemux } from './mkvmerge'
 import { mgtvCapabilities, miguCapabilities, selectedBilibiliMedia, webTracks, audioChoice, type WebTrack } from './web-video-providers'
 import { probeFinishedMedia } from './gvs-record'
 import { verifyMiguManifest } from './migu-manifest'
-import { mgtvDurationCovers, mgtvExpectedDuration, verifyMgtvManifest } from './mgtv-manifest'
+import { mgtvDurationCovers, mgtvExpectedDuration, mgtvRequestHeaders, verifyMgtvManifest } from './mgtv-manifest'
 import { releaseGroup } from './release-group.ts'
 
 type Emit = (status: string, pct: number, log: string) => void
@@ -73,9 +73,9 @@ export async function downloadWebVideo(cli: Pick<GwClient,'invoke'>, cfg: FileCo
     if (!source) throw new Error('芒果没有返回可用播放地址')
     emit('校验', .03, data.preview === true || Number(data.preview) === 1 ? '核对芒果播放清单是否为完整内容' : '核对芒果播放清单')
     const expected = mgtvExpectedDuration(task.duration, data.duration, source.source.duration)
-    // Some TV CDN endpoints reject a web Referer with HTTP 405. Keep only
-    // provider-supplied Referer/UA and use identical headers for probe and RE.
-    const headers = headersFor('', 0, source.headers)
+    // 芒果的签名在 URL 里，不需要 UA/Referer；实测带 UA 会被 IP 直连节点回 405、
+    // 带 Referer 会被域名节点回 403，所以清单与分片都不带这两个头（清单仍保留兜底重试）。
+    const headers = mgtvRequestHeaders(headersFor('', 0, source.headers))
     // 芒果的 CDN 节点会整段时间拒绝（IP 节点回 405、域名节点回 403），批量下载时尤其明显。
     // 死磕同一个 URL 没用，重新取流往往换到另一个节点，所以校验失败就重取再试。
     let checked: Awaited<ReturnType<typeof verifyMgtvManifest>>
