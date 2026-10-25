@@ -192,3 +192,94 @@ test('pending retries survive a restart', async () => {
   await again.tick()
   expect(h.enq.map((r) => r.episodes.map((e) => e.vid))).toEqual([['v3']])
 })
+
+const releaseId = 'r'.repeat(32)
+const progressOf = (episodes: number[] | null, latestEpisode?: number) => {
+  const calls: EnqueueRequest[] = []
+  const progress = async (req: EnqueueRequest) => { calls.push(req); return { releaseId, episodes, ...(latestEpisode !== undefined ? { latestEpisode } : {}) } }
+  return { calls, progress }
+}
+
+test('new device: the first check follows PlutoFish progress and fills the missing episode', async () => {
+  const h = harness()
+  h.setEps(6)
+  const p = progressOf([1, 2, 3, 5])
+  const m = new SubscriptionManager({ ...h.deps, progress: p.progress })
+  const s = m.subscribe({ provider: 'tencent', showId: 's1', title: '尚公主', poster: '', kind: 'show', rules: 'any' })
+  m.stop()
+  await m.checkNow(s.id)
+  const v = m.view().subs[0]!
+  expect(h.enq.map((r) => r.episodes.map((e) => e.number))).toEqual([[4, 6]])
+  expect(v.episodes.filter((e) => e.skipped?.by === 'plutofish').map((e) => e.number)).toEqual([1, 2, 3, 5])
+  expect([v.release?.id, v.lastCheck?.ok]).toEqual([releaseId, true])
+  expect(v.lastCheck?.message).toBe('已记录现有 6 集，之后的新集会自动处理 · 按 PlutoFish 进度补下第 4、6 集 · 已下载 1080P · PlutoFish 已有第 1–3、5 集')
+  // 下一次核对沿用这个版本，换 115 账号后发布标识变了也能接上
+  h.setEps(7)
+  await m.checkNow(s.id)
+  expect(p.calls.at(-1)?.preferredReleaseId).toBe(releaseId)
+  expect(h.enq.at(-1)?.preferredReleaseId).toBe(releaseId)
+})
+
+test('an episode another device or account already published is not downloaded again', async () => {
+  const h = harness()
+  let have = [1, 2]
+  const m = new SubscriptionManager({ ...h.deps, progress: async () => ({ releaseId, episodes: have }) })
+  const s = m.subscribe({ provider: 'tencent', showId: 's1', title: '剧', poster: '', kind: 'show', rules: 'any' })
+  m.stop()
+  await m.checkNow(s.id)
+  expect(h.enq.length).toBe(0)
+  h.setEps(3)
+  have = [1, 2, 3]
+  await m.checkNow(s.id)
+  const v = m.view().subs[0]!
+  expect([h.enq.length, v.episodes[2]!.skipped?.by, v.episodes[2]!.pending, v.lastCheck?.message]).toEqual([0, 'plutofish', undefined, '发现 第 3 集 · PlutoFish 已有第 3 集，跳过'])
+})
+
+test('without a PlutoFish version yet the baseline stays and only new episodes download', async () => {
+  const h = harness()
+  const m = new SubscriptionManager({ ...h.deps, progress: async () => null })
+  const s = m.subscribe({ provider: 'tencent', showId: 's1', title: '剧', poster: '', kind: 'show', rules: 'any' })
+  m.stop()
+  await m.checkNow(s.id)
+  expect([h.enq.length, m.view().subs[0]!.lastCheck?.message]).toEqual([0, '已记录现有 2 集，之后的新集会自动处理'])
+  h.setEps(3)
+  await m.checkNow(s.id)
+  expect(h.enq.map((r) => r.episodes.map((e) => e.vid))).toEqual([['v3']])
+  expect(m.view().subs[0]!.release).toBeUndefined()
+})
+
+test('episodes skipped by an older version are recovered from PlutoFish progress', async () => {
+  const h = harness()
+  h.setEps(5)
+  const legacy = { version: 1, paused: false, intervalMinutes: 5, subs: [{ id: 'tencent:s1:x', provider: 'tencent', showId: 's1', title: '尚公主', poster: '', kind: 'show', state: 'R', paused: false,
+    rules: 'any', autoDownload: true, upgrade: false, window: null, updateText: '', total: 5, newCount: 0, lastCheck: null, nextCheckAt: 0, createdAt: 0,
+    episodes: [1, 2, 3, 4, 5].map((n) => ({ vid: `v${n}`, number: n, title: '', firstSeen: 0, ...(n === 4 ? {} : { downloaded: { tier: 0, label: '1080P', at: 0 } }) })) }] }
+  const m = new SubscriptionManager({ ...h.deps, load: () => JSON.stringify(legacy), progress: async () => ({ releaseId, episodes: [1, 2, 3, 5] }) })
+  m.stop()
+  await m.tick()
+  expect(h.enq.map((r) => r.episodes.map((e) => e.number))).toEqual([[4]])
+  expect(m.view().subs[0]!.lastCheck?.message).toBe('按 PlutoFish 进度补下第 4 集 · 已下载 1080P')
+  // 核对过后 6 小时内不重复探测
+  h.advance(10)
+  await m.tick()
+  expect(h.enq.length).toBe(1)
+})
+
+test('a failed PlutoFish lookup keeps new episodes pending; old servers without an episode list only skip up to the latest episode', async () => {
+  const h = harness()
+  let fail = true
+  const m = new SubscriptionManager({ ...h.deps, progress: async () => { if (fail) throw new Error('PlutoFish 版本查询失败（HTTP 502）'); return { releaseId, episodes: null, latestEpisode: 3 } } })
+  const s = m.subscribe({ provider: 'tencent', showId: 's1', title: '剧', poster: '', kind: 'show', rules: 'any' })
+  m.stop()
+  await m.checkNow(s.id)
+  expect([m.view().subs[0]!.lastCheck?.ok, m.view().subs[0]!.lastCheck?.message]).toEqual([false, '已记录现有 2 集，之后的新集会自动处理 · PlutoFish 进度核对失败：PlutoFish 版本查询失败（HTTP 502）'])
+  h.setEps(4)
+  await m.checkNow(s.id)
+  expect(m.view().subs[0]!.episodes.filter((e) => e.pending).map((e) => e.number)).toEqual([3, 4])
+  fail = false
+  h.advance(11)
+  await m.tick()
+  const v = m.view().subs[0]!
+  expect(h.enq.map((r) => r.episodes.map((e) => e.number))).toEqual([[4]])
+  expect(v.episodes.map((e) => e.skipped?.by ?? (e.downloaded ? 'downloaded' : 'baseline'))).toEqual(['plutofish', 'plutofish', 'plutofish', 'downloaded'])
+})

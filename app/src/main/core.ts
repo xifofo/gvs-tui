@@ -10,7 +10,7 @@ import { savePublication } from '../../../src/integrations/plutofish/publication
 import { PublicationPreferenceStore, type PublicationContext, type PublicationPreferences } from '../../../src/integrations/plutofish/publication-preferences.ts'
 import type { PlutoFishInput } from '../../../src/integrations/plutofish/types.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { releaseChoices, resolveReleaseSelection } from '../../../src/integrations/plutofish/release-selection.ts'
+import { preferRelease, releaseChoices, resolveReleaseSelection } from '../../../src/integrations/plutofish/release-selection.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { userMessage, errorCode } from '@tui/user-message.ts'
 import { ProviderSessions, type SessionCommand, type ProviderSessionView } from '@tui/provider-session.ts'
@@ -102,6 +102,7 @@ import {
   type Section,
   type SettingsPatch,
   type SettingsView,
+  type SubscriptionProgress,
   type TmdbHit,
   type Tone,
 } from '@shared/api'
@@ -1781,12 +1782,31 @@ export class Core {
     return releaseChoices(this.plutofish, drafts, name)
   }
 
-  async enqueue(req: EnqueueRequest): Promise<number> {
-    this.plutofish.assertReady()
-    req = structuredClone(req)
+  /** 没带发布信息的请求（订阅自动下载）套用本机保存的作品偏好。 */
+  private withSavedPublication(req: EnqueueRequest): EnqueueRequest {
     const cached = this.publicationPreferences(this.publicationContext(req))
     if (!req.publication && cached) req = { ...req, publication: cached.publication,
       tmdb: req.tmdb ?? cached.tmdb, tmdbSeason: req.tmdbSeason ?? cached.tmdbSeason, naming: req.naming ?? cached.naming }
+    return req
+  }
+
+  /**
+   * 订阅追更进度以 PlutoFish 为准：按入队时同样的作品、季和版本匹配规则找到版本，返回其中已就绪的集号。
+   * 换设备或换 115 源账号后据此跳过版本里已有的集、补下缺的集；还没有对应版本时返回 null。
+   */
+  async subscriptionProgress(req: EnqueueRequest): Promise<SubscriptionProgress | null> {
+    this.plutofish.assertReady()
+    req = this.withSavedPublication(structuredClone(req))
+    const choices = preferRelease(await this.publicationReleases(req), req.preferredReleaseId)
+    const item = choices.matchedId ? choices.items.find(r => r.id === choices.matchedId) : undefined
+    if (!item) return null
+    return { releaseId: item.id, episodes: Array.isArray(item.episodes) ? [...item.episodes] : null,
+      ...(item.latestEpisode !== undefined ? { latestEpisode: item.latestEpisode } : {}) }
+  }
+
+  async enqueue(req: EnqueueRequest): Promise<number> {
+    this.plutofish.assertReady()
+    req = this.withSavedPublication(structuredClone(req))
     const account = this.gatewayAccountFor(req.detail.provider)
     const cli = this.client().fixedAccount(req.detail.provider, account)
     const { tasks, qualityLabel } = this.buildTasks(req)
@@ -1798,7 +1818,7 @@ export class Core {
       return JSON.stringify([view.url, view.identity?.id, source.id, source.alias, source.provider ?? '115'])
     }
     const expectedBinding = binding(connection)
-    const choices = await this.publicationReleases(req)
+    const choices = preferRelease(await this.publicationReleases(req), req.preferredReleaseId)
     const selected = resolveReleaseSelection(choices, req.publication?.releaseSelection)
     const release = { existingReleaseId: selected.existingReleaseId, preserveKey: choices.match === 'binding' && selected.existingReleaseId === choices.matchedId, nonce: selected.forceNew ? randomUUID() : undefined }
     await this.resolveFilenameTitle(tasks)

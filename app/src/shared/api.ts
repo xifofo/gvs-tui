@@ -226,7 +226,12 @@ export type EnqueueRequest = {
   tmdbSeason?: number
   /** 多账号：用哪个账号下载（空 = 平台默认账号） */
   accountId?: string
+  /** 订阅记住的 PlutoFish 版本：绑定和规格都没对上时沿用（换 115 源账号后发布标识会变） */
+  preferredReleaseId?: string
 }
+
+/** 订阅在 PlutoFish 里的追更进度：匹配到的版本及其已就绪集号；旧服务端不返回集号时只有最高集号。 */
+export type SubscriptionProgress = { releaseId: string; episodes: number[] | null; latestEpisode?: number }
 
 export type JobView = {
   publication?: PublicationDraft

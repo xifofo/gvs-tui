@@ -157,6 +157,7 @@ const subs = new SubscriptionManager({
   detail: (p, id) => core.detail(p, id),
   probe: (p, eps, accountId) => probeWithAccounts(p, eps, accountId),
   enqueue: (req) => core.enqueue(req),
+  progress: (req) => core.subscriptionProgress(req),
   isDownloaded: (p, vid) => { try { return history().db.hasVid(p, vid) } catch { return false } },
   notify: (title, body, sub) => notify(title, body, sub),
   changed: (view) => {
