@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { matchRelease, releaseChoices, resolveReleaseSelection, type ReleaseOption } from './release-selection.ts'
+import { matchRelease, preferRelease, releaseChoices, resolveReleaseSelection, type ReleaseOption } from './release-selection.ts'
 import { preparePublication } from './publication.ts'
 import type { PlutoFishView } from './types.ts'
 import type { DlTask } from '../../lib/jobs.ts'
@@ -69,4 +69,19 @@ test('匹配遍历完整分页，重复或截断的分页不产生默认选择',
   } }
   expect((await releaseChoices(reader, [draft(3)], preview)).matchedId).toBe(firstId)
   expect(calls).toBe(2)
+})
+
+test('换源账号后发布标识变了：沿用订阅记住的版本，已下架或不在候选里时不沿用', async () => {
+  const items = [option({ name: 'S01.2160p.TX.WEB-DL.HEVC', episodes: [1, 2, 3, 5] }), option({ id: secondId, name: 'S01.2160p.TX.WEB-DL.HEVC' })]
+  const choices = await releaseChoices(client(items), [draft(6)], preview)
+  expect([choices.matchedId, choices.needsChoice]).toEqual([undefined, true])
+  const kept = preferRelease(choices, firstId)
+  expect([kept.matchedId, kept.match, kept.needsChoice, kept.items[0]!.episodes]).toEqual([firstId, 'remembered', false, [1, 2, 3, 5]])
+  expect(resolveReleaseSelection(kept)).toEqual({ existingReleaseId: firstId })
+  expect(preferRelease(choices, 'c'.repeat(32)).needsChoice).toBe(true)
+  expect(preferRelease({ ...choices, items: [option({ status: 'unpublished' })] }, firstId).matchedId).toBeUndefined()
+  // 绑定或唯一规格匹配优先于记住的版本
+  const bound = await releaseChoices(client(items, secondId), [draft(6)], preview)
+  expect(preferRelease(bound, firstId).matchedId).toBe(secondId)
+  await expect(releaseChoices(client([option({ episodes: [1, -1] })]), [draft(6)], preview)).rejects.toThrow('响应无效')
 })

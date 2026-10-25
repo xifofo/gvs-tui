@@ -23,8 +23,8 @@ export type SubEpisode = {
   baseline?: boolean
   /** 自动下载还没成功；每次到点重试，界面显示原因 */
   pending?: SubPending
-  /** 不用再下：本机下载历史已有 */
-  skipped?: { by: 'history'; at: number }
+  /** 不用再下：本机下载历史已有，或 PlutoFish 版本里已经有这一集（别的设备或 115 账号上传的） */
+  skipped?: { by: 'history' | 'plutofish'; at: number; releaseId?: string }
 }
 
 export type SubCheck = { at: number; ok: boolean; ms: number; message: string; found: number }
@@ -54,6 +54,10 @@ export type Subscription = {
   lastCheck: SubCheck | null
   nextCheckAt: number
   createdAt: number
+  /** 上次同步到的 PlutoFish 版本；换 115 源账号后发布标识变了也沿用它 */
+  release?: { id: string; at: number }
+  /** 上次按 PlutoFish 进度核对的时间 */
+  progressAt?: number
 }
 
 export type SubscribeRequest = Pick<Subscription, 'provider' | 'showId' | 'title' | 'poster' | 'kind'> &
