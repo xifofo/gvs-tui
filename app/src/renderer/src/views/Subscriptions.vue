@@ -54,6 +54,13 @@ const latest = (s: Subscription) => {
   return `第 ${max} 集${s.total && max >= s.total ? '（全）' : s.total ? ` / 共 ${s.total} 集` : ''}`
 }
 const downloadedLabel = (s: Subscription) => [...s.episodes].reverse().find((e) => e.downloaded)?.downloaded?.label ?? ''
+/** 自动下载没成功、等待重试的集和最近一次原因 */
+const pendingLabel = (s: Subscription) => {
+  const eps = s.episodes.filter((e) => e.pending)
+  if (!eps.length) return ''
+  const nums = eps.map((e) => e.number).filter((n) => n > 0)
+  return `待重试 ${nums.length ? `第 ${nums.join('、')} 集` : `${eps.length} 个视频`}：${eps[eps.length - 1]!.pending!.reason}`
+}
 function countdown(s: Subscription): { text: string; pct: number } {
   if (s.paused || view.value?.paused) return { text: '已暂停', pct: 0 }
   if (!Number.isFinite(s.nextCheckAt) || !s.nextCheckAt) return { text: '—', pct: 0 }
@@ -119,6 +126,7 @@ const stateText = (s: Subscription) => (failed(s) ? '检查失败' : s.newCount 
         <span class="mono">{{ s.lastCheck ? hhmm(s.lastCheck.at) : '—' }}</span>
         <span class="small clamp" :class="s.lastCheck && !s.lastCheck.ok ? 'err' : 'muted'" :title="s.lastCheck?.message">{{ s.lastCheck ? `${s.lastCheck.ok ? '成功' : '失败'} · ${s.lastCheck.message}` : '' }}</span>
         <span v-if="downloadedLabel(s)" class="muted small">已下载 {{ downloadedLabel(s) }}</span>
+        <span v-if="pendingLabel(s)" class="small clamp pending" :title="pendingLabel(s)">{{ pendingLabel(s) }}</span>
       </div>
       <div class="c4">
         <span class="muted small">下次检查</span>
@@ -173,6 +181,7 @@ const stateText = (s: Subscription) => (failed(s) ? '检查失败' : s.newCount 
 .chip .dot { width: 7px; height: 7px; margin-right: 4px; background: currentColor; }
 .clamp { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .err { color: var(--err); }
+.pending { color: var(--orange-text); }
 .c4 .progress { height: 4px; flex-grow: 0; }
 .acts { display: flex; gap: 6px; }
 .drawer-bg { position: fixed; inset: 0; background: var(--ui-overlay); backdrop-filter: blur(6px); z-index: 40; display: flex; justify-content: flex-end; }

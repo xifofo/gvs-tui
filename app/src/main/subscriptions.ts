@@ -2,8 +2,8 @@ import type { DetailView, EnqueueRequest, EpisodeView, ProbeResult, Provider } f
 import { pickBest, shouldUpgrade, DEFAULT_RULES, type RuleCandidate } from '../shared/rule-groups'
 import { mgtvShowId } from '../shared/calendar'
 import {
-  DEFAULT_INTERVAL_MIN, diffEpisodes, jitter, nextCheckAt, subKey,
-  type SubCheck, type SubscribeRequest, type Subscription, type SubscriptionPatch, type SubsView,
+  DEFAULT_INTERVAL_MIN, diffEpisodes, jitter, nextCheckAt, nextRetryAt, retryDelay, subKey,
+  type SubCheck, type SubEpisode, type SubscribeRequest, type Subscription, type SubscriptionPatch, type SubsView,
 } from '../shared/subscription'
 
 /**
@@ -27,6 +27,12 @@ export type SubDeps = {
 type FileShape = { version: 1; paused: boolean; intervalMinutes: number; subs: Subscription[] }
 
 export const TICK_MS = 30_000
+
+/** 「第 3、4 集」；没有集号时按个数说 */
+function episodesLabel(eps: Array<{ number: number }>): string {
+  const nums = eps.map((e) => e.number).filter((n) => n > 0)
+  return nums.length ? `第 ${nums.join('、')} 集` : `${eps.length} 个新视频`
+}
 
 export function candidatesOf(probe: ProbeResult): RuleCandidate[] {
   return probe.qualities.map((q) => ({
@@ -181,24 +187,34 @@ export class SubscriptionManager {
       sub.total = d.episodeCount || sub.total
       const fresh = diffEpisodes(sub.episodes, d.episodes)
       const baseline = sub.state === 'N'
-      for (const e of fresh) sub.episodes.push({ vid: e.vid, number: e.number, title: e.title, firstSeen: t0 })
+      // 新集先记成待下载，只有真正加入下载（或确认不用再下）才算处理完；失败的下次到点重试，不会被静默跳过。
+      for (const e of fresh) {
+        sub.episodes.push({ vid: e.vid, number: e.number, title: e.title, firstSeen: t0,
+          ...(baseline ? { baseline: true } : sub.autoDownload ? { pending: { reason: '等待下载', attempts: 0, at: t0, retryAt: t0 } } : {}) })
+      }
+      const parts: string[] = []
       if (baseline) {
-        result.message = `已记录现有 ${fresh.length} 集，之后的新集会自动处理`
+        parts.push(`已记录现有 ${fresh.length} 集，之后的新集会自动处理`)
       } else if (fresh.length) {
         result.found = fresh.length
         sub.newCount += fresh.length
-        const nums = fresh.map((e) => e.number).filter((n) => n > 0)
-        const label = nums.length ? `第 ${nums.join('、')} 集` : `${fresh.length} 个新视频`
-        result.message = `发现 ${label}`
+        const label = episodesLabel(fresh)
+        parts.push(`发现 ${label}`)
         this.deps.notify(`《${sub.title}》更新了`, label, sub)
-        if (sub.autoDownload) result.message += ' · ' + (await this.download(sub, d, d.episodes.filter((e) => fresh.some((f) => f.vid === e.vid))))
-      } else {
-        result.message = '没有新集'
+      }
+      const due = sub.autoDownload ? sub.episodes.filter((e) => e.pending && e.pending.retryAt <= t0) : []
+      if (due.length) {
+        const got = await this.download(sub, d, due)
+        parts.push(got.message)
+        if (!got.ok) result.ok = false
+      } else if (!baseline && !fresh.length) {
+        parts.push('没有新集')
         if (sub.upgrade) {
           const up = await this.tryUpgrade(sub, d)
-          if (up) result.message = up
+          if (up) parts.splice(0, parts.length, up)
         }
       }
+      result.message = parts.join(' · ')
       sub.state = sub.paused ? 'S' : 'R'
     } catch (e) {
       result.ok = false
@@ -210,25 +226,61 @@ export class SubscriptionManager {
     const next = nextCheckAt(sub, this.now(), this.intervalMinutes)
     // 只给常规间隔加抖动；等下一个播出窗口 / 上线时间点时准点查
     const delay = next - this.now()
-    sub.nextCheckAt = Number.isFinite(next) && delay <= this.intervalMinutes * 2 * 60_000 ? this.now() + jitter(Math.max(0, delay)) : next
+    sub.nextCheckAt = Math.min(Number.isFinite(next) && delay <= this.intervalMinutes * 2 * 60_000 ? this.now() + jitter(Math.max(0, delay)) : next,
+      Math.max(this.now(), nextRetryAt(sub)))
   }
 
-  /** 新集按规则组挑最好的版本下载；返回一句状态 */
-  private async download(sub: Subscription, d: DetailView, eps: EpisodeView[]): Promise<string> {
+  /** 待下载的集按规则组挑最好的版本下载；没成功的记下原因和下次重试时间，返回一句状态 */
+  private async download(sub: Subscription, d: DetailView, due: SubEpisode[]): Promise<{ ok: boolean; message: string }> {
+    const now = this.now()
+    let eps = d.episodes.filter((e) => due.some((r) => r.vid === e.vid))
+    const missing = due.filter((r) => !eps.some((e) => e.vid === r.vid))
+    if (missing.length) this.defer(missing, '平台这次没有返回这一集')
     const had = eps.length
-    eps = eps.filter((e) => !this.deps.isDownloaded?.(d.provider, e.vid))
-    if (had && !eps.length) return '历史里已下载过，跳过'
-    if (!eps.length) return '无可下载视频'
-    const probe = await this.deps.probe(d.provider, eps, sub.accountId)
-    const m = pickBest(sub.rules, candidatesOf(probe))
-    if (!m) return '规则组没有一档满足，等待更好的版本'
-    const n = await this.deps.enqueue({ ...this.request(d, eps, probe.token, m.index, m.audioIds), accountId: sub.accountId })
     for (const e of eps) {
-      const rec = sub.episodes.find((x) => x.vid === e.vid)
-      if (rec) rec.downloaded = { tier: m.tier, label: m.label, at: this.now() }
+      if (!this.deps.isDownloaded?.(d.provider, e.vid)) continue
+      const rec = this.episode(sub, e.vid)
+      delete rec.pending
+      rec.skipped = { by: 'history', at: now }
     }
-    this.deps.notify(`《${sub.title}》已加入下载`, `${n} 个任务 · ${m.label}${m.tier ? `（第 ${m.tier + 1} 档）` : ''}`, sub)
-    return `已下载 ${m.label}`
+    eps = eps.filter((e) => this.episode(sub, e.vid).pending)
+    if (had && !eps.length) return { ok: true, message: '历史里已下载过，跳过' }
+    if (!eps.length) return { ok: !missing.length, message: missing.length ? `${episodesLabel(missing)}暂时取不到，稍后重试` : '无可下载视频' }
+    const recs = eps.map((e) => this.episode(sub, e.vid))
+    try {
+      const probe = await this.deps.probe(d.provider, eps, sub.accountId)
+      const m = pickBest(sub.rules, candidatesOf(probe))
+      if (!m) {
+        this.defer(recs, '规则组没有一档满足，等待更好的版本')
+        return { ok: true, message: '规则组没有一档满足，等待更好的版本' }
+      }
+      const n = await this.deps.enqueue({ ...this.request(d, eps, probe.token, m.index, m.audioIds), accountId: sub.accountId })
+      for (const rec of recs) {
+        delete rec.pending
+        rec.downloaded = { tier: m.tier, label: m.label, at: this.now() }
+      }
+      this.deps.notify(`《${sub.title}》已加入下载`, `${n} 个任务 · ${m.label}${m.tier ? `（第 ${m.tier + 1} 档）` : ''}`, sub)
+      return { ok: true, message: `已下载 ${m.label}` }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e)
+      const first = recs.filter((r) => !r.pending?.attempts)
+      this.defer(recs, reason)
+      if (first.length) this.deps.notify(`《${sub.title}》${episodesLabel(first)}暂未下载`, `${reason}；稍后自动重试`, sub)
+      return { ok: false, message: `${episodesLabel(recs)}未能加入下载：${reason}；稍后自动重试` }
+    }
+  }
+
+  /** 记一次失败并按退避排下次重试 */
+  private defer(recs: SubEpisode[], reason: string): void {
+    const now = this.now()
+    for (const rec of recs) {
+      const attempts = (rec.pending?.attempts ?? 0) + 1
+      rec.pending = { reason, attempts, at: now, retryAt: now + retryDelay(attempts) }
+    }
+  }
+
+  private episode(sub: Subscription, vid: string): SubEpisode {
+    return sub.episodes.find((x) => x.vid === vid)!
   }
 
   /** 洗版：只看最近一集没到第一档的已下载集，出现更好的版本就再下一次 */
