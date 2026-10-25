@@ -11,6 +11,7 @@ import { PublicationPreferenceStore, type PublicationContext, type PublicationPr
 import type { PlutoFishInput } from '../../../src/integrations/plutofish/types.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { preferRelease, releaseChoices, resolveReleaseSelection } from '../../../src/integrations/plutofish/release-selection.ts'
+import { carryOverPlan, ensureDirectoryPath } from '../../../src/integrations/plutofish/publication-carryover.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { userMessage, errorCode } from '@tui/user-message.ts'
 import { ProviderSessions, type SessionCommand, type ProviderSessionView } from '@tui/provider-session.ts'
@@ -1782,12 +1783,47 @@ export class Core {
     return releaseChoices(this.plutofish, drafts, name)
   }
 
-  /** 没带发布信息的请求（订阅自动下载）套用本机保存的作品偏好。 */
-  private withSavedPublication(req: EnqueueRequest): EnqueueRequest {
-    const cached = this.publicationPreferences(this.publicationContext(req))
+  /**
+   * 没带发布信息的请求（订阅自动下载）套用本机保存的作品偏好；换了 115 源账号、新账号还没有偏好时按原任务沿用。
+   * apply=false 只用于核对进度：借用作品与季，不建目录、不保存偏好。
+   */
+  private async withSavedPublication(req: EnqueueRequest, apply: boolean): Promise<EnqueueRequest> {
+    let cached: PublicationPreferences | null = null
+    let failure: unknown
+    try {
+      cached = this.publicationPreferences(this.publicationContext(req))
+    } catch (e) {
+      if (req.publication) throw e
+      failure = e
+    }
+    if (!req.publication && !cached) {
+      const carried = await this.carryOverPublication(req, apply)
+      if (carried) return carried
+      if (failure) throw failure
+    }
     if (!req.publication && cached) req = { ...req, publication: cached.publication,
       tmdb: req.tmdb ?? cached.tmdb, tmdbSeason: req.tmdbSeason ?? cached.tmdbSeason, naming: req.naming ?? cached.naming }
     return req
+  }
+
+  /**
+   * 原 115 账号已从发布端移除或停用时，沿用这部作品最近一次任务的分类、TMDB 和季号，在新账号里按原路径确保上传目录
+   * （已有同名目录直接复用），并保存为新账号的作品偏好；原账号仍可用或没有以前的任务时返回 null。
+   */
+  private async carryOverPublication(req: EnqueueRequest, apply: boolean): Promise<EnqueueRequest | null> {
+    const view = this.plutofish.view()
+    const plan = carryOverPlan(view, { provider: req.detail.provider, sourceWorkId: req.detail.id },
+      [...this.jobs.values()].map((rec) => ({ createdAt: rec.view.createdAt, draft: rec.task.publication, task: rec.task })))
+    if (!plan) return null
+    const sourceAccountId = view.identity?.sourceAccounts ? plan.source.id : undefined
+    let directory = 'id' in plan.directory ? plan.directory : { id: '0', path: '/' }
+    if (apply && 'segments' in plan.directory) {
+      directory = await ensureDirectoryPath(plan.directory.segments, (parent, names) => this.plutofish.createDirectories(plan.source.id, parent, names))
+    }
+    const publication = { category: plan.category, directoryId: directory.id, directoryPath: directory.path, ...(sourceAccountId ? { sourceAccountId } : {}) }
+    if (apply) this.publicationPreferenceStore.save(this.plutofish.view(),
+      { ...this.publicationContext(req), tmdb: plan.tmdb, tmdbSeason: plan.tmdbSeason, naming: plan.naming, sourceAccountId }, publication)
+    return { ...req, publication, tmdb: req.tmdb ?? plan.tmdb, tmdbSeason: req.tmdbSeason ?? plan.tmdbSeason, naming: req.naming ?? plan.naming }
   }
 
   /**
@@ -1796,7 +1832,7 @@ export class Core {
    */
   async subscriptionProgress(req: EnqueueRequest): Promise<SubscriptionProgress | null> {
     this.plutofish.assertReady()
-    req = this.withSavedPublication(structuredClone(req))
+    req = await this.withSavedPublication(structuredClone(req), false)
     const choices = preferRelease(await this.publicationReleases(req), req.preferredReleaseId)
     const item = choices.matchedId ? choices.items.find(r => r.id === choices.matchedId) : undefined
     if (!item) return null
@@ -1806,7 +1842,7 @@ export class Core {
 
   async enqueue(req: EnqueueRequest): Promise<number> {
     this.plutofish.assertReady()
-    req = this.withSavedPublication(structuredClone(req))
+    req = await this.withSavedPublication(structuredClone(req), true)
     const account = this.gatewayAccountFor(req.detail.provider)
     const cli = this.client().fixedAccount(req.detail.provider, account)
     const { tasks, qualityLabel } = this.buildTasks(req)
