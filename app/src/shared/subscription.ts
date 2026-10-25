@@ -13,7 +13,19 @@ export type CheckWindow =
   /** 每集预计上线时间（毫秒时间戳）；从该时间起 graceMinutes 内每 minutes 查一次 */
   | { kind: 'episodes'; times: number[]; graceMinutes: number; minutes: number }
 
-export type SubEpisode = { vid: string; number: number; title: string; firstSeen: number; downloaded?: { tier: number; label: string; at: number } }
+/** 新集还没成功加入下载：记下原因，按退避重试，直到加入下载或确认不用再下。 */
+export type SubPending = { reason: string; attempts: number; at: number; retryAt: number }
+
+export type SubEpisode = {
+  vid: string; number: number; title: string; firstSeen: number
+  downloaded?: { tier: number; label: string; at: number }
+  /** 订阅建立时已经上线的集，默认不补下载 */
+  baseline?: boolean
+  /** 自动下载还没成功；每次到点重试，界面显示原因 */
+  pending?: SubPending
+  /** 不用再下：本机下载历史已有 */
+  skipped?: { by: 'history'; at: number }
+}
 
 export type SubCheck = { at: number; ok: boolean; ms: number; message: string; found: number }
 
@@ -138,6 +150,19 @@ export function nextCheckAt(sub: Pick<Subscription, 'window' | 'lastCheck' | 'pa
 }
 
 export const isDue = (sub: Parameters<typeof nextCheckAt>[0], now: number, globalMinutes?: number) => nextCheckAt(sub, now, globalMinutes) <= now
+
+/** 自动下载失败后的重试间隔：10、20、40、80 分钟，之后每 2 小时一次 */
+export const RETRY_BASE_MIN = 10
+export const RETRY_MAX_MIN = 120
+export function retryDelay(attempts: number): number {
+  return Math.min(RETRY_MAX_MIN, RETRY_BASE_MIN * 2 ** Math.max(0, attempts - 1)) * MIN
+}
+
+/** 待重试的集里最早的重试时间；没有待重试的集时为 Infinity。下次检查不晚于它，按播出窗口检查的订阅也能及时补下。 */
+export function nextRetryAt(sub: Pick<Subscription, 'episodes' | 'autoDownload' | 'paused'>): number {
+  if (sub.paused || !sub.autoDownload) return Infinity
+  return sub.episodes.reduce((at, e) => (e.pending ? Math.min(at, e.pending.retryAt) : at), Infinity)
+}
 
 /** 详情返回的集 → 和已知集合比较出新集（按 vid，忽略预告/花絮栏目） */
 export function diffEpisodes(known: SubEpisode[], latest: Array<{ vid: string; number: number; title: string; collection?: string }>): Array<{ vid: string; number: number; title: string }> {

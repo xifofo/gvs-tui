@@ -128,3 +128,67 @@ test('auto-download skips episodes already in download history', async () => {
   expect(h.enq.length).toBe(1)
   expect(h.enq[0]!.episodes.map((e) => e.vid)).toEqual(['v4'])
 })
+
+test('a failed auto-download stays pending with its reason and is retried until it is queued', async () => {
+  const h = harness()
+  const s = h.m.subscribe({ provider: 'tencent', showId: 's1', title: '剧', poster: '', kind: 'show', rules: 'any' })
+  h.m.stop()
+  await h.m.checkNow(s.id)
+  h.setEps(4)
+  const enqueue = h.deps.enqueue
+  h.deps.enqueue = () => { throw new Error('请选择资源分类') }
+  await h.m.checkNow(s.id)
+  let v = h.m.view().subs[0]!
+  const ep = (vid: string) => h.m.view().subs[0]!.episodes.find((e) => e.vid === vid)!
+  expect([v.lastCheck?.ok, ep('v3').pending?.reason, ep('v3').pending?.attempts, ep('v4').pending?.attempts]).toEqual([false, '请选择资源分类', 1, 1])
+  expect(v.lastCheck?.message).toContain('第 3、4 集未能加入下载：请选择资源分类')
+  expect(h.notes.filter((n) => n.includes('暂未下载')).length).toBe(1)
+  // 下次检查不晚于重试时间；没到重试时间不重试
+  expect(v.nextCheckAt).toBeLessThanOrEqual(ep('v3').pending!.retryAt)
+  h.advance(5)
+  await h.m.tick()
+  expect(ep('v3').pending?.attempts).toBe(1)
+  // 第二次失败不再重复通知，退避加倍
+  h.advance(6)
+  await h.m.tick()
+  expect([ep('v3').pending?.attempts, h.notes.filter((n) => n.includes('暂未下载')).length]).toEqual([2, 1])
+  expect(ep('v3').pending!.retryAt - ep('v3').pending!.at).toBe(20 * 60_000)
+  // 恢复后补下两集，待重试清空
+  h.deps.enqueue = enqueue
+  h.advance(21)
+  await h.m.tick()
+  v = h.m.view().subs[0]!
+  expect(h.enq.map((r) => r.episodes.map((e) => e.vid))).toEqual([['v3', 'v4']])
+  expect([ep('v3').pending, ep('v4').downloaded?.label, v.lastCheck?.ok]).toEqual([undefined, '1080P', true])
+})
+
+test('an episode without a qualifying tier waits for it instead of being skipped for good', async () => {
+  const h = harness()
+  const s = h.m.subscribe({ provider: 'tencent', showId: 's1', title: '剧', poster: '', kind: 'show', rules: '4K' })
+  h.m.stop()
+  await h.m.checkNow(s.id)
+  h.setEps(3)
+  await h.m.checkNow(s.id)
+  const v3 = () => h.m.view().subs[0]!.episodes.find((e) => e.vid === 'v3')!
+  expect([h.enq.length, v3().pending?.reason, h.m.view().subs[0]!.lastCheck?.ok]).toEqual([0, '规则组没有一档满足，等待更好的版本', true])
+  h.setQualities([{ index: 0, label: '4K', title: '', stream: '', width: 3840, height: 2160, size: 2, codec: 'hevc', drm: '', hdr: '', fps: 25, audios: [] }])
+  h.advance(11)
+  await h.m.tick()
+  expect([h.enq.length, v3().downloaded?.label, v3().pending]).toEqual([1, '4K', undefined])
+})
+
+test('pending retries survive a restart', async () => {
+  const h = harness()
+  const s = h.m.subscribe({ provider: 'tencent', showId: 's1', title: '剧', poster: '', kind: 'show', rules: 'any' })
+  h.m.stop()
+  await h.m.checkNow(s.id)
+  h.setEps(3)
+  h.deps.enqueue = () => { throw new Error('PlutoFish 版本查询失败（HTTP 502）') }
+  await h.m.checkNow(s.id)
+  const again = new SubscriptionManager({ ...h.deps, enqueue: (r: EnqueueRequest) => { h.enq.push(r); return 1 }, load: () => h.saved() })
+  again.stop()
+  expect(again.view().subs[0]!.episodes.find((e) => e.vid === 'v3')?.pending?.reason).toBe('PlutoFish 版本查询失败（HTTP 502）')
+  h.advance(11)
+  await again.tick()
+  expect(h.enq.map((r) => r.episodes.map((e) => e.vid))).toEqual([['v3']])
+})
