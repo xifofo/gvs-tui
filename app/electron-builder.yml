@@ -11,7 +11,7 @@ npmRebuild: false
 # 只用来生成 latest.yml（electron-updater 的更新清单）；实际检查地址在 updater.ts 里按 desktop-v* 发布算出来
 publish:
   provider: generic
-  url: https://github.com/my-name-is-alan/gvs-tui/releases/download/desktop-v${version}
+  url: https://github.com/xifofo/gvs-tui/releases/download/desktop-v${version}
 win:
   target:
     - target: nsis

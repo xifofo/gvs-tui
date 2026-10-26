@@ -58,6 +58,8 @@ Electron 二进制下载慢时：`ELECTRON_MIRROR=https://npmmirror.com/mirrors/
 
 ## 打包
 
+正式安装包通过 GitHub Actions 构建并发布到 `xifofo/gvs-tui` 的 Releases；推送 `desktop-v<版本>` 标签即可触发 Windows x64 和 macOS arm64/x64 打包。版本必须与 `app/package.json` 一致，详见 [自动发布说明](../docs/desktop-releases.md)。
+
 ```bash
 bun run dist:win     # release/GVS-Setup-<版本>-x64.exe（NSIS，可选安装目录，自带媒体工具）
 bun run dist:mac     # 需在 Mac 上执行；release/GVS-<版本>-arm64.dmg / -x64.dmg

@@ -9,28 +9,27 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare draft desktop release
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate desktop version
+        shell: bash
         run: |
-          notes="docs/release-${GITHUB_REF_NAME}.md"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "release already exists"
-            exit 0
-          fi
-          if [ -f "$notes" ]; then
-            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "GVS 桌面端 $GITHUB_REF_NAME" --notes-file "$notes"
-          else
-            echo "::warning::缺少 $notes，改用自动生成的发布说明"
-            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "GVS 桌面端 $GITHUB_REF_NAME" --generate-notes
+          set -euo pipefail
+          version=$(node -p 'require("./app/package.json").version')
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "desktop-v$version" ]]; then
+            echo "::error::标签必须与 app/package.json 的版本一致：desktop-v$version"
+            exit 1
           fi
 
   build:
@@ -44,6 +43,7 @@ jobs:
           - os: macos-latest
             target: --mac
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: app
@@ -51,10 +51,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.14"
+          bun-version: "1.4.3"
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
       - uses: actions/setup-go@v5
         with:
           go-version-file: tools/iqcn-local/go.mod
@@ -87,14 +87,14 @@ jobs:
       - run: bun install --frozen-lockfile
         working-directory: .
       - run: bun install --frozen-lockfile
-      - name: 版本号取自标签
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
-        shell: bash
-        run: npm pkg set version="${GITHUB_REF_NAME#desktop-v}"
       - run: node node_modules/electron/install.js
       - run: bun run typecheck
       - name: Verify search source mapping
-        run: bun test src/main/cards.test.ts src/main/search-sources.test.ts src/shared
+        run: bun test src/main/cards.test.ts src/main/search-sources.test.ts src/main/updater-release.test.ts src/shared
+      - name: Verify bundled Windows media tools offline
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: bun run tools:check
       - name: Verify bounded download concurrency
         working-directory: .
         run: |
@@ -124,34 +124,55 @@ jobs:
       - run: bun x electron-builder ${{ matrix.target }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      - name: Upload installers to draft release
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          shopt -s nullglob
-          files=(release/*.exe release/*.exe.blockmap release/*.dmg release/latest*.yml)
-          test "${#files[@]}" -gt 0
-          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+      - name: Save installers and update metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          path: |
+            app/release/*.exe
+            app/release/*.exe.blockmap
+            app/release/*.dmg
+            app/release/latest*.yml
+          if-no-files-found: error
+          retention-days: 14
 
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/desktop-v')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
       - name: Verify installers and publish desktop release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
-          grep -Fq "GVS-Setup-${GITHUB_REF_NAME#desktop-v}-x64.exe" <<< "$assets"
-          grep -Fq "GVS-${GITHUB_REF_NAME#desktop-v}-arm64.dmg" <<< "$assets"
-          grep -Fq "GVS-${GITHUB_REF_NAME#desktop-v}-x64.dmg" <<< "$assets"
-          grep -Fxq 'latest.yml' <<< "$assets"
-          grep -Fxq 'latest-mac.yml' <<< "$assets"
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#desktop-v}"
+          for file in "GVS-Setup-$version-x64.exe" "GVS-Setup-$version-x64.exe.blockmap" \
+            "GVS-$version-arm64.dmg" "GVS-$version-x64.dmg" latest.yml latest-mac.yml; do
+            test -s "release-assets/$file"
+          done
+          (cd release-assets && sha256sum ./* > SHA256SUMS.txt)
           notes="docs/release-${GITHUB_REF_NAME}.md"
+          if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft); then
+            if [[ "$draft" != true ]]; then
+              echo "::error::已发布的版本不能覆盖；请递增版本并推送新标签"
+              exit 1
+            fi
+          elif [ -f "$notes" ]; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "GVS $version" --notes-file "$notes"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "GVS $version" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
           if [ -f "$notes" ]; then
             gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false --notes-file "$notes"
           else
