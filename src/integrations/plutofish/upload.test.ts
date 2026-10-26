@@ -111,7 +111,7 @@ test.each([0, 51200, 102400, 204800])('失败后只补传缺失分片并保留�
         const trafficLimit = (options as unknown as { headers: Record<string, string> }).headers['x-oss-traffic-limit']
         if (legacy) expect(trafficLimit).toBeUndefined()
         else expect(trafficLimit).toBe(String(Math.max(102400, rate) * 8))
-        if (n === 2 && fail) throw new Error('simulated network loss')
+        if (n === 2 && fail) throw Object.assign(new Error('simulated network loss'), { code: 'ECONNRESET' })
         remote.set(n, Buffer.from(buffer))
         return { etag: digest(buffer) } as OSS.UploadPartResult
       },
@@ -123,7 +123,7 @@ test.each([0, 51200, 102400, 204800])('失败后只补传缺失分片并保留�
     } }
   }
   const options = () => ({ path, dispatch: activeDispatch, checkpoint: cp, signal, credentials: getCredentials, factory, save: () => { saved = JSON.stringify(cp) }, progress: (bytes: number) => { progress.push(bytes) } })
-  await expect(uploadParts(options())).rejects.toThrow('network')
+  await expect(uploadParts(options())).rejects.toThrow('上传第 2 片失败：网络连接被重置')
   expect(listCount).toBe(0)
   expect(cp.parts.map(p => p.number)).toEqual([1])
   expect(saved).not.toContain('TEMP-')
@@ -187,7 +187,9 @@ test.each([
     expect(inits).toBe(1)
     expect(uploaded).toBe(data.length)
   } else {
-    await expect(run).rejects.toThrow('opaque provider details')
+    const error = await run.catch(error => error)
+    expect(error.diagnostic.code).toBe(code)
+    expect(error.message).not.toContain('opaque provider details')
     expect(inits).toBe(0)
     expect(cp.uploadId).toBe('OLD')
   }
@@ -223,6 +225,71 @@ test('顺序分片合并回执未知且会话已消失时保留断点，等待�
   const error = await uploadParts({ path, dispatch, checkpoint: cp, credentials, factory, signal, save() {}, progress() {} }).then(() => null, e => e)
   expect(retryableError(error)).toBe(true)
   expect(cp.uploadId).toBe('OLD'); expect(cp.completing).toBe(true)
+})
+
+test.each(['ECONNRESET', 'AccessDenied'])('核对分片失败 %s 不等于会话失效，保留原断点', async code => {
+  const path = join(temp(), 'keep.bin'), data = Buffer.alloc(150000, 7)
+  writeFileSync(path, data)
+  const signal = new AbortController().signal
+  const cp: UploadCheckpoint = { file: await fingerprint(path, signal), partSize: 256 * 1024, parts: [{ number: 1, size: data.length, etag: digest(data) }],
+    uploadId: 'KEEP', sequential: true, completing: false, object: dispatch.object, bucket: dispatch.bucket, pickCode: dispatch.pickCode }
+  const before = structuredClone(cp)
+  let initialized = false
+  const factory: OSSFactory = () => ({ close() {}, client: {
+    async listParts() { throw Object.assign(new Error('private details'), { code, status: code === 'AccessDenied' ? 403 : -1 }) },
+    async initMultipartUpload() { initialized = true; throw new Error('不得重建') },
+    async uploadPart() { throw new Error('不得上传') },
+    async completeMultipartUpload() { throw new Error('不得合并') },
+  } })
+  const error = await uploadParts({ path, dispatch, checkpoint: cp, credentials, factory, signal, save() {}, progress() {} }).then(() => null, error => error)
+  expect(error.diagnostic.code).toBe(code)
+  expect(retryableError(error)).toBe(code === 'ECONNRESET')
+  expect(cp.uploadId).toBe(before.uploadId); expect(cp.parts).toEqual(before.parts)
+  expect(initialized).toBe(false)
+})
+
+test('未提交合并的失效会话在原任务内重建，失败后重启仍能恢复，无需移动文件', async () => {
+  const path = join(temp(), 'expired.bin'), data = Buffer.alloc(150000, 7)
+  writeFileSync(path, data)
+  const signal = new AbortController().signal
+  let cp: UploadCheckpoint = { file: await fingerprint(path, signal), partSize: 256 * 1024, parts: [{ number: 1, size: data.length, etag: digest(data) }],
+    uploadId: 'EXPIRED', sequential: true, completing: false, object: dispatch.object, bucket: dispatch.bucket, pickCode: dispatch.pickCode }
+  let saved = '', failInit = true, inits = 0, puts = 0
+  const factory: OSSFactory = () => ({ close() {}, client: {
+    async listParts(_name, id) { expect(id).toBe('EXPIRED'); throw Object.assign(new Error('private details'), { code: 'NoSuchUpload', status: 404 }) },
+    async initMultipartUpload() { inits++; if (failInit) throw Object.assign(new Error('private details'), { code: 'ECONNRESET' }); return { uploadId: 'NEW' } as OSS.InitMultipartUploadResult },
+    async uploadPart(_name, id, _number, buffer) { expect(id).toBe('NEW'); puts++; return { etag: digest(buffer) } as OSS.UploadPartResult },
+    async completeMultipartUpload() { return { data: { state: true } } as unknown as OSS.CompleteMultipartUploadResult },
+  } })
+  const run = () => uploadParts({ path, dispatch, checkpoint: cp, credentials, factory, signal, save() { saved = JSON.stringify(cp) }, progress() {} })
+  await expect(run()).rejects.toThrow()
+  expect(cp.uploadId).toBeUndefined()
+  expect(cp.previousUploadId).toBe('EXPIRED')
+  expect(cp.parts).toEqual([])
+  cp = JSON.parse(saved); failInit = false
+  await run()
+  expect(inits).toBe(2); expect(puts).toBe(1)
+  expect(cp.pickCode).toBe(dispatch.pickCode); expect(cp.object).toBe(dispatch.object)
+  expect(saved).not.toContain('TEMP-')
+})
+
+test('续传补齐中间缺失分片后按编号合并，避免重复 InvalidPartOrder', async () => {
+  const path = join(temp(), 'unordered.bin'), data = Buffer.alloc(300000, 5), partSize = 128 * 1024
+  writeFileSync(path, data)
+  const signal = new AbortController().signal
+  const parts = [1, 2, 3].map(number => { const bytes = data.subarray((number - 1) * partSize, number * partSize); return { number, size: bytes.length, etag: digest(bytes) } })
+  const cp: UploadCheckpoint = { file: await fingerprint(path, signal), partSize, parts,
+    uploadId: 'ACTIVE', sequential: true, completing: false, object: dispatch.object, bucket: dispatch.bucket, pickCode: dispatch.pickCode }
+  const puts: number[] = []
+  const factory: OSSFactory = () => ({ close() {}, client: {
+    async initMultipartUpload() { throw new Error('不能丢弃有效断点') },
+    async listParts() { return { uploadId: 'ACTIVE', bucket: dispatch.bucket, name: dispatch.object, isTruncated: false,
+      parts: parts.filter(p => p.number !== 2).map(p => ({ PartNumber: p.number, Size: p.size, ETag: p.etag })) } as unknown as OSS.ListPartsResult },
+    async uploadPart(_name, id, number, buffer) { expect(id).toBe('ACTIVE'); puts.push(number); return { etag: digest(buffer) } as OSS.UploadPartResult },
+    async completeMultipartUpload(_name, _id, completed) { expect(completed.map(p => p.number)).toEqual([1, 2, 3]); return { data: { state: true } } as unknown as OSS.CompleteMultipartUploadResult },
+  } })
+  await uploadParts({ path, dispatch, checkpoint: cp, credentials, factory, signal, save() {}, progress() {} })
+  expect(puts).toEqual([2])
 })
 
 test('等待临时凭据期间取消，响应到达后不能再创建 OSS 会话', async () => {
