@@ -1,7 +1,7 @@
 <!-- 下载前确认发布分类与集号；选项来自已验证发布端，不保存任何密钥。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import type { EpisodeView, PlutoFishView, PublicationContext, PublicationInput, PublicationPreferences, PublisherDirectoryPage, Recognition, TmdbHit } from '@shared/api'
+import type { EpisodeView, PlutoFishView, PublicationContext, PublicationInput, PublicationPreferences, PublisherDirectoryPage, Recognition, RecognizedWork, TmdbHit } from '@shared/api'
 import { publicationDirectoryPreview } from '@shared/publication-directory'
 import type { OutputNaming } from '@shared/output-naming'
 import { publisherSources } from '../../../../../../src/integrations/plutofish/sources'
@@ -84,9 +84,9 @@ async function ready() {
   if (categoryError.value) throw new Error(categoryError.value)
 }
 async function save() { await ready(); await persist() }
-function remember(value = model.value) { if (props.remember !== false) void persist(value).catch(() => {}) }
-watch(() => props.tmdbSeason, () => { if (!loading.value && !props.busy) remember() })
-watch(() => JSON.stringify(props.naming), () => { if (!loading.value && !props.busy) remember() })
+function remember(value = model.value) { if (props.remember !== false && !publicationCategoryError(props.connection, value.category)) void persist(value).catch(() => {}) }
+watch(() => props.tmdbSeason, () => { if (!loading.value && !applyingRecognition.value && !props.busy) remember() })
+watch(() => JSON.stringify(props.naming), () => { if (!loading.value && !applyingRecognition.value && !props.busy) remember() })
 defineExpose({ loading: computed(() => loading.value || creatingDirectory.value || recognitionPending.value || applyingRecognition.value), ready, save, categoryValid })
 function changeSource(event: Event) {
   model.value = { ...model.value, sourceAccountId: (event.target as HTMLSelectElement).value, directoryId: '0', directoryPath: '/', directoryCreation: undefined, releaseSelection: undefined }
@@ -104,16 +104,24 @@ async function applyRecognition(result: Recognition) {
   const work = result.work
   if (!result.canAutoFill || !work || loading.value || props.busy) return
   if (publicationCategoryError(props.connection, work.category.value)) { error.value = '识别分类已不可用，请刷新分类或手动选择'; return }
+  await applyConfirmedWork(work, work.mediaType === 'tv' ? result.parsed.seasonNumber : undefined)
+}
+/** 人工确认使用独立入口；缺失或已失效的分类留空，不沿用旧作品的分类。 */
+async function applyConfirmedWork(work: RecognizedWork, season?: number) {
+  if (loading.value || applyingRecognition.value || creatingDirectory.value || props.busy || !source.value || props.connection?.status !== 'verified') return
+  const category = work.category.status === 'matched' && !publicationCategoryError(props.connection, work.category.value) ? work.category.value : ''
+  error.value = ''
   applyingRecognition.value = true
   const scope = recognitionScope.value
   const hit: TmdbHit = { id: Number(work.tmdbId), kind: work.mediaType === 'movie' ? 'movie' : 'show', name: work.title, title: work.englishTitle || work.originalTitle || work.title, year: work.year ?? 0, overview: '' }
-  model.value = { ...model.value, category: work.category.value, releaseSelection: undefined }
-  emit('recognized', hit, work.mediaType === 'tv' ? result.parsed.seasonNumber : undefined)
+  model.value = { ...model.value, category, releaseSelection: undefined }
+  emit('recognized', hit, work.mediaType === 'tv' ? season : undefined)
   await nextTick()
   applyingRecognition.value = false
   if (scope !== recognitionScope.value) return
   hydratedScope = JSON.stringify([props.connection?.url, props.connection?.identity?.id, props.provider, props.sourceWorkId, props.kind])
-  remember()
+  // 分类待补充时只保留表单草稿，选好分类后再保存完整偏好。
+  if (category) remember()
 }
 const directoryPreview = computed(() => !props.directoryPreviewReady ? '' : publicationDirectoryPreview({
   categoryLabel: props.connection?.identity?.categories?.find(c => c.value === model.value.category)?.label ?? '',
@@ -183,7 +191,7 @@ function changeEpisode(vid: string, event: Event) {
         <option v-for="account in sources" :key="account.id" :value="account.id" :disabled="account.enabled === false || !!(account.provider && account.provider !== '115')">{{ account.provider === '115' || !account.provider ? '115' : account.provider }} · {{ account.name }} · {{ account.alias }}</option>
       </select>
     </label>
-    <PublicationRecognition :scope="recognitionScope" :source-account-id="source?.id ?? ''" :sample="recognitionFileName ?? ''" :draft-key="recognitionDraft" :can-auto-fill="!tmdb && !model.category && !Object.keys(naming ?? {}).length" :disabled="loading || creatingDirectory || applyingRecognition || !!busy || connection?.status !== 'verified'" @pending="recognitionPending = $event" @apply="applyRecognition" />
+    <PublicationRecognition :scope="recognitionScope" :source-account-id="source?.id ?? ''" :sample="recognitionFileName ?? ''" :draft-key="recognitionDraft" :can-auto-fill="!tmdb && !model.category && !Object.keys(naming ?? {}).length" :disabled="loading || creatingDirectory || applyingRecognition || !!busy || connection?.status !== 'verified'" @pending="recognitionPending = $event" @apply="applyRecognition" @confirm="applyConfirmedWork" />
     <ResourceCategorySelect :model-value="model.category" :connection="connection" :disabled="loading || creatingDirectory || busy" @update:model-value="changeCategory" />
     <div class="field">上传目录
       <div class="directory-value"><span :title="directoryLabel">{{ directoryLabel }}</span>

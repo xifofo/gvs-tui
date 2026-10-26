@@ -1,5 +1,5 @@
 import type { Recognition } from '../../../src/integrations/plutofish/recognition-types'
-export type { Recognition } from '../../../src/integrations/plutofish/recognition-types'
+export type { Recognition, RecognizedWork } from '../../../src/integrations/plutofish/recognition-types'
 import type { RetentionSettings } from '../../../src/integrations/plutofish/retention-settings.ts'
 import type { ReleaseChoices } from '../../../src/integrations/plutofish/release-selection.ts'
 export type { ReleaseChoices, ReleaseSelection } from '../../../src/integrations/plutofish/release-selection.ts'

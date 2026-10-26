@@ -269,6 +269,7 @@ function selectManualTmdb(hit: TmdbHit) {
 }
 
 function applyRecognizedPublication(hit: TmdbHit, season?: number) {
+  resetNaming()
   selectManualTmdb(hit)
   manualTitle.value = hit.title || null
   if (season !== undefined) manualSeason.value = String(season)
