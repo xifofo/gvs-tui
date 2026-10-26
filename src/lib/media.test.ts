@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { cleanRELog, formatSpeed, hlsExtinfSeconds, hlsKeyArgs, playlistOverall, playlistStatus, reProgress, reHttpFailureMonitor, reSidecarProgress, reWorkPhase, runM3u8dl, CdnDenied, reDownloadedSegments, reListedSegments, transferSpeed } from './media.ts'
+import { cleanRELog, formatSpeed, hlsExtinfSeconds, hlsKeyArgs, playlistOverall, playlistStatus, reProgress, reHttpFailureMonitor, reSidecarProgress, reWorkPhase, runM3u8dl, CdnDenied, reDownloadedSegments, reListedSegments, streamConcurrencyArgs, transferSpeed } from './media.ts'
 import { DownloaderCompatibilityError } from './downloader-error.ts'
 
 test('CENC key is also supplied to the HLS parser, skipping the key URI fetch', () => {
@@ -358,3 +358,10 @@ test('RE reports nested decrypt growth even when its console output ends at merg
     expect(seen.slice(decryptIndex+1).some(s=>s.phase==='download')).toBe(true)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 },5000)
+
+test('concurrent streams flag is only added when asked for', () => {
+  // N_m3u8DL-RE processes one selected stream at a time unless -mt is given;
+  // DRM OTT downloads (video + audio) opt in, everything else stays sequential.
+  expect(streamConcurrencyArgs(true)).toEqual(['-mt'])
+  expect(streamConcurrencyArgs(false)).toEqual([])
+})

@@ -160,10 +160,16 @@ internal static class MergeUtil
                 // concat demuxer 要求各输入轨道 time_base 一致。init 的 timescale 可以
                 // 不同，FFmpeg 解密也会改写它，因此先无损 remux 到共同的视频 timescale。
                 // copyts 保留 PTO 对应的源时间，不能在此把每份输入单独归零。
-                var path = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputs[i]))!, $"{Guid.NewGuid():N}.normalized.mp4");
+                // Keep the container family: an E-AC-3 audio part cannot be remuxed
+                // into MP4 (the caller already switched such outputs to .mka/.mkv).
+                var normalizedExt = Path.GetExtension(output).ToLowerInvariant() is ".mka" or ".mkv" ? Path.GetExtension(output).ToLowerInvariant() : ".mp4";
+                var path = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(inputs[i]))!, $"{Guid.NewGuid():N}.normalized{normalizedExt}");
                 normalized.Add(path);
+                // -video_track_timescale belongs to the mov muxer; Matroska audio
+                // outputs (E-AC-3/AC-3/DTS) reject it.
+                var timescale = normalizedExt == ".mp4" ? " -video_track_timescale 90000" : "";
                 if (InvokeFFmpeg(binary,
-                    $"-loglevel warning -nostdin -y -copyts -avoid_negative_ts disabled -i \"{Path.GetFullPath(inputs[i])}\" -map 0:v? -map 0:a? -map 0:s? -c copy -video_track_timescale 90000 \"{path}\"",
+                    $"-loglevel warning -nostdin -y -copyts -avoid_negative_ts disabled -i \"{Path.GetFullPath(inputs[i])}\" -map 0:v? -map 0:a? -map 0:s? -c copy{timescale} \"{path}\"",
                     Path.GetDirectoryName(path)!) != 0)
                     return false;
                 inputs[i] = path;

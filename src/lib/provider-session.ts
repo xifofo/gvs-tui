@@ -1,6 +1,6 @@
 import { appleTVImportCookie } from './appletvplus-auth'
 export type SessionProvider = 'mewatch' | 'hamivideo' | 'friday' | 'linetv' | 'iq' | 'iqcn' | 'mgtv' | 'bilibili' | 'migu' | 'appletvplus' | 'dsnp' | 'crunchyroll'
-export type SessionCommand = { provider: SessionProvider; op: string; email?: string; token?: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string; country?: string }
+export type SessionCommand = { provider: SessionProvider; op: string; email?: string; token?: string; session?: string; terminal?: 'mobile' | 'tv' | 'unified'; cookie?: string; phone?: string; code?: string; confirm?: boolean; profileId?: string; pin?: string; username?: string; password?: string; areaCode?: string; id?: string; country?: string }
 export type ProviderSessionView = { provider: SessionProvider; terminal?: 'mobile' | 'tv' | 'unified'; state: string; authenticated: boolean; summary: string; qrDataUrl?: string; webAuthenticated?: boolean; tvAuthenticated?: boolean; userCode?: string; url?: string; interval?: number; expiresAt?: number; resendAfterSeconds?: number; profiles?: Array<{ id: string; name: string }> }
 type Invoke = (provider: string, action: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 const text = (v: unknown) => typeof v === 'string' ? v : ''
@@ -96,9 +96,15 @@ export class ProviderSessions {
     if (c.provider === 'crunchyroll') {
       // Crunchyroll 无服务端会话：网关按 refresh_token 逐次换取 token，客户端只校验并持有。
       if (c.op === 'import') {
-        const token = (c.token || '').trim()
-        if (!token || token.length > 4096) throw new Error('请输入本人的 Crunchyroll refresh_token')
-        input.refresh_token = token
+        const session = (c.session || '').trim()
+        if (session) {
+          if (session.length < 8 || session.length > 4096) throw new Error('Crunchyroll 网页会话无效')
+          input.session = session
+        } else {
+          const token = (c.token || '').trim()
+          if (!token || token.length > 4096) throw new Error('请输入本人的 Crunchyroll refresh_token 或网页会话')
+          input.refresh_token = token
+        }
       }
       if (c.op === 'status' || c.op === 'logout') {
         const view: ProviderSessionView = { provider: c.provider, state: c.op === 'logout' ? 'logged_out' : 'unverified', authenticated: false, summary: c.op === 'logout' ? '已从本机清除令牌' : 'Crunchyroll 不保存服务端会话；请在需要时重新导入令牌' }
