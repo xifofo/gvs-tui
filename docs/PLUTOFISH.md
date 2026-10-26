@@ -161,11 +161,13 @@ Electron 回归使用临时配置和本机 HTTP 夹具，覆盖两端失败、�
 
 桌面端进入「选画质 → 发布与保存 → PlutoFish 发布信息」后，首次空白草稿自动用命名预览中的文件名调用 `POST /api/v1/publisher/tmdb/recognize`。请求固定到所选上传账号；TMDB Key 和分类规则由 PlutoFish 服务端管理。可手动修改文件名再次识别。只有服务端明确允许自动回填，且识别期间草稿未变化，才填入作品、TMDB ID、类型、分类、年份和季号；已有信息需要点击「替换当前作品信息」。平台集号不因样本文件名被批量覆盖。
 
-识别后的作品、分类和季号参与命名预览、版本查询、保存偏好及下载入队。切换上传账号或作品后忽略旧响应；已保存偏好优先恢复，不重复自动识别。订阅编辑也提供手动文件名识别。歧义、分类缺失、旧服务端或上游故障保留手动分类和 TMDB ID 入口。
+识别后的作品、分类和季号参与命名预览、版本查询、保存偏好及下载入队。需要确认时展开候选列表，可查看原名、年份、类型、TMDB ID、分类和冲突信息，选中后点击“确认并填入”；候选被截断时显示提示。剧集确认区可核对或填写季号（特别篇为 0），缺少季号或多季范围不会默认采用旧季号，须填写单一季号后确认。分类未匹配或已失效时留空，选择有效分类后才能继续。下载页与订阅编辑页共用此流程，不修改平台集号。
+
+切换上传账号或作品后忽略旧响应；已保存偏好优先恢复，不重复自动识别。订阅编辑也提供手动文件名识别。旧服务端或上游故障保留手动分类和 TMDB ID 入口。
 
 终端版选完画质后使用待下载文件名自动识别，确认页按 `R` 可输入文件名重新识别并替换待下载作品与分类，按 `C` 继续手动选择分类。识别不读取媒体、下载文件或访问网盘。
 
-本地验证：`bun test src/integrations/plutofish/recognition.test.ts`；桌面端在 `app/` 执行 `pnpm exec vite build --config scripts/recognition-smoke.config.ts` 后，使用 Electron 运行 `../.build/recognition/smoke.cjs` 验证真实 Core 与回环协议。附加 `--interactive` 打开隔离 UI，`--narrow-dark` 使用窄窗口与暗色；测试文件名前缀 `Slow`、`Ambiguous`、`Old` 分别模拟慢响应、歧义和旧服务端。测试不读取真实配置或调用网盘。
+本地验证：`bun test src/integrations/plutofish/recognition.test.ts`；桌面端在 `app/` 构建当前渲染页面并执行 `pnpm exec vite build --config scripts/recognition-smoke.config.ts` 后，使用 Electron 运行 `../.build/recognition/smoke.cjs` 验证真实 Core 与回环协议。附加 `--ui` 自动验证下载页和订阅编辑的候选确认，`--interactive` 打开隔离 UI，`--narrow-dark` 使用窄窗口与暗色；测试文件名前缀 `Slow`、`Ambiguous`、`Old` 分别模拟慢响应、歧义和旧服务端。测试不读取真实配置或调用网盘。
 
 ### 115 请求去重
 

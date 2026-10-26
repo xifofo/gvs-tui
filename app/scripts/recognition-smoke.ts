@@ -1,4 +1,4 @@
-/** 隔离 Core 合约验证；--interactive 打开真实渲染页面供界面验收，不自动操作 UI。 */
+/** 隔离 Core 合约验证；--ui 自动验收候选确认，--interactive 打开真实渲染页面供手动验收。 */
 import { app, BrowserWindow, ipcMain } from 'electron'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -9,6 +9,7 @@ import { Core } from '../src/main/core'
 import { GwClient } from '../../src/lib/client'
 import { DEFAULT_UI_PREFS } from '../src/shared/ui-prefs'
 import type { Recognition, EnqueueRequest } from '../src/shared/api'
+import { runRecognitionUI } from './recognition-ui-smoke'
 
 const profile = mkdtempSync(join(tmpdir(), 'gvs-recognition-'))
 process.env.APPDATA = profile
@@ -18,7 +19,16 @@ const requests: Array<{ path: string; body: any }> = []
 const sources = [{ id: 'first', alias: 'default', name: '默认账号', provider: '115' }, { id: 'second', alias: 'selected', name: '第二账号', provider: '115' }]
 function result(fileName: string): Recognition {
   const work = { tmdbId: '123', mediaType: 'tv' as const, title: '星海纪行', originalTitle: 'Stars', englishTitle: 'Stars', year: 2024, posterUrl: '', category: { name: '动画番剧', value: 'anime', label: '动画番剧', status: 'matched' as const } }
-  return { status: fileName.includes('Ambiguous') ? 'ambiguous' : 'compatible', canAutoFill: !fileName.includes('Ambiguous'), reasons: [], truncated: false, selectionBasis: '', parsed: { title: 'Stars', mediaType: 'tv', seasonNumber: 2, episodeNumber: 3, resolution: '1080p', source: 'WEB-DL', warnings: [] }, work, workTarget: fileName.includes('Ambiguous') ? null : { tmdbId: '123', mediaType: 'tv', category: 'anime' }, candidates: [{ work, conflicts: [] }] }
+  const value: Recognition = { status: 'compatible', canAutoFill: true, reasons: [], truncated: false, selectionBasis: '', parsed: { title: 'Stars', mediaType: 'tv', seasonNumber: 2, episodeNumber: 3, resolution: '1080p', source: 'WEB-DL', warnings: [] }, work, workTarget: { tmdbId: '123', mediaType: 'tv', category: 'anime' }, candidates: [{ work, conflicts: [] }] }
+  if (fileName.includes('Ambiguous')) {
+    value.status = 'review'; value.canAutoFill = false; value.work = null; value.workTarget = null; value.truncated = true
+    value.candidates.push({ work: { ...work, tmdbId: '456', mediaType: 'movie', title: '星海纪行：归途', originalTitle: 'Stars: Homecoming', englishTitle: 'Stars Homecoming', year: 2025 }, conflicts: [{ field: 'year', expected: '2024', actual: '2025' }] },
+      { work: { ...work, tmdbId: '789', title: '星海纪行：新篇', category: { ...work.category, status: 'disabled' } }, conflicts: [] })
+    if (fileName.includes('Range')) value.parsed.seasonEnd = 3
+    if (fileName.includes('Missing')) delete value.parsed.seasonNumber
+    if (fileName.includes('Special')) value.parsed.seasonNumber = 0
+  }
+  return value
 }
 const server = createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json')
@@ -28,7 +38,7 @@ const server = createServer(async (req, res) => {
   if (path.endsWith('/me')) return void res.end(JSON.stringify({ id: 'p', name: '隔离识别测试', kind: 'publisher', sourceAccount: sources[0], sourceAccounts: sources, categories: [{ value: 'manual', label: '手动分类' }, { value: 'anime', label: '动画番剧' }], capabilities: { uploadClientGrouping: true } }))
   if (path.endsWith('/tmdb/recognize')) {
     assert.equal(req.headers.authorization, 'Bearer test-only')
-    if (body.fileName.includes('Slow')) await new Promise(r => setTimeout(r, 5000))
+    if (body.fileName.includes('Slow')) await new Promise(r => setTimeout(r, process.argv.includes('--ui') ? 700 : 5000))
     if (body.fileName.includes('Old')) { res.writeHead(404); return void res.end(JSON.stringify({ error: { code: 'NOT_FOUND' } })) }
     return void res.end(JSON.stringify(result(body.fileName)))
   }
@@ -61,7 +71,7 @@ async function main() {
   await assert.rejects(core.recognizePublication('second', 'Old.mkv'), /尚不支持/)
   assert.equal(core.plutofish.ready, true)
   console.log('Core 识别、第二账号、作品/分类/季号入队、偏好回读、歧义与旧服务回退验证通过')
-  if (!process.argv.includes('--interactive')) return void app.quit()
+  if (!process.argv.includes('--interactive') && !process.argv.includes('--ui')) return void app.quit()
   ipcMain.handle('recognition-fixture', async (_event, method, ...args) => {
     if (method === 'recognizePublication') return core.recognizePublication(args[0], args[1])
     if (method === 'publicationPreferences') return core.publicationPreferences(args[0])
@@ -80,11 +90,19 @@ async function main() {
     preload = preload.replace(new RegExp(`case '${method}':`), `case '${method}': return ipcRenderer.invoke('recognition-fixture', method, ...args);\ncase 'unused-${method}':`)
   }
   preload = preload.replace('switch (method) {', "switch (method) {\ncase 'publicationReleases': case 'recognizePublication': case 'refreshPublicationCategories': return ipcRenderer.invoke('recognition-fixture', method, ...args);")
+  preload = preload.replace('switch (method) {', `switch (method) {
+    case 'subscriptions': return { subs: [{ id: 'fixture-sub', provider: 'youku', showId: 'fixture-show', title: '山海回声', poster: '', kind: 'show', state: 'N', paused: false, rules: 'any', autoDownload: true, upgrade: false, updateText: '', total: 0, episodes: [], newCount: 0, lastCheck: null, nextCheckAt: 0, createdAt: 1 }], paused: false, intervalMinutes: 5, running: false, lastRunAt: 0 };
+    case 'updateSubscription': return;
+  `)
   const preloadPath = join(output, 'preload.cjs'); writeFileSync(preloadPath, preload)
-  win = new BrowserWindow({ width: process.argv.includes('--narrow-dark') ? 1000 : 1280, height: process.argv.includes('--narrow-dark') ? 720 : 900, title: 'GVS 识别验证', webPreferences: { preload: preloadPath, contextIsolation: true, sandbox: true } })
+  win = new BrowserWindow({ width: process.argv.includes('--narrow-dark') ? 1000 : 1280, height: process.argv.includes('--narrow-dark') ? 720 : 900, title: 'GVS 识别验证', webPreferences: { preload: preloadPath, contextIsolation: true, sandbox: true, backgroundThrottling: false } })
   win.webContents.session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: /^(https?|wss?):/i.test(details.url) }))
   win.webContents.on('console-message', event => { if (event.level === 'error') console.error(event.message) })
   await win.loadFile(resolve('out/renderer/index.html'))
+  if (process.argv.includes('--ui')) {
+    await runRecognitionUI(win, output, process.argv.includes('--narrow-dark'))
+    return void app.quit()
+  }
   console.log('交互验收已就绪：Slow / Ambiguous / Old 文件名前缀分别模拟慢响应、歧义和旧服务')
 }
 main().catch(error => { console.error(error); app.exit(1) })
