@@ -33,7 +33,7 @@ const d = computed(() => store.detail)
 const probe = computed(() => store.probe)
 const qIndex = ref(0)
 const audioIds = ref<string[]>([])
-/** Separately downloadable subtitles (Disney+); empty = subtitles follow the video. */
+/** Separately downloadable subtitle renditions (Apple TV / Disney+); empty = subtitles follow the video. */
 const subtitles = computed(() => probe.value?.subtitles ?? [])
 const subtitleIds = ref<string[]>([])
 watch(subtitles, (list) => { subtitleIds.value = list.filter((s) => s.selected).map((s) => s.id) }, { immediate: true })
@@ -578,6 +578,7 @@ async function applyRule() {
                         <span v-if="aCodec(a)" class="mono">{{ aCodec(a) }}</span>
                         <span v-if="aCh(a)" class="mono">{{ aCh(a) }}</span>
                         <span v-if="a.embedded" class="muted">内嵌</span>
+                        <span v-if="a.audioDescription" class="rtag">口述影像</span>
                       </span>
                     </label>
                     <button v-if="!a.embedded" type="button" class="audio-default" :class="{ active: defaultAudioId === a.id }"

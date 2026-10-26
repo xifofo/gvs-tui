@@ -96,6 +96,11 @@ internal partial class SimpleDownloadManager
             : Path.GetExtension(first.FilePath);
         if (ext is ".m4s" or ".ts" && parts.Any(part => part.MediaInit != null))
             ext = stream.MediaType == MediaType.AUDIO ? ".m4a" : ".mp4";
+        // MP4/M4A cannot carry E-AC-3 (Apple TV Atmos), AC-3 or DTS. Keep those
+        // tracks in Matroska so the ffmpeg concat below does not die on the
+        // "ipod" muxer when several initialised parts have to be glued together.
+        if (ext is ".m4a" or ".mp4" && !Mp4CarriesAudio(outputs))
+            ext = stream.MediaType == MediaType.AUDIO ? ".mka" : ".mkv";
         var outputPath = OtherUtil.HandleFileCollision(Path.Combine(
             DownloaderConfig.MyOptions.SaveDir ?? Environment.CurrentDirectory, saveName + ext), stream);
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -141,6 +146,20 @@ internal partial class SimpleDownloadManager
                 if (!file.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                     File.Delete(file);
             OtherUtil.SafeDeleteDir(partsDir);
+        }
+        return true;
+    }
+
+    /// <summary>MP4/M4A only carry the audio codecs ffmpeg's mov muxer supports.</summary>
+    private static bool Mp4CarriesAudio(IEnumerable<OutputFile> outputs)
+    {
+        foreach (var info in outputs.SelectMany(o => o.Mediainfos))
+        {
+            if (info.Type != "Audio")
+                continue;
+            var codec = (info.BaseInfo ?? "").Split(' ')[0].ToLowerInvariant();
+            if (codec is not ("aac" or "mp3" or "mp2" or "alac"))
+                return false;
         }
         return true;
     }

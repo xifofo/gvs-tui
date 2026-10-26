@@ -75,7 +75,7 @@ export type Quality = {
 /** Selectable audio track (only some platforms expose more than one). */
 /** A separately downloadable subtitle rendition (Disney+ HLS); id = the rendition playlist file. */
 export type Subtitle = { id: string; label: string; lang: string; forced: boolean; sdh: boolean; selected: boolean; isDefault: boolean }
-export type Audio = { id: string; label: string; lang: string; codec: string; isDefault: boolean; selected: boolean; embedded?: boolean; vid?: string; url?: string }
+export type Audio = { id: string; label: string; lang: string; codec: string; isDefault: boolean; selected: boolean; embedded?: boolean; vid?: string; url?: string; /** Apple TV: the track describes the video (audio description) and must not be preselected. */ audioDescription?: boolean }
 export type Detail = {
   posterUrl?: string
   title: string
@@ -109,7 +109,7 @@ export type VipProbe = {
 }
 
 /** Which column the quality screen is driving. */
-export type OptionTab = 'quality' | 'audio'
+export type OptionTab = 'quality' | 'audio' | 'subtitle'
 
 export type Snapshot = {
   scene: string
@@ -157,6 +157,7 @@ export type Snapshot = {
   providerIndex: number
   qualityIndex: number
   audioIndex: number
+  subtitleIndex?: number
   optionTab: OptionTab
   providers?: string[]
   homeItems?: string[]
@@ -168,6 +169,8 @@ export type Snapshot = {
   episodes?: Episode[]
   qualities?: Quality[]
   audios?: Audio[]
+  /** Apple TV / Disney+ subtitle renditions; empty when the platform has none. */
+  subtitles?: Subtitle[]
   tmdbHits?: TMDBHit[]
   tmdbState?: 'idle' | 'loading' | 'ready' | 'error'
   tmdbError?: string

@@ -10,6 +10,7 @@ import { ConnectionForm } from './integrations/plutofish/tui-form.ts'
 import QRCode from 'qrcode'
 import { userMessage, userFacing } from './lib/user-message.ts'
 import { ProviderSessions, type SessionCommand } from './lib/provider-session.ts'
+import { crLogin } from './lib/cr-login.ts'
 import { manifestDetail } from './lib/manifest-detail.ts'
 import { providerLink } from './lib/manifest-provider.ts'
 import { isWebVideoProvider, webVideoLink, webVideoDetail } from './lib/web-video-providers'
@@ -40,6 +41,7 @@ import {
 import { GwClient, ReloginRequired, type KeyInfo } from './lib/client.ts'
 import { hasLocalCredentials, migrateLocalCredentials, pushLocalCredential } from './lib/vault-migrate.ts'
 import { selectAudioTracks } from './lib/audio-selection.ts'
+import { subtitleDownloadTracks } from './lib/subtitle-selection.ts'
 import { usesMeasuredNaming } from './lib/completed-naming.ts'
 import { normalizeHttpProxy } from './lib/proxy.ts'
 import {
@@ -99,6 +101,7 @@ import type {
   Row,
   Scene,
   Snapshot,
+  Subtitle,
   StatusKind,
   TMDBHit,
   VipProbe,
@@ -129,6 +132,8 @@ export class Runtime {
   private readonly providerSessions = new ProviderSessions((p,a,input) => { if (!this.cli) throw new Error('请先连接网关'); return this.cli.invoke(p,a,input) })
   private mewatchQR = false
   private providerLoginBusy = false
+  private crLoginEmail = ''
+  private crLoggingIn = false
   private providerLoginGeneration = 0
   private cfg: FileConfig
   private cli: GwClient | null = null
@@ -174,6 +179,8 @@ export class Runtime {
   private qualities: Quality[] = []
   private audios: Audio[] = []
   private audioIdx = 0
+  private subtitles: Subtitle[] = []
+  private subtitleIdx = 0
   private optionTab: OptionTab = 'quality'
   private probeFailed = false
   private detailInfo: Detail | null = null
@@ -377,7 +384,7 @@ export class Runtime {
 
   set(field: string, value: string): void {
     if (this.connectingBoth && (['host', 'key', 'plutofishUrl'].includes(field) || field.startsWith('connectionSecret'))) return
-    if (this.scene === 'edit' && this.editField === 'IQ 登录密码') {
+    if (this.scene === 'edit' && (this.editField === 'IQ 登录密码' || this.editField === 'CR 登录密码')) {
       if (field === 'secretAppend') this.editValue = (this.editValue + value.replace(/[\r\n]/g, '')).slice(0, 256)
       if (field === 'secretBackspace') this.editValue = [...this.editValue].slice(0, -1).join('')
       this.emit(); return
@@ -647,7 +654,7 @@ export class Runtime {
     if (this.has('mgtv')) f.push('芒果扫码','芒果状态','芒果退出')
     if (this.has('bilibili')) f.push('B 站扫码','B 站 Cookie','B 站状态','B 站退出')
     if (this.has('migu')) f.push('咪咕 App 扫码','咪咕 App 状态','咪咕 App 退出','咪咕 TV 扫码','咪咕 TV 状态','咪咕 TV 退出')
-    if (this.has('crunchyroll')) f.push('CR 令牌')
+    if (this.has('crunchyroll')) f.push('CR 令牌', 'CR 网页会话')
     if (this.has('tencent')) f.push('腾讯诊断日志')
     f.push('运行日志')
     return f
@@ -697,6 +704,10 @@ export class Runtime {
       case 'CR 令牌': {
         const t = (this.cfg.crunchyrollToken || '').trim()
         return t ? `已保存 · ${t.slice(0, 6)}… · 回车替换/清空` : '未导入 · 回车粘贴 refresh_token'
+      }
+      case 'CR 网页会话': {
+        const s = (this.cfg.crunchyrollSession || '').trim()
+        return s ? `已登录 · ${s.slice(0, 8)}… · 回车重新登录/清空` : '未登录 · 回车自动登录（需本机 Chrome）'
       }
       case 'Key':
         if (this.simulated) return '演示模式，无需 Key'
@@ -761,6 +772,8 @@ export class Runtime {
     switch (f) {
       case 'CR 令牌':
         return this.cfg.crunchyrollToken || ''
+      case 'CR 网页会话':
+        return ''
       case '网关代理':
         return this.cfg.gatewayProxy || ''
       case '网关':
@@ -848,6 +861,7 @@ export class Runtime {
       providerIndex: this.provIdx,
       qualityIndex: this.qIdx,
       audioIndex: this.audioIdx,
+      subtitleIndex: this.subtitleIdx,
       optionTab: this.optionTab,
       providers: this.providers(),
       homeItems: this.homeItems(),
@@ -858,6 +872,7 @@ export class Runtime {
       episodeGroup: this.episodeGroup,
       qualities: this.qualities,
       audios: this.audios.map((a) => ({ ...a })),
+      subtitles: this.subtitles.map((s) => ({ ...s })),
       tmdbHits: this.tmdbHits,
       tmdbState: this.tmdbState === 'loading' && this.tmdbGeneration !== this.requestGeneration ? 'idle' : this.tmdbState,
       tmdbError: this.tmdbError,
@@ -883,7 +898,7 @@ export class Runtime {
       keyFocused: this.keyFocused,
       keyConfigured: Boolean(this.cfg.key.trim()),
       editField: this.editField,
-      editValue: this.editField === 'IQ 登录密码' ? '•'.repeat(this.editValue.length) : this.editValue,
+      editValue: (this.editField === 'IQ 登录密码' || this.editField === 'CR 登录密码') ? '•'.repeat(this.editValue.length) : this.editValue,
       qrAscii: this.qrAscii,
       qrPngPaths: this.qrPngPaths,
       qrHint: this.qrHint,
@@ -1198,8 +1213,10 @@ export class Runtime {
           tasks: this.pending.map((t) => ({ ...t })),
           qualities: this.qualities,
           audios: this.audios,
+          subtitles: this.subtitles,
           qIdx: this.qIdx,
           audioIdx: this.audioIdx,
+          subtitleIdx: this.subtitleIdx,
           optionTab: this.optionTab,
         },
         detail: {
@@ -1238,8 +1255,10 @@ export class Runtime {
           tasks: DlTask[]
           qualities: Quality[]
           audios: Audio[]
+          subtitles: Subtitle[]
           qIdx: number
           audioIdx: number
+          subtitleIdx: number
           optionTab: OptionTab
         }
         detail?: {
@@ -1262,8 +1281,10 @@ export class Runtime {
         this.pending = p.draft.tasks
         this.qualities = p.draft.qualities
         this.audios = p.draft.audios
+        this.subtitles = p.draft.subtitles ?? []
         this.qIdx = p.draft.qIdx
         this.audioIdx = p.draft.audioIdx
+        this.subtitleIdx = p.draft.subtitleIdx ?? 0
         this.optionTab = p.draft.optionTab
       }
       if (
@@ -1661,7 +1682,7 @@ export class Runtime {
   private updateQuality(k: string): void {
     const nq = this.qualities.length
     const na = this.audios.length
-    const hasAudio = na > 0
+    const ns = this.subtitles.length
     if (k === 'esc') {
       this.requestGeneration++
       this.searching = false
@@ -1671,15 +1692,19 @@ export class Runtime {
       return
     }
     if (this.searching) return
-    if (
-      hasAudio &&
-      (k === 'tab' || k === 'left' || k === 'right' || k === 'h' || k === 'l')
-    ) {
-      this.optionTab = this.optionTab === 'quality' ? 'audio' : 'quality'
+    // ←/→/tab cycle the columns that actually have rows: 画质 → 音轨 → 字幕.
+    const tabs: OptionTab[] = ['quality']
+    if (na) tabs.push('audio')
+    if (ns) tabs.push('subtitle')
+    if (tabs.length > 1 && (k === 'tab' || k === 'left' || k === 'right' || k === 'h' || k === 'l')) {
+      const step = k === 'left' || k === 'h' ? -1 : 1
+      const at = Math.max(0, tabs.indexOf(this.optionTab))
+      this.optionTab = tabs[(at + step + tabs.length) % tabs.length]!
       return
     }
-    const onAudio = hasAudio && this.optionTab === 'audio'
-    const n = onAudio ? na : nq
+    const onAudio = na > 0 && this.optionTab === 'audio'
+    const onSubtitle = ns > 0 && this.optionTab === 'subtitle'
+    const n = onAudio ? na : onSubtitle ? ns : nq
     if (!n) {
       if (k === 'enter' || k === 'r') void this.queueEpisodes(this.pending)
       return
@@ -1687,6 +1712,11 @@ export class Runtime {
     if (onAudio && (k === ' ' || k === 'space')) {
       const row = this.audios[this.audioIdx]
       if (row && !row.embedded) row.selected = !row.selected
+      return
+    }
+    if (onSubtitle && (k === ' ' || k === 'space')) {
+      const row = this.subtitles[this.subtitleIdx]
+      if (row) row.selected = !row.selected
       return
     }
     if (onAudio && k === 'a') {
@@ -1697,23 +1727,29 @@ export class Runtime {
       for (const row of this.audios) if (!row.embedded) row.selected = false
       return
     }
+    if (onSubtitle && k === 'a') {
+      for (const row of this.subtitles) row.selected = true
+      return
+    }
+    if (onSubtitle && k === 'c') {
+      for (const row of this.subtitles) row.selected = false
+      return
+    }
     if (['pageup', 'pagedown', 'home', 'end'].includes(k)) {
-      if (onAudio)
-        this.audioIdx = moveCursor(
-          this.audioIdx,
-          k,
-          n,
-          viewMetrics(this.viewport.width, this.viewport.height).qualityRows,
-        )
-      else this.qIdx = moveCursor(this.qIdx, k, n, viewMetrics(this.viewport.width, this.viewport.height).qualityRows)
+      const rows = viewMetrics(this.viewport.width, this.viewport.height).qualityRows
+      if (onAudio) this.audioIdx = moveCursor(this.audioIdx, k, n, rows)
+      else if (onSubtitle) this.subtitleIdx = moveCursor(this.subtitleIdx, k, n, rows)
+      else this.qIdx = moveCursor(this.qIdx, k, n, rows)
       this.syncEmbeddedAudio()
       return
     }
     if (k === 'j' || k === 'down') {
       if (onAudio) this.audioIdx = Math.min(n - 1, this.audioIdx + 1)
+      else if (onSubtitle) this.subtitleIdx = Math.min(n - 1, this.subtitleIdx + 1)
       else this.qIdx = Math.min(n - 1, this.qIdx + 1)
     } else if (k === 'k' || k === 'up') {
       if (onAudio) this.audioIdx = Math.max(0, this.audioIdx - 1)
+      else if (onSubtitle) this.subtitleIdx = Math.max(0, this.subtitleIdx - 1)
       else this.qIdx = Math.max(0, this.qIdx - 1)
     } else if (k === 'enter') {
       this.applyOptions()
@@ -1756,6 +1792,9 @@ export class Runtime {
       t.audioTracks = t.provider === 'youku'
         ? bindYoukuAudioTracksToTask(tracks, t)
         : tracks.map((a) => ({ ...a }))
+      // Apple TV / Disney+ hand the subtitle picker's indexes to resolve; other
+      // providers never populate `subtitles`, so their tasks stay untouched.
+      if (this.subtitles.length) t.subtitleTracks = subtitleDownloadTracks(this.subtitles)
     }
     this.probeFailed = false
     if (q) {
@@ -1925,7 +1964,7 @@ export class Runtime {
       this.scene = ['确认下载目录', '识别并替换作品与分类'].includes(this.editField) ? 'confirm' : 'settings'
       return
     }
-    if (k === 'enter') void this.commitEdit(this.editField === 'IQ 登录密码' ? this.editValue : this.editValue.trim())
+    if (k === 'enter') void this.commitEdit(this.editField === 'IQ 登录密码' || this.editField === 'CR 登录密码' ? this.editValue : this.editValue.trim())
   }
 
   private async openSetting(f: string): Promise<void> {
@@ -2182,6 +2221,7 @@ export class Runtime {
     if (f === 'TMDB 代理') this.say('填写 HTTP/HTTPS 代理地址；仅用于 TMDB，留空使用默认网络')
     if (f === '网关代理') this.say('填写 HTTP/HTTPS 代理地址，保存后用于网关请求和隧道；留空直连')
     if (f === 'CR 令牌') this.say('粘贴本人 Crunchyroll refresh_token；只存本机配置，网关不落盘；留空清除')
+    if (f === 'CR 网页会话') this.say('回车自动登录：启动/复用本机 Chrome，填入邮箱密码并读取 etp_rt；也可直接粘贴 etp_rt；留空则自动登录')
     this.emit()
   }
 
@@ -2234,7 +2274,79 @@ export class Runtime {
     finally { this.providerLoginBusy = false; this.emit() }
   }
 
+  /** 自动登录：驱动 Chrome 取 etp_rt，存本机配置，并让网关验证一次。 */
+  private async crAutoLogin(email: string, password: string): Promise<void> {
+    if (this.crLoggingIn) { this.say('正在登录中，请稍候', 'warn'); this.emit(); return }
+    this.crLoggingIn = true
+    this.say('正在启动/复用 Chrome 并登录 Crunchyroll…', 'info')
+    this.emit()
+    try {
+      const session = await crLogin({
+        email,
+        password,
+        onStatus: (m) => { this.say(m, 'info'); this.emit() },
+      })
+      this.cfg.crunchyrollSession = session
+      this.cfg.crunchyrollToken = ''
+      this.persistConfig()
+      this.say(`CR 网页会话已保存 · ${session.slice(0, 8)}…（仅本机配置）`, 'ok')
+      if (this.cli && !this.simulated) {
+        try {
+          const data = await this.cli.invoke('crunchyroll', 'login', { session })
+          const token = typeof data.token === 'string' ? data.token : ''
+          this.say(`网关校验通过${token ? ' · ' + token.slice(0, 10) + '…' : ''}`, 'ok')
+        } catch (e) {
+          this.say(`会话已保存，但网关校验失败：${e instanceof Error ? e.message : String(e)}`, 'warn')
+        }
+      }
+    } catch (e) {
+      this.say(e instanceof Error ? e.message : 'CR 自动登录失败', 'err')
+    } finally {
+      this.crLoggingIn = false
+      this.emit()
+    }
+  }
+
   private async commitEdit(v: string): Promise<void> {
+    if (this.editField === 'CR 网页会话') {
+      const pasted = v.trim()
+      if (pasted) {
+        if (pasted.length < 8 || pasted.length > 4096) { this.say('etp_rt 长度不对', 'warn'); this.emit(); return }
+        this.cfg.crunchyrollSession = pasted
+        this.cfg.crunchyrollToken = ''
+        this.persistConfig()
+        this.say(`已保存 CR 网页会话 · ${pasted.slice(0, 8)}…（仅本机配置）`, 'ok')
+        this.emit()
+        return
+      }
+      this.editField = 'CR 登录邮箱'
+      this.editValue = ''
+      this.scene = 'edit'
+      this.say('输入 Crunchyroll 邮箱；密码只用于本次自动登录，不保存')
+      this.emit()
+      return
+    }
+    if (this.editField === 'CR 登录邮箱') {
+      const email = v.trim()
+      if (!email.includes('@') || email.length > 256) { this.say('邮箱格式不对', 'warn'); this.emit(); return }
+      this.crLoginEmail = email
+      this.editField = 'CR 登录密码'
+      this.editValue = ''
+      this.scene = 'edit'
+      this.say('输入密码，回车后启动 Chrome 自动登录（约 20–60s，不要关闭弹出的窗口）')
+      this.emit()
+      return
+    }
+    if (this.editField === 'CR 登录密码') {
+      const email = this.crLoginEmail
+      const password = v
+      this.crLoginEmail = ''
+      this.editValue = ''
+      this.scene = 'settings'
+      this.emit()
+      await this.crAutoLogin(email, password)
+      return
+    }
     if (this.editField === 'IQ 登录账号') {
       if (!v.trim()) { this.say('账号不能为空', 'warn'); return }
       this.iqLoginUsername = v.trim(); this.editField = v.includes('@') ? 'IQ 登录密码' : 'IQ 登录区号'; this.editValue = ''; this.emit(); return
@@ -2283,6 +2395,7 @@ export class Runtime {
         const token = v.trim()
         if (token.length > 4096) { this.say('refresh_token 过长', 'warn'); this.emit(); return }
         this.cfg.crunchyrollToken = token
+        if (token) this.cfg.crunchyrollSession = ''
         this.say(token ? '已保存 Crunchyroll 令牌（仅本机配置）' : '已清除 Crunchyroll 令牌', 'ok')
         break
       }
@@ -2478,8 +2591,10 @@ export class Runtime {
     this.probeFailed = false
     this.qualities = []
     this.audios = []
+    this.subtitles = []
     this.qIdx = 0
     this.audioIdx = 0
+    this.subtitleIdx = 0
     if (this.simulated) {
       const demo = demoSnapshot('quality', 0)
       this.adoptOptions(
@@ -2562,7 +2677,7 @@ export class Runtime {
   }
 
   private adoptOptions(
-    opts: { qualities: Quality[]; audios: Audio[]; vip?: VipProbe },
+    opts: { qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[]; vip?: VipProbe },
     count: number,
   ): void {
     if (!opts.qualities.length || opts.vip?.canPlay === false) {
@@ -2571,6 +2686,8 @@ export class Runtime {
     }
     this.qualities = opts.qualities
     this.audios = opts.qualities[0]?.audios ?? opts.audios
+    this.subtitles = opts.subtitles ?? []
+    this.subtitleIdx = 0
     this.vipProbe = opts.vip ?? null
     this.qIdx = 0
     this.audioIdx = Math.max(

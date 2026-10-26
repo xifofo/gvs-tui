@@ -784,13 +784,18 @@ export function reWorkPhase(text: string, workDir?: string, listedTotal?: number
   return phase
 }
 
+/** `-mt`: N_m3u8DL-RE is sequential per stream unless told otherwise. */
+export function streamConcurrencyArgs(enabled: boolean): string[] {
+  return enabled ? ['-mt'] : []
+}
+
 /** Byte progress for RE merge / Shaka decrypt. Demux has no output yet. */
 export function reSidecarProgress(dir: string, phase: 'merge' | 'decrypt'): { ratio: number; log: string } {
   const part = rePartSidecar(dir)
   if (part?.phase === phase) return part
   if (phase === 'merge') {
     const total = reDownloadedSegments(dir)?.bytes ?? dirFileSizes(join(dir, 'download'), name => !name.endsWith('.json'))
-    const done = Math.max(...['mp4', 'ts', 'mkv', 'm4a', 'webm'].map(ext => fileSize(join(dir, `download.${ext}`))))
+    const done = Math.max(...['mp4', 'ts', 'mkv', 'm4a', 'mka', 'webm'].map(ext => fileSize(join(dir, `download.${ext}`))))
     if (!total) return { ratio: 0, log: '合并' }
     return { ratio: Math.min(1, done / total), log: `合并 ${human(done)}/${human(total)}` }
   }
@@ -1115,6 +1120,9 @@ export async function downloadPlaylist(opts: {
   /** Only set when the gateway explicitly says the selected track is clear. */
   clear?: boolean
   threads?: number
+  /** Download/decrypt each selected stream concurrently (`-mt`); N_m3u8DL-RE is
+   *  sequential by default, so audio waits for the whole video track. */
+  concurrentStreams?: boolean
   cb?: ProgressCB
   select?: 'video' | 'audio' | 'muxed'
   /** Combine separate audio/video from a clear master HLS or DASH into MKV. */
@@ -1226,6 +1234,7 @@ export async function downloadPlaylist(opts: {
       '--disable-update-check',
       '--log-file-path', logFile,
       '--thread-count', String(threads),
+      ...streamConcurrencyArgs(!!opts.concurrentStreams),
       '--download-retry-count', String(opts.refreshSource ? 0 : MAX_ATTEMPTS - 1),
       ...(opts.refreshSource ? ['--http-request-timeout', '360'] : []),
     ]
@@ -1313,7 +1322,7 @@ export async function downloadPlaylist(opts: {
     if (!found && opts.muxTracks) {
       // Use our mux for language correction, or when RE disables its own mux
       // for Dolby Vision. Complete downloaded tracks remain at the root.
-      const inputs = readdirSync(workDir).filter(name => /^download(?:\.[\w-]+)*\.(?:mp4|m4a|aac|ac3|eac3|ts|webm|srt|vtt|ass)$/i.test(name))
+      const inputs = readdirSync(workDir).filter(name => /^download(?:\.[\w-]+)*\.(?:mp4|mka|mkv|m4a|aac|ac3|eac3|ts|webm|srt|vtt|ass)$/i.test(name))
         .map(name => join(workDir,name)).filter(path=>fileSize(path)>0)
       if (inputs.length) {
         const merged = join(workDir,'download.MUX.mkv')

@@ -175,6 +175,8 @@ export type AudioView = {
   isDefault: boolean
   selected: boolean
   embedded: boolean
+  /** Apple TV audio description track: shown as a tag and never preselected. */
+  audioDescription?: boolean
 }
 
 export type SubtitleView = { id: string; label: string; lang: string; forced: boolean; sdh: boolean; selected: boolean; isDefault: boolean }
