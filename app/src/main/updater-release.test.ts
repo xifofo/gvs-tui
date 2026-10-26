@@ -33,10 +33,11 @@ test('release selection requires explicit published stable metadata and a matchi
 
 test('release links reject other repositories, credentials, queries, paths and encoded or prerelease tags', () => {
   for (const url of [
-    'http://github.com/my-name-is-alan/gvs-tui/releases/tag/desktop-v1.0.0',
-    'https://github.com.evil.example/my-name-is-alan/gvs-tui/releases/tag/desktop-v1.0.0',
+    'http://github.com/xifofo/gvs-tui/releases/tag/desktop-v1.0.0',
+    'https://github.com.evil.example/xifofo/gvs-tui/releases/tag/desktop-v1.0.0',
+    'https://github.com/my-name-is-alan/gvs-tui/releases/tag/desktop-v1.0.0',
     'https://github.com/other/gvs-tui/releases/tag/desktop-v1.0.0',
-    'https://user:secret@github.com/my-name-is-alan/gvs-tui/releases/tag/desktop-v1.0.0',
+    'https://user:secret@github.com/xifofo/gvs-tui/releases/tag/desktop-v1.0.0',
     `${RELEASES_URL}/tag/desktop-v1.0.0?redirect=evil`, `${RELEASES_URL}/tag/desktop-v1.0.0#fragment`,
     `${RELEASES_URL}/tag/desktop-v1.0.0/asset.exe`, `${RELEASES_URL}/tag/desktop-v1.0.0-rc.1`,
     `${RELEASES_URL}/tag/desktop-v%31.0.0`, `${RELEASES_URL}/tag/desktop-v9007199254740993.0.0`,

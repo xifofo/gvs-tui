@@ -1,7 +1,7 @@
 // GitHub 只负责发现发布；安装包仍由 electron-updater 下载并校验。
 // Atom 没有可靠的 draft/prerelease 字段，只能提供官方页面线索，不能授权自动安装。
-export const RELEASES_URL = 'https://github.com/my-name-is-alan/gvs-tui/releases'
-export const RELEASES_API = 'https://api.github.com/repos/my-name-is-alan/gvs-tui/releases?per_page=50'
+export const RELEASES_URL = 'https://github.com/xifofo/gvs-tui/releases'
+export const RELEASES_API = 'https://api.github.com/repos/xifofo/gvs-tui/releases?per_page=50'
 export const RELEASES_ATOM = `${RELEASES_URL}.atom`
 export const TAG_PREFIX = 'desktop-v'
 const MINUTE = 60_000
