@@ -69,12 +69,15 @@ test('未完成、完成回执未确认、成品仍在或父目录不可访问�
     const present = f.create(3); writeFileSync(present.draft.output, 'abcdefgh')
     const unavailableDirectory = f.create(4); unavailableDirectory.draft.output = join(f.directory, 'unmounted', 'video.mkv')
     const foreign = f.create(5); foreign.draft.binding.publisherId = 'another-publisher'
+    const pending = f.create(6); pending.pendingFailures = [{ ...pending.snapshot, stage: 'failed', sequence: 1 }]
+    f.store.save(pending)
     f.connection.request = async () => { throw new Error('must not send cleanup') }
     await new PublicationCleanup(f.connection, f.remove).tick(f.states, new AbortController().signal)
-    expect(f.states.size).toBe(5)
-    expect(f.store.load()).toHaveLength(5)
+    expect(f.states.size).toBe(6)
+    expect(f.store.load()).toHaveLength(6)
     expect(() => f.store.removeCompleted(uploading)).toThrow('未完成')
     expect(() => f.store.removeCompleted(unsynced)).toThrow('未完成')
+    expect(() => f.store.removeCompleted(pending)).toThrow('未完成')
   } finally { f.close() }
 })
 

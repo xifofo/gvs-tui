@@ -18,17 +18,18 @@ test('Complete 回执丢失后重启核验原文件，目录上报失败可重�
   const directory = mkdtempSync(join(tmpdir(), 'plutofish-worker-'))
   const path = join(directory, 'Show.S01E01.1080p.HG.WEB-DL.SDR.AVC-Team.Web-Release.mkv'), data = Buffer.alloc(1024, 9)
   writeFileSync(path, data)
-  const identity = { id: 'pub', name: 'Publisher', kind: 'publisher' as const, sourceAccount: { id: 'source', alias: 'source', name: 'Source' }, categories: [{ value: 'short', label: '短剧' }] }
+  const identity = { id: 'pub', name: 'Publisher', kind: 'publisher' as const, sourceAccount: { id: 'source', alias: 'source', name: 'Source' }, categories: [{ value: 'short', label: '短剧' }], capabilities: { uploadClientGrouping: false, taskDiagnostics: true } }
   const connection = new PlutoFishConnection({ load: () => ({ url: 'https://example.com', key: 'secret' }), verify: async () => identity })
   await connection.verify()
   const draft = completePublication(preparePublication({ provider: 'hongguo', sourceWorkId: 'series1', title: '第一集', series: '红果作品', vid: 'ep1', season: 1, episode: 1, tmdbId: 0, quality: '1080', codec: 'h264', group: '', plot: '' } as DlTask, connection.view(), 'short', '0', '/', { existingReleaseId: 'a'.repeat(32) }), path,
     { media: { status: 'probed', width: 1080, height: 1920, codec: 'h264', dynamicRange: 'SDR' }, file: { size: data.length } })
   let uploaded = false, catalogFail = true, verificationOffline = false, puts = 0, starts = 0, view: PublicationDraft = draft
   const finalReports: unknown[] = []
+  const taskReports: Array<import('./publication-state').TaskSnapshot> = []
   connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, payload: unknown): Promise<T> => {
     const input = payload as { action?: string }
     if (route === 'range-proofs/pending') return { jobs: [] } as T
-    if (route === 'tasks/report') return { outcome: 'applied' } as T
+    if (route === 'tasks/report') { taskReports.push(structuredClone(payload as import('./publication-state').TaskSnapshot)); return { outcome: 'applied' } as T }
     if (route === 'files/ed2k') return { accepted: true } as T
     if (input.action === 'release' || input.action === 'heartbeat') return { dispatch: { status: 'uploading' } } as T
     if (route === 'files/report') {
@@ -105,6 +106,11 @@ test('Complete 回执丢失后重启核验原文件，目录上报失败可重�
     expect(starts).toBe(1)
     expect(puts).toBe(1)
     expect(view.progress?.synced).toBeTrue()
+    const failures = taskReports.filter(report => report.stage === 'failed')
+    expect(failures).toHaveLength(3)
+    expect(failures.every(report => !!report.errorDetails?.stage && !!report.errorDetails?.occurredAt)).toBeTrue()
+    expect(new Set(failures.map(report => report.sequence)).size).toBe(3)
+    expect(taskReports.at(-1)?.stage).toBe('completed')
     expect(phases).toContain('verifying')
     expect(phases).toContain('reporting')
     for (const name of readdirSync(directory).filter(n => n.endsWith('.json'))) expect(readFileSync(join(directory, name), 'utf8')).not.toContain('TEMP-')
