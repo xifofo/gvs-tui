@@ -172,6 +172,28 @@ async function waitFor(ready: () => boolean) {
   throw new Error('连接未恢复')
 }
 
+test('temporary outage retains retry context throughout the pending recovery attempt', async () => {
+  let calls = 0, recover!: (identity: typeof publisher) => void
+  const c = connection({ autoReconnect: true, retryBaseMs: 5, verify: async () => {
+    if (++calls === 1) return publisher
+    if (calls === 2) throw new PublisherError('temporary 502', true)
+    return new Promise(resolve => { recover = resolve })
+  } })
+  await c.verify()
+  await expect(c.verify(undefined, true)).rejects.toThrow('502')
+  expect(c.view().reconnect?.attempt).toBe(1)
+  await waitFor(() => calls === 3)
+  expect(c.view().status).toBe('checking')
+  expect(c.view().reconnect?.attempt).toBe(1)
+  expect(c.view().identity).toBeNull()
+  expect(c.ready).toBe(false)
+  expect(() => c.assertReady()).toThrow()
+  recover(publisher)
+  await waitFor(() => c.ready)
+  expect(c.view().reconnect).toBeUndefined()
+  expect(c.view().identity).toEqual(publisher)
+})
+
 test('自动连接在离线启动和后台断网后恢复，健康检查单次完成后才继续', async () => {
   let offline = true, calls = 0, inflight = 0, maximum = 0
   const c = connection({ autoReconnect: true, intervalMs: 5, retryBaseMs: 10, retryMaxMs: 20,
