@@ -3,6 +3,7 @@ import { matchRelease, preferRelease, releaseChoices, resolveReleaseSelection, t
 import { preparePublication } from './publication.ts'
 import type { PlutoFishView } from './types.ts'
 import type { DlTask } from '../../lib/jobs.ts'
+import { matchingReleases } from './release-specs'
 
 const firstId = 'a'.repeat(32), secondId = 'b'.repeat(32)
 const option = (patch: Partial<ReleaseOption> = {}): ReleaseOption => ({ id: firstId, name: 'S01.360p.YK.WEB-DL.H265', resolution: '360p', dynamicRange: 'SDR', status: 'published', ...patch })
@@ -25,6 +26,33 @@ test('统一旧别名、缺失音轨信息，唯一匹配才默认选择；绑�
   }
   expect(matchRelease([option({ dynamicRange: 'HDR10' })], preview)).toEqual({})
   expect(matchRelease([option({ status: 'unpublished' })], preview)).toEqual({})
+})
+
+test('尚公主截图：预览缺少编码和声道时，按其余已知规格唯一匹配 WF', async () => {
+  const name = 'S01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP-WF'
+  const wf = option({ name: 'S01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP.5.1.H.265-WF', resolution: '2160p', dynamicRange: 'HDR10' })
+  const items = [wf,
+    { ...wf, id: secondId, name: 'S01.2160p.TX.WEB-DL.1.DDP5.HFR.VIVID.HDR.60fps.HEVC.DDP.5.1-PFWEB' },
+    { ...wf, id: 'c'.repeat(32), name: 'S01.2160p.TX.WEB-DL.1.DDP5.HFR.SDR.60fps.HEVC.DDP.5.1-SalmonWeb', dynamicRange: 'SDR' },
+  ]
+  const choices = await releaseChoices(client(items), [draft(11)], name)
+  expect([choices.matchedId, choices.match, choices.needsChoice]).toEqual([firstId, 'specs', false])
+  expect(resolveReleaseSelection(choices)).toEqual({ existingReleaseId: firstId })
+  // 成品／Watch 的默认规则仍要求明确视频编码，预览也不补造编码或声道。
+  expect(matchingReleases(items, name)).toEqual([])
+  expect(choices.name).toBe(name)
+
+  const otherCodec = { ...wf, id: secondId, name: wf.name.replace('H.265', 'H.264') }
+  expect(matchRelease([wf, otherCodec], name)).toEqual({})
+  expect(matchRelease([wf, otherCodec], name.replace('DDP-WF', 'DDP.HEVC-WF'))).toEqual({ matchedId: firstId, match: 'specs' })
+  for (const patch of [
+    { name: wf.name.replace('MAXPLUS.', '') }, { name: wf.name.replace('-WF', '-PFWEB') },
+    { name: wf.name.replace('.TX.', '.YOUKU.') }, { name: wf.name.replace('WEB-DL', 'WEBRip') },
+    { name: wf.name.replace('60fps', '50fps') }, { name: wf.name.replace('DDP.5.1', 'AAC.2.0') },
+    { name: wf.name.replace('H.265', '') }, { name: wf.name.replace('2160p', '1080p') },
+    { dynamicRange: 'SDR' }, { resolution: '1080p' }, { status: 'unpublished' as const },
+  ]) expect(matchRelease([option({ ...wf, ...patch })], name)).toEqual({})
+  expect(matchRelease([wf], name.replace('DDP-WF', 'DDP.2.0-WF'))).toEqual({})
 })
 
 test('首集允许自动新建；续集和特别篇未匹配时必须明确选择，错误不降级为空列表', async () => {

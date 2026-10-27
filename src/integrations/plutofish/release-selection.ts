@@ -24,7 +24,8 @@ type ReleasePage = { items: ReleaseOption[]; total: number; page: number; pageSi
 
 export function matchRelease(items: ReleaseOption[], name: string, boundId?: string): Pick<ReleaseChoices, 'matchedId' | 'match'> {
   if (boundId && items.some(r => r.id === boundId)) return { matchedId: boundId, match: 'binding' }
-  const matches = matchingReleases(items, name)
+  // 目录预览可能只有数字 profile，尚无视频编码；按其余规格找唯一候选，不把候选编码当作成品证据。
+  const matches = matchingReleases(items, name, { allowMissingCodec: true })
   return matches.length === 1 ? { matchedId: matches[0]!.id, match: 'specs' } : {}
 }
 

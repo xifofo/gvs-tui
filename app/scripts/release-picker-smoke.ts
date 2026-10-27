@@ -10,6 +10,7 @@ import { Core } from '../src/main/core'
 import { DEFAULT_UI_PREFS } from '../src/shared/ui-prefs'
 import type { EnqueueRequest } from '../src/shared/api'
 import type { ReleaseOption } from '../../src/integrations/plutofish/release-selection'
+import { qualitiesFromTencentFormats } from '../../src/lib/quality'
 
 const profile = mkdtempSync(join(tmpdir(), 'gvs-release-picker-'))
 process.env.APPDATA = profile
@@ -22,7 +23,8 @@ const id = 'a'.repeat(32)
 const view = { url: 'https://example.invalid', status: 'verified', hasKey: true, error: '', identity: {
   id: 'publisher', name: '离线发布端', kind: 'publisher', sourceAccount: { id: 'source', alias: 'source', name: '测试源账号' }, categories: [{ value: 'anime', label: '动漫' }],
 } }
-const qualities = [{ id: '360p', label: '360P', width: 640, height: 360, codec: 'hevc', fps: 25, size: 0, drm: '', hdr: 'sdr' }]
+// 稀疏目录预览没有编码；界面仍应默认选中唯一符合其余规格的版本。
+const qualities = [{ id: '360p', label: '360P', width: 640, height: 360, codec: '', fps: 25, size: 0, drm: '', hdr: 'sdr' }]
 const audios = [{ id: 'aac', lang: '国语', label: 'AAC 立体声', codec: 'AAC', isDefault: true, selected: true }]
 const option: ReleaseOption = { id, name: 'S01.360p.YK.WEB-DL.H265-FPWeb', resolution: '360p', dynamicRange: 'SDR', status: 'published', latestEpisode: 2 }
 let items: ReleaseOption[] = [option], fail = false, queryDelay = 0
@@ -81,6 +83,28 @@ async function main() {
   const before = core.jobList().length
   await assert.rejects(() => core!.enqueue({ ...forced, naming: { season: 2 } }), /已改变/)
   assert.equal(core.jobList().length, before)
+
+  // 尚公主：真实 Core 从腾讯数字 profile 生成不完整预览，唯一匹配 WF 并自动绑定入队。
+  internal.cfg.releaseGroup = 'WF'
+  const txQualities = qualitiesFromTencentFormats([{ name: 'maxplus', id: '123', profile: '4', width: 3840, height: 2160, vfps: 60, hdr: 'hdr' }])
+  const txAudios = [{ id: 'ddp', lang: '国语', label: 'DDP', codec: 'E-AC-3', isDefault: true, selected: true }]
+  internal.probes.set(702, { provider: 'tencent', qualities: txQualities, audios: txAudios })
+  const wf: ReleaseOption = { id, name: 'S01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP.5.1.H.265-WF', resolution: '2160p', dynamicRange: 'HDR10', status: 'published', latestEpisode: 10 }
+  items = [wf, { ...wf, id: 'b'.repeat(32), name: 'S01.2160p.TX.WEB-DL.1.DDP5.HFR.VIVID.HDR.60fps.HEVC.DDP.5.1-PFWEB' },
+    { ...wf, id: 'd'.repeat(32), name: 'S01.2160p.TX.WEB-DL.1.DDP5.HFR.SDR.60fps.HEVC.DDP.5.1-SalmonWeb', dynamicRange: 'SDR' }]
+  const txReq: EnqueueRequest = { ...req, token: 702, detail: { ...req.detail, provider: 'tencent', title: '尚公主' }, audioIds: ['ddp'],
+    episodes: [{ vid: 'tx-e11', number: 11, title: '第十一集', group: '', languages: [] }] }
+  const txMatch = await core.publicationReleases(txReq)
+  assert.equal(txMatch.name, 'S01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP-WF')
+  assert.equal(txMatch.matchedId, id)
+  assert.equal(txMatch.needsChoice, false)
+  assert.equal(await core.enqueue(txReq), 1)
+  assert.equal(core.jobList().at(-1)?.publication?.existingReleaseId, id)
+  assert.equal(internal.jobs.get(core.jobList().at(-1)!.id).task.codec, '4') // 不用候选补造任务编码。
+  items = [wf, { ...wf, id: 'b'.repeat(32), name: wf.name.replace('H.265', 'H.264') }]
+  assert.equal((await core.publicationReleases(txReq)).needsChoice, true)
+  await assert.rejects(() => core!.enqueue(txReq), /后续集数/)
+  internal.cfg.releaseGroup = 'FPWeb'
   items = [option]
 
   ipcMain.handle('release-picker-smoke', (_event, method, request) => method === 'publicationReleases' ? core!.publicationReleases(request) : core!.namingPreview(request))
@@ -193,7 +217,7 @@ async function main() {
     win.destroy(); win = undefined
   }
   assert.deepEqual(errors, [])
-  console.log('PASS: real Core rejects unmatched/stale selections, preserves existing choice, isolates forced batches; renderer checks default, first/later episodes, manual selection, force new, failures, stale responses and 1440/760px layout')
+  console.log('PASS: real Core matches the sparse Tencent WF preview, rejects ambiguous codecs and unmatched/stale selections, preserves existing choice, isolates forced batches; renderer checks sparse-preview default, first/later episodes, manual selection, force new, failures, stale responses and 1440/760px layout')
 }
 
 void main().catch(error => { console.error(error); process.exitCode = 1 }).finally(async () => {
