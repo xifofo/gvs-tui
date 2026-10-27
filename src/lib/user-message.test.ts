@@ -5,6 +5,15 @@ import { IQAudioValidationError } from './iq-mux'
 import { IQAudioTransferError } from './iq-transfer'
 import { DownloaderCompatibilityError } from './downloader-error'
 
+test('audio validation failures retain their operation without exposing decoder details', () => {
+  for (const raw of ['首帧修复校验失败 (0): [eac3 @ 0x123] exponent 28 is out-of-range', '音轨解码校验失败：private path', 'E-AC-3 数据复核未通过：frame CRC mismatch']) {
+    const text = userMessage(raw)
+    expect(text).toContain('音轨解码检查未通过')
+    expect(text).not.toMatch(/private|exponent|eac3|CRC|联系客服/)
+    expect(userMessage(text)).toBe(text)
+  }
+})
+
 test('unsupported media is not presented as a timeout or CDN failure, including restored errors', () => {
   const raw = 'N_m3u8DL-RE 下载失败 (1): HTTP 502; connection timed out; Unsupported IQ mdcm encryption pattern https://private.invalid?token=PRIVATE'
   const message = userMessage(new DownloaderCompatibilityError(raw))
