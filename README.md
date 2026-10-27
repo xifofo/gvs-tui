@@ -1,6 +1,6 @@
 # GVS TUI
 
-本 PlutoFish 二开版本要求网关与 PlutoFish 双重鉴权后进入。启动、密钥配置和上游合并接入位置见 [PlutoFish 接入说明](docs/PLUTOFISH.md)。下文保留上游功能说明。
+本 PlutoFish 二开版本要求网关与 PlutoFish 双重鉴权后进入。启动、密钥配置和上游合并接入位置见 [PlutoFish 接入说明](docs/PLUTOFISH.md)。开发、更新和发布以 [xifofo/gvs-tui](https://github.com/xifofo/gvs-tui) 为主；原版改进按 [仓库维护流程](docs/REPOSITORY-MAINTENANCE.md) 合入。下文保留上游功能说明。
 
 本机终端下载器。Bun 单进程：Vue TermUI 画面 + TypeScript 运行时。只通过 HTTP 调远端网关（地址和 API Key 由用户填写）。
 
@@ -13,7 +13,7 @@
 按源码方式运行，需要 Bun ≥ 1.3（界面已在 1.3.14 和 1.4.2 验证）。Git 仓库直接包含 Windows x64 的 FFmpeg、mkvmerge、N_m3u8DL-RE、Shaka Packager 和 MP4Box，位于 `bin/`，普通 `git clone/pull` 会一起下载，无需 Git LFS 或用户另装媒体工具。不包含 Bun、`dist/` 或 `node_modules/`，不制作便携包，不需要 Go。
 
 ```powershell
-git clone https://github.com/my-name-is-alan/gvs-tui.git
+git clone https://github.com/xifofo/gvs-tui.git
 cd gvs-tui
 bun install --frozen-lockfile
 bun run start
@@ -57,7 +57,7 @@ RE 源码和构建说明位于 `third_party/N_m3u8DL-RE/README-GVS.md`。
 桌面版「设置 → 命名与刮削 → 文件名包含单集标题」可控制季集号后是否加入平台单集标题，默认关闭；TUI 在设置的「下载」分类中用「文件名单集标题」切换。开启后例如 `片名.2026.S01E02.2160p.TX.WEB-DL.SDR.DDP.2.0.H.265-PFWEB.mkv` 会改为 `片名.2026.S01E02.单集标题.2160p.TX.WEB-DL.SDR.DDP.2.0.H.265-PFWEB.mkv`，其余字段及顺序不变，画质页预览同步更新。旧版遗留的 `includeEpisodeTitle` 不会自动开启此选项，新选择保存为 `filenameEpisodeTitle`。仅影响新建任务，入队后固定该选择，暂停、恢复和重试沿用原设置；电影及任务列表标题不受影响。
 
 ```powershell
-git pull
+git pull --ff-only
 bun install --frozen-lockfile
 bun run start
 ```
