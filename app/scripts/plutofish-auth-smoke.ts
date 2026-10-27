@@ -15,7 +15,7 @@ app.setPath('userData', profile)
 process.env.APPDATA = profile
 process.env.GVS_NO_TUNNEL = '1'
 app.disableHardwareAcceleration()
-let publisherStatus = 200, gatewayStatus = 200, publisherChecks = 0, gatewayChecks = 0
+let publisherStatus = 200, publisherDelay = 0, gatewayStatus = 200, publisherChecks = 0, gatewayChecks = 0
 let window: BrowserWindow | undefined, core: Core | undefined
 const consoleErrors: string[] = []
 const publisher = createServer((req, res) => {
@@ -23,8 +23,10 @@ const publisher = createServer((req, res) => {
   const status = req.headers.authorization === 'Bearer publisher-test-key' ? publisherStatus : 401
   assert.equal(req.url, '/api/v1/publisher/me')
   assert.equal(req.headers.cookie, undefined)
-  res.writeHead(status, { 'content-type': 'application/json' })
-  res.end(JSON.stringify(status === 200 ? { id: 'publisher-fixture', name: '测试发布端', kind: 'publisher', sourceAccount: { id: 'source-fixture', name: '测试源账号', alias: 'fixture' } } : { error: { code: 'UNAUTHENTICATED' } }))
+  setTimeout(() => {
+    res.writeHead(status, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(status === 200 ? { id: 'publisher-fixture', name: '测试发布端', kind: 'publisher', sourceAccount: { id: 'source-fixture', name: '测试源账号', alias: 'fixture' } } : { error: { code: 'UNAUTHENTICATED' } }))
+  }, publisherDelay)
 })
 const gateway = createServer((req, res) => {
   const status = req.headers.authorization === 'Bearer gateway-test-key' ? gatewayStatus : 401
@@ -50,9 +52,17 @@ async function main() {
   const gw = `http://127.0.0.1:${(gateway.address() as { port: number }).port}`
   core = makeCore()
   assert.equal(core.state().configured, false)
+  assert.equal(core.state().reconnecting, false)
   await assert.rejects(core.setup(gw, 'gateway-test-key', '', { url: pf, key: 'wrong' }))
   assert.equal(core.state().configured, false)
+  assert.equal(core.state().reconnecting, false)
   assert.equal(gatewayChecks, 0)
+  publisherStatus = 502
+  await assert.rejects(core.setup(gw, 'gateway-test-key', '', { url: pf, key: 'publisher-test-key' }))
+  assert.equal(core.state().configured, false)
+  assert.equal(core.state().reconnecting, false)
+  assert.equal(gatewayChecks, 0)
+  publisherStatus = 200
   gatewayStatus = 401
   await assert.rejects(core.setup(gw, 'gateway-test-key', '', { url: pf, key: 'publisher-test-key' }))
   assert.equal(core.state().configured, false)
@@ -84,7 +94,8 @@ async function main() {
       else if (method === 'setup') data = await core!.setup(...args as Parameters<Core['setup']>)
       else if (method === 'jobs') data = core!.jobList()
       else if (method === 'accounts') data = { providers: [], slots: [] }
-      else if (method === 'subscriptions') data = { items: [], paused: true }
+      else if (method === 'subscriptions') data = { subs: [], paused: true }
+      else if (method === 'calendar') data = { days: [] }
       else if (method === 'updateState') data = { status: 'idle' }
       else throw new Error('未实现的测试调用')
       return { ok: true, data }
@@ -95,7 +106,7 @@ async function main() {
   await window.loadFile(resolve('out/renderer/index.html'))
   const run = (script: string) => window!.webContents.executeJavaScript(script)
   const waitFor = async (script: string) => {
-    for (let i = 0; i < 100; i++) { if (await run(script)) return; await sleep(50) }
+    for (let i = 0; i < 200; i++) { if (await run(script)) return; await sleep(50) }
     throw new Error(`UI wait failed: ${script}`)
   }
   await waitFor("document.body.innerText.includes('连接网关与 PlutoFish')")
@@ -116,8 +127,53 @@ async function main() {
   assert.equal(core.state().configured, true)
   assert.equal(await run("document.documentElement.scrollWidth <= window.innerWidth"), true)
   assert.equal(await run("document.body.innerText.includes('publisher-test-key')"), false)
+
+  await run("[...document.querySelectorAll('button')].find(b => b.textContent.includes('稍后再登录')).click()")
+  await waitFor("document.body.innerText.includes('下载到哪里')")
+  await run("[...document.querySelectorAll('button')].find(b => b.textContent.includes('开始使用')).click()")
+  await waitFor("document.querySelector('.shell form.big') !== null")
+  await run(`(() => {
+    window.originalForm = document.querySelector('form.big');
+    const input = window.originalForm.querySelector('input');
+    input.value = '断线时保留的剧名'; input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`)
+  const gatewayBeforeOutage = gatewayChecks
+  publisherStatus = 502
+  await assert.rejects(core.plutofish.verify(undefined, true))
+  assert.equal(core.state().configured, false)
+  assert.equal(core.state().reconnecting, true)
+  await assert.rejects(() => core!.enqueue({} as never), /双重鉴权/)
+  assert.throws(() => assertDesktopAccess('resumeAll', core!.state().configured), /双重鉴权/)
+  await waitFor("document.body.innerText.includes('正在自动重连')")
+  const retained = "document.querySelector('form.big') === window.originalForm && window.originalForm.querySelector('input').value === '断线时保留的剧名' && !document.querySelector('.setup')"
+  assert.equal(await run(retained), true)
+  for (const width of [1100, 760]) {
+    window.setSize(width, 800)
+    await sleep(100)
+    assert.equal(await run("document.documentElement.scrollWidth <= window.innerWidth"), true)
+    assert.equal(await run(retained), true)
+    writeFileSync(join(output, `reconnecting-${width}.png`), (await window.webContents.capturePage()).toPNG())
+  }
+  publisherStatus = 200; publisherDelay = 600
+  await waitFor("document.querySelector('.connection-notice') && document.body.innerText.includes('重连中')")
+  for (let i = 0; core.plutofish.view().status !== 'checking'; i++) {
+    assert.ok(i < 150, 'automatic retry did not start')
+    await sleep(50)
+  }
+  assert.equal(core.state().configured, false)
+  assert.equal(core.state().reconnecting, true)
+  assert.equal(await run(retained), true)
+  await waitFor("document.querySelector('.connection-notice') === null")
+  assert.equal(core.state().configured, true)
+  assert.equal(core.state().reconnecting, false)
+  assert.equal(await run(retained), true)
+  assert.equal(gatewayChecks, gatewayBeforeOutage)
+  publisherDelay = 0; publisherStatus = 401
+  await assert.rejects(core.plutofish.verify(undefined, true))
+  assert.equal(core.state().reconnecting, false)
+  await waitFor("document.querySelector('.setup') !== null && !document.querySelector('.shell')")
   assert.deepEqual(consoleErrors, [])
-  writeFileSync(join(output, 'result.json'), JSON.stringify({ passed: true, publisherChecks, gatewayChecks, consoleErrors, checks: ['invalid publisher', 'invalid gateway', 'both required', 'restart verification', 'runtime revocation', 'IPC gate', 'renderer submit', 'masked credential', '1100px layout'] }, null, 2))
+  writeFileSync(join(output, 'result.json'), JSON.stringify({ passed: true, publisherChecks, gatewayChecks, consoleErrors, checks: ['invalid publisher', 'initial 502 cannot enter workspace', 'invalid gateway', 'both required', 'restart verification', 'runtime revocation', 'IPC gate', 'renderer submit', 'masked credential', 'temporary 502 retains page and input', 'pending recovery retains page', 'automatic retry restores session', 'revocation still locks entry', '1100/760px layout'] }, null, 2))
   console.log('PlutoFish Electron authentication smoke passed')
 }
 

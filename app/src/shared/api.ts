@@ -85,6 +85,8 @@ export type AppState = {
   plutofish?: PlutoFishView
   accountScope?: string
   configured: boolean
+  /** 已完成双重鉴权的会话正在恢复临时连接；不授予 IPC 操作权限。 */
+  reconnecting?: boolean
   connecting: boolean
   keyName: string
   keyError: string

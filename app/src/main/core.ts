@@ -351,7 +351,7 @@ export class Core {
   private readonly seededPreferenceBindings = new Set<string>()
   private qr: { kind: 'youku'; ticket: string; loginToken: string } | { kind: 'tencent'; done: { app: boolean; tv: boolean } } | { kind: 'iqcn' } | { kind: 'bilibili' } | null = null
 
-  readonly plutofish = new PlutoFishConnection({ changed: () => this.emit.state() })
+  readonly plutofish = new PlutoFishConnection({ autoReconnect: true, changed: () => this.emit.state() })
   computePublicationED2K = (path: string, signal: AbortSignal, progress?: (done: number, total: number) => void) => ed2kFile(path, progress, signal)
   probePublicationMedia = probeFinishedMedia
   publicationFileRelinked?: (view: JobView, task: DlTask, previousPath: string) => void
@@ -797,10 +797,13 @@ export class Core {
   // ---------------------------------------------------------------- 状态
 
   state(): AppState {
+    const plutofish = this.plutofish.view()
     return {
       accountScope: createHash('sha256').update(this.cfg.host + String.fromCharCode(0) + this.cfg.key).digest('hex'),
       configured: !!this.keyInfo && this.plutofish.ready && !this.connecting,
-      plutofish: this.plutofish.view(),
+      // UI continuity only; IPC and protected operations still require configured.
+      reconnecting: !!this.keyInfo && !this.connecting && !!plutofish.reconnect,
+      plutofish,
       connecting: this.connecting,
       keyName: this.keyInfo?.name ?? '',
       keyError: this.keyError,

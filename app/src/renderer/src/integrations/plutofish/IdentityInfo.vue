@@ -8,6 +8,7 @@ const props = defineProps<{ connection?: PlutoFishView; compact?: boolean; colla
 const emit = defineEmits<{ open: [] }>()
 const identity = computed(() => props.connection?.status === 'verified' ? props.connection.identity : null)
 const status = computed(() => {
+  if (props.connection?.reconnect) return { text: '重连中', tone: 'warn' }
   switch (props.connection?.status) {
     case 'verified': return { text: '已连接', tone: 'ok' }
     case 'checking': return { text: '验证中', tone: 'warn' }
@@ -15,7 +16,7 @@ const status = computed(() => {
     default: return { text: '未连接', tone: '' }
   }
 })
-const name = computed(() => identity.value?.name || '尚未验证身份')
+const name = computed(() => identity.value?.name || (props.connection?.reconnect ? '正在恢复连接' : '尚未验证身份'))
 const initial = computed(() => identity.value ? Array.from(identity.value.name)[0] : '')
 const source = computed(() => identity.value?.sourceAccount)
 const sources = computed(() => publisherSources(identity.value))
