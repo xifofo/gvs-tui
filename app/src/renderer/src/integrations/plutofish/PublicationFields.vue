@@ -10,7 +10,7 @@ import UploadDirectoryPicker from './UploadDirectoryPicker.vue'
 import ResourceCategorySelect from './ResourceCategorySelect.vue'
 import { publicationCategoryError } from '../../../../../../src/integrations/plutofish/categories'
 import Icon from '../../components/Icon.vue'
-import { errText, gvs } from '../../store'
+import { errText, gvs, store } from '../../store'
 
 const props = withDefaults(defineProps<{ connection?: PlutoFishView; outputFolders?: string[]; recognitionFileName?: string; provider: string; sourceWorkId: string; revision?: number; tmdb: TmdbHit | null; tmdbSeason?: number; effectiveSeason?: number; directoryPreviewReady?: boolean; naming?: OutputNaming; kind: 'movie' | 'show'; title: string; year: number; episodes: EpisodeView[]; remember?: boolean; busy?: boolean }>(), { remember: true, directoryPreviewReady: true })
 const model = defineModel<PublicationInput>({ required: true })
@@ -229,7 +229,7 @@ function changeEpisode(vid: string, event: Event) {
       </div>
     </details>
     <span v-if="!connection?.identity?.sourceAccount" class="small muted">当前凭据未绑定源账号，发布信息将保留为待补全。</span>
-    <span v-if="categoryValid" class="small muted">下载完成后自动上传，核验成功后自动发布。</span>
+    <span v-if="categoryValid" class="small muted">{{ store.state?.settings.plutofishAutoUpload === false ? '自动上传已关闭，下载完成后可在下载页手动上传。' : '下载完成后自动上传，核验成功后自动发布。' }}</span>
   </section>
 </template>
 

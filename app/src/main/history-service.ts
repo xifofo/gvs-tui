@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path'
 import type { Worker } from 'node:worker_threads'
 import type { HistoryEntry, HookEvent, HookRun, HookSettings, JobView } from '@shared/api'
 import { HistoryDB, type SqlDb } from './history-db'
-import { historyFromJob, migrateJobs, type TaskLike } from './download-history'
+import { historyFromJob, historyKey, migrateJobs, type TaskLike } from './download-history'
 import { normalizeHooks, runHook } from './hooks'
 import type { ED2KResult } from '../../../src/integrations/plutofish/publication-retention.ts'
 
@@ -53,6 +53,13 @@ export class HistoryService {
     if (h.command.trim()) this.fire('start', view, task, '')
   }
 
+  relinkFile(view: JobView, task: TaskLike, previousPath: string): void {
+    const key = historyKey(view, task), entry = this.db.byJobKey(key)
+    if (!entry || entry.filePath !== previousPath) return
+    this.db.relinkFile(key, previousPath, view.output, sizeOf(view.output), task.kind === 'movie' ? 0 : task.season ?? 0,
+      task.kind === 'movie' ? 0 : task.episode ?? 0, view.label)
+  }
+
   onComplete(view: JobView, task: TaskLike): void {
     let entry: HistoryEntry | null = null
     try {
@@ -93,11 +100,11 @@ export class HistoryService {
       if (!entry) return reject(new Error('记录不存在'))
       if (entry.ed2kLink) return resolve(entry.ed2kLink)
       if (!entry.filePath || !existsSync(entry.filePath)) return reject(new Error('本地文件已不存在，无法计算 ed2k'))
-      const set = (s: NonNullable<JobView['ed2k']>) => { if (jobId) this.deps.patchJob(jobId, (v) => { v.ed2k = s }) }
+      const set = (s: NonNullable<JobView['ed2k']>) => { if (jobId) this.deps.patchJob(jobId, (v) => { if (v.output === entry.filePath) v.ed2k = s }) }
       set({ state: 'running', pct: 0, link: '' })
       if (this.deps.computeFile) {
         void this.deps.computeFile(entry.filePath, undefined, (done, total) => set({ state: 'running', pct: done / total, link: '' })).then(result => {
-          this.db.setEd2k(entry.id, result.hash, result.link)
+          if (this.db.byId(entry.id)?.filePath === entry.filePath) this.db.setEd2k(entry.id, result.hash, result.link)
           set({ state: 'done', pct: 1, link: result.link })
           resolve(result.link)
         }).catch(error => {
@@ -110,7 +117,7 @@ export class HistoryService {
       w.on('message', (m: { type: string; done?: number; total?: number; hash?: string; link?: string; message?: string }) => {
         if (m.type === 'progress' && m.total) set({ state: 'running', pct: m.done! / m.total, link: '' })
         else if (m.type === 'done') {
-          this.db.setEd2k(entry.id, m.hash!, m.link!)
+          if (this.db.byId(entry.id)?.filePath === entry.filePath) this.db.setEd2k(entry.id, m.hash!, m.link!)
           set({ state: 'done', pct: 1, link: m.link! })
           void w.terminate()
           resolve(m.link!)

@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { patchJobViews } from './job-updates'
 import { ipcArgs } from '@shared/ipc-args'
 import { titleKey } from '@shared/calendar'
 import type { SearchSourceKey } from '@shared/search-sources'
@@ -306,14 +307,22 @@ export async function openQuality(): Promise<void> {
   }
 }
 
+const jobIndex = new Map<number, JobView>()
+function receiveJobs(jobs: JobView[]): void {
+  store.jobs = userFacing(jobs)
+  jobIndex.clear()
+  for (const job of store.jobs) jobIndex.set(job.id, job)
+}
+
 export function initStore(): void {
   window.gvs.on('state', (s) => (store.state = userFacing(s)))
-  window.gvs.on('jobs', (j) => (store.jobs = userFacing(j)))
+  window.gvs.on('jobs', receiveJobs)
+  window.gvs.on('jobPatch', (jobs) => patchJobViews(jobIndex, userFacing(jobs)))
   window.gvs.on('toast', (t) => toast(t.message, t.tone))
   window.gvs.on('update', (u) => (store.update = u))
   void gvs('updateState').then((u) => (store.update = u)).catch(() => {})
   void gvs('state').then((s) => (store.state = s)).catch((e) => toast(errText(e), 'err'))
-  void gvs('jobs').then((j) => (store.jobs = j)).catch((e) => toast(errText(e), 'err'))
+  void gvs('jobs').then(receiveJobs).catch((e) => toast(errText(e), 'err'))
   window.gvs.on('subs', (v) => (store.subs = v))
   window.gvs.on('navigate', (n) => {
     if (n.subId) store.subFocus = n.subId

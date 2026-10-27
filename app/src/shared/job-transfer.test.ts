@@ -15,3 +15,14 @@ test('下载完成不能隐藏待补全、上传、暂停和失败任务', () =>
   job.publication = undefined
   expect(transferState(job)).toBe('done')
 })
+
+test('a completed download waiting for a manual upload belongs in pending', () => {
+  const job = { state: 'done', publication: {
+    binding: { sourceAccount: { id: 'source', alias: 'main' } }, workTarget: { tmdbId: '123', category: 'tv' }, output: '/existing.mp4',
+    progress: { stage: 'processing', awaitingManual: true, downloadPercent: 100, uploadPercent: 0, uploadedBytes: 0, error: '', synced: true },
+  } } as JobView
+  expect(transferState(job)).toBe('pending')
+  expect(transferLabel(job)).toBe('等待手动上传')
+  job.publication!.progress!.awaitingManual = false
+  expect(transferState(job)).toBe('active')
+})

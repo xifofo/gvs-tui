@@ -13,6 +13,7 @@ export function transferState(job: JobView): TransferState {
   if (stage === 'completed') return 'done'
   if (stage === 'failed') return 'failed'
   if (stage === 'paused' || stage === 'cancelled') return 'paused'
+  if (draft.progress?.awaitingManual) return 'pending'
   return 'active'
 }
 

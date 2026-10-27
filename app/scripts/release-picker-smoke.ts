@@ -37,9 +37,9 @@ async function main() {
   internal.probes.set(701, { provider: 'youku', qualities, audios })
   internal.plutofish.view = () => structuredClone(view)
   internal.plutofish.assertReady = () => {}
-  internal.plutofish.request = async (_binding: unknown, path: string, body: { page: number }) => {
+  internal.plutofish.request = async (_binding: unknown, path: string, body: { page: number; seasonNumber?: number }) => {
     assert.equal(path, 'releases/query')
-    const snapshot = structuredClone(items), reject = fail, timeout = queryDelay
+    const snapshot = structuredClone(items.filter(item => (item.seasonNumber ?? 1) === body.seasonNumber)), reject = fail, timeout = queryDelay
     await delay(timeout)
     if (reject) throw new Error('PlutoFish 版本查询失败（HTTP 503）')
     return { items: snapshot, total: snapshot.length, page: body.page, pageSize: 100 }
@@ -57,6 +57,18 @@ async function main() {
   assert.equal(matched.matchedId, id)
   assert.equal(await core.enqueue({ ...req, publication: { category: 'anime', releaseSelection: { context: matched.context, mode: 'existing', releaseId: id } } }), 1)
   assert.equal(core.jobList().at(-1)?.publication?.existingReleaseId, id)
+  const specialId = 'c'.repeat(32)
+  const specialOption: ReleaseOption = { ...option, id: specialId, seasonNumber: 0, name: 'S00.360p.YK.WEB-DL.H265.DDP.5.1-WF' }
+  items = [option, specialOption]
+  const withSpecials = await core.publicationReleases(req)
+  assert.deepEqual(withSpecials.items.map(item => item.seasonNumber), [1, 0])
+  await assert.rejects(() => core!.enqueue({ ...req, publication: { category: 'anime', releaseSelection: { context: withSpecials.context, mode: 'existing', releaseId: specialId } } }), /不可用/)
+  const specialReq = { ...req, naming: { season: 0 } }
+  const specialChoices = await core.publicationReleases(specialReq)
+  assert.equal(await core.enqueue({ ...specialReq, publication: { category: 'anime', releaseSelection: { context: specialChoices.context, mode: 'existing', releaseId: specialId } } }), 1)
+  assert.equal(core.jobList().at(-1)?.publication?.seasonNumber, 0)
+  assert.equal(core.jobList().at(-1)?.publication?.existingReleaseId, specialId)
+  assert.ok((await core.namingPreview(specialReq)).file.includes('.S00E03.'))
   items = []
   await assert.rejects(() => core!.enqueue(req), /后续集数/)
   const unmatched = await core.publicationReleases(req)
@@ -74,6 +86,7 @@ async function main() {
   ipcMain.handle('release-picker-smoke', (_event, method, request) => method === 'publicationReleases' ? core!.publicationReleases(request) : core!.namingPreview(request))
   let preload = readFileSync(resolve('scripts/ui-flow-smoke-preload.cjs'), 'utf8')
     .replace("const { contextBridge } = require('electron')", "const { contextBridge, ipcRenderer } = require('electron')")
+    .replace('snapshot,', "snapshot, setAutoUpload(value) { settings.plutofishAutoUpload = value; emit('state', state) },")
     .replace('const settings = {', `const settings = { ui: ${JSON.stringify({ ...DEFAULT_UI_PREFS, theme: 'light', motion: false })},`)
     .replace('Object.assign(settings, args[0]);', 'if (args[0].ui) args[0].ui = { ...settings.ui, ...args[0].ui }; Object.assign(settings, args[0]);')
     .replace('const state = {', `const state = { plutofish: ${JSON.stringify(view)},`)
@@ -154,7 +167,29 @@ async function main() {
     await wait('document.querySelector(".release-warning")')
     await delay(700)
     assert.equal(await run('document.querySelectorAll("input[name=publication-release]").length'), 1)
+    // S00 appears alongside the current season. Choosing it refreshes the context,
+    // preserves the explicit choice even when technical specs differ, and renames to S00.
+    items = [option, specialOption]
+    await click(refresh)
+    await wait(`document.querySelector('input[name="publication-release"][value="${specialId}"]')`)
+    await click(`document.querySelector('input[name="publication-release"][value="${specialId}"]')`)
+    await wait(`document.querySelector('input[name="publication-release"]:checked')?.value === '${specialId}'`)
+    await wait('document.querySelector("#manual-season")?.value === "0"')
+    await wait('document.body.innerText.includes("S00E03")')
+    await wait(`!(${button}).disabled`)
+    writeFileSync(join(output, `special-${width}.png`), (await win.webContents.capturePage()).toPNG())
+    // The same page reacts to the global switch without requiring classification or release lookup.
+    await run('window.__uiFlowFixture.setAutoUpload(false)')
+    await wait('!document.querySelector(".publication-fields") && !document.querySelector(".release-picker")')
+    await wait(`!(${button}).disabled`)
+    const releaseReads = await run('window.__uiFlowFixture.snapshot().calls.filter(call => call.method === "publicationReleases").length')
+    await delay(400)
+    assert.equal(await run('window.__uiFlowFixture.snapshot().calls.filter(call => call.method === "publicationReleases").length'), releaseReads)
+    writeFileSync(join(output, `local-${width}.png`), (await win.webContents.capturePage()).toPNG())
     assert.equal(await run('document.documentElement.scrollWidth > innerWidth + 1'), false)
+    await click(button)
+    await wait('window.__uiFlowFixture.snapshot().calls.some(call => call.method === "enqueue")')
+    assert.equal(await run('window.__uiFlowFixture.snapshot().calls.find(call => call.method === "enqueue").args[0].publication'), undefined)
     win.destroy(); win = undefined
   }
   assert.deepEqual(errors, [])

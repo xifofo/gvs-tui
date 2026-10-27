@@ -102,6 +102,25 @@ test('episode-title switch is pinned to the task and controls both legacy and me
   }
 })
 
+test('current-template title choice survives retries and never enables titles on old template tasks', () => {
+  const cfg = { ...defaultConfig(), includeEpisodeTitle: false, filenameEpisodeTitle: false }
+  const base = task({ kind: 'show', namingOrder: 'title-year', title: '雨夜重逢', filenameTitle: 'English Name',
+    series: '中文名', year: 2026, includeEpisodeTitle: true, codec: 'HEVC' })
+  for (const filenameEpisodeTitle of [false, true]) {
+    const saved = JSON.parse(JSON.stringify({ ...base, filenameEpisodeTitle })) as DlTask
+    const naming = jobNaming(saved, { ...cfg, filenameEpisodeTitle: !filenameEpisodeTitle })
+    const offNaming = jobNaming({ ...base, filenameEpisodeTitle: false }, cfg)
+    const fallback = filename(naming)
+    const measured = completedFilename(naming, { status: 'unavailable' })
+    expect(fallback.includes('雨夜重逢')).toBe(filenameEpisodeTitle)
+    expect(measured.includes('雨夜重逢')).toBe(filenameEpisodeTitle)
+    expect(folder(naming, '/library')).toBe(folder(offNaming, '/library'))
+    expect(jobTitle(saved)).toBe(jobTitle(base))
+    expect(completedFilename(jobNaming({ ...saved, includeEpisodeTitle: false }, cfg), { status: 'unavailable' })).toBe(measured)
+  }
+  expect(filename(jobNaming(base, { ...cfg, filenameEpisodeTitle: true }))).not.toContain('雨夜重逢')
+})
+
 test('youku playlists use stream playlist_url not CMAF segments', () => {
   const data = {
     streams: [{ stream_type: 'mp4hd3', media_type: 'video', playlist_url: 'https://v.m3u8' }],

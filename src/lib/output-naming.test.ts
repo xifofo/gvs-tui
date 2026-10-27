@@ -24,3 +24,26 @@ test('new tasks place year immediately after title in preview and fallback, whil
   expect(long).toContain('.2024.S00E02.')
   expect(long).toEndWith('-GVS.mkv')
 })
+
+test('current template adds only the episode title, preserving year, numbering, specs and folders', () => {
+  const n: Naming = { kind: 'show', title: '中文名', filenameTitle: 'English Name', nameDots: '', namingOrder: 'title-year',
+    year: 2026, season: 0, episode: 298, episodeTitle: '特别篇：雨夜/重逢', height: 2160, codec: 'H265',
+    audio: 'DDP.5.1', dv: true, source: 'TX', group: 'PFWEB', tmdbId: 123, container: 'mkv' }
+  const specs = { status: 'probed' as const, width: 3840, height: 2160, codec: 'hevc', dynamicRange: 'HDR', fps: 60,
+    audio: { status: 'confirmed' as const, codec: 'eac3', channels: 6 } }
+  for (const makeName of [(x: Naming) => filename(x), (x: Naming) => completedFilename(x, specs, 'MAXPLUS')]) {
+    const off = makeName({ ...n, filenameEpisodeTitle: false })
+    const on = makeName({ ...n, filenameEpisodeTitle: true })
+    expect(on).toBe(off.replace('.S00E298.', '.S00E298.特别篇.雨夜.重逢.'))
+    expect(makeName(n)).toBe(off)
+    for (const episodeTitle of ['', '中文名', 'English Name', ':/?!']) {
+      expect(makeName({ ...n, filenameEpisodeTitle: true, episodeTitle })).toBe(off)
+    }
+    expect(makeName({ ...n, kind: 'movie', filenameEpisodeTitle: true }))
+      .toBe(makeName({ ...n, kind: 'movie', filenameEpisodeTitle: false }))
+    const long = makeName({ ...n, filenameEpisodeTitle: true, episodeTitle: '标题非常长'.repeat(100) })
+    expect(Buffer.byteLength(long, 'utf8')).toBeLessThanOrEqual(240)
+    expect(long).toStartWith('English.Name.2026.S00E298.')
+    expect(long.slice(long.indexOf('.2160p.'))).toBe(off.slice(off.indexOf('.2160p.')))
+  }
+})

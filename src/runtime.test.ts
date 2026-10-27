@@ -43,7 +43,7 @@ for (const [provider, vid] of [['youku', 'XNjUzMzM0MDI1Ng=='], ['tencent', 'g410
   })
 }
 
-test('TUI movie/series template omits episode titles while saved legacy tasks keep their choice', async () => {
+test('TUI episode-title option changes only the subtitle and is pinned on saved tasks', async () => {
   const r = await start()
   const x = r as any
   x.detailProv = 'iq'
@@ -51,16 +51,28 @@ test('TUI movie/series template omits episode titles while saved legacy tasks ke
   x.detailInfo = { kind: 'show', year: 2026 }
   x.eps = [{ vid: 'one', title: '雨夜重逢', season: 2, number: 3, languages: [] }]
   r.handleKey('f4')
-  expect(r.snapshot.settings?.some(s => s.label === '文件名单集标题')).toBe(false)
+  expect(r.snapshot.settings?.find(s => s.label === '文件名单集标题')?.value).toBe('关（默认）')
+  x.setIdx = r.snapshot.settings!.findIndex(s => s.label === '文件名单集标题')
+  const persist = spyOn(x, 'persistConfig').mockImplementation(() => {})
+  r.handleKey('enter')
+  expect(x.cfg.filenameEpisodeTitle).toBe(true)
+  expect(r.snapshot.settings?.find(s => s.label === '文件名单集标题')?.value).toBe('开')
+  r.handleKey('enter')
+  expect(x.cfg.filenameEpisodeTitle).toBe(false)
+  expect(persist).toHaveBeenCalledTimes(2)
+  persist.mockRestore()
   for (const includeEpisodeTitle of [true, false]) {
+    x.cfg.filenameEpisodeTitle = includeEpisodeTitle
     x.cfg.includeEpisodeTitle = includeEpisodeTitle
     const task = x.taskFromEp(0)
     x.pending = [task]
     x.scene = 'confirm'
     x.emit()
     expect(r.snapshot.confirmation?.name).toContain('海外节目.2026.S02E03.')
-    expect(r.snapshot.confirmation?.name).not.toContain('雨夜重逢')
-    expect(completedFilename(jobNaming(task, x.cfg), { status: 'unavailable' })).not.toContain('雨夜重逢')
+    expect(r.snapshot.confirmation?.name?.includes('雨夜重逢')).toBe(includeEpisodeTitle)
+    const restored = JSON.parse(JSON.stringify(task))
+    expect(completedFilename(jobNaming(restored, { ...x.cfg, filenameEpisodeTitle: !includeEpisodeTitle }), { status: 'unavailable' })
+      .includes('雨夜重逢')).toBe(includeEpisodeTitle)
 
     const legacy = JSON.parse(JSON.stringify({ ...task, namingOrder: undefined }))
     const restoredName = completedFilename(jobNaming(legacy, x.cfg), { status: 'unavailable' })

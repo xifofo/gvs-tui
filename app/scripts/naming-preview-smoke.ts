@@ -56,6 +56,7 @@ async function main() {
   })
   core = new Core({ state: () => {}, jobs: () => {}, toast: () => {} })
   const internal = core as any
+  assert.equal(core.state().settings.includeEpisodeTitle, false)
   Object.assign(internal.cfg, { outDir: '/Downloads', releaseGroup: 'FPWeb', includeEpisodeTitle: false, tmdbKey: 'fixture-only' })
   internal.probes.set(701, { provider: 'youku', qualities, audios })
   const before = JSON.stringify({ qualities, audios })
@@ -81,7 +82,7 @@ async function main() {
   await assert.rejects(() => core!.namingPreview({ ...request, token: -1 }), /过期/)
 
   // Reproduce the screenshot through the production task builder, including an
-  // opaque Tencent profile and an already enabled legacy episode-title option.
+  // opaque Tencent profile and an already enabled retired episode-title option.
   Object.assign(internal.cfg, { releaseGroup: 'PFWEB', includeEpisodeTitle: true })
   internal.probes.set(702, { provider: 'tencent', qualities: qualitiesFromTencentFormats([
     { id: '123', name: 'maxplus', profile: '4', vencoding: 'h265', width: 3840, height: 2160, vfps: 60, hdr: 'hdr' },
@@ -97,19 +98,33 @@ async function main() {
   const savedTask = JSON.parse(JSON.stringify(internal.buildTasks(tencentRequest).tasks[0]))
   assert.equal(completedFilename(jobNaming(savedTask, internal.cfg), { status: 'probed', width: 3840, height: 2160,
     codec: 'hevc', dynamicRange: 'HDR', fps: 60, audio: { status: 'confirmed', codec: 'eac3', channels: 6, atmos: true } }, 'MAXPLUS'), tencentPreview.file)
+  assert.equal((await core.saveSettings({ includeEpisodeTitle: true })).settings.includeEpisodeTitle, true)
+  assert.equal(JSON.parse(readFileSync(join(profile, 'gvs/tui.json'), 'utf8')).filenameEpisodeTitle, true)
+  const onPreview = await core.namingPreview(tencentRequest)
+  assert.equal(onPreview.file, tencentPreview.file.replace('.S01E01.', '.S01E01.尚公主.第01集.'))
+  assert.equal(onPreview.folder, tencentPreview.folder)
+  const onTask = JSON.parse(JSON.stringify(internal.buildTasks(tencentRequest).tasks[0]))
+  await core.saveSettings({ includeEpisodeTitle: false })
+  const specs = { status: 'probed' as const, width: 3840, height: 2160, codec: 'hevc', dynamicRange: 'HDR', fps: 60,
+    audio: { status: 'confirmed' as const, codec: 'eac3', channels: 6, atmos: true } }
+  assert.equal(completedFilename(jobNaming(onTask, internal.cfg), specs, 'MAXPLUS'), onPreview.file)
+  assert.equal(completedFilename(jobNaming(savedTask, internal.cfg), specs, 'MAXPLUS'), tencentPreview.file)
+  assert.equal(JSON.parse(readFileSync(join(profile, 'gvs/tui.json'), 'utf8')).filenameEpisodeTitle, false)
   const versionName = `S01.${tencentPreview.file.slice(tencentPreview.file.indexOf('2160p.')).replace(/\.mkv$/, '')}`
   assert.deepEqual(matchRelease([{ id: 'existing', name: 'S01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.HEVC.DDP.5.1.Atmos-PFWEB',
     resolution: '2160p', dynamicRange: 'HDR', status: 'published' }], versionName), { matchedId: 'existing', match: 'specs' })
   Object.assign(internal.cfg, { releaseGroup: 'FPWeb', includeEpisodeTitle: false })
 
   ipcMain.handle('naming-preview-smoke', (_event, req) => core!.namingPreview(req))
+  ipcMain.handle('naming-settings-smoke', (_event, patch) => core!.saveSettings(patch))
   let preload = readFileSync(resolve('scripts/ui-flow-smoke-preload.cjs'), 'utf8')
     .replace("const { contextBridge } = require('electron')", "const { contextBridge, ipcRenderer } = require('electron')")
     .replace("const title = '山海回声'", "const title = '此处通往繁星'")
     .replace("tmdbKey: ''", "tmdbKey: 'fixture-only'")
     .replace("case 'publicationPreferences':", `case 'tmdbSearch': return [${JSON.stringify(request.tmdb)}]; case 'tmdbSeasons': return { seasons: [], warning: '' }; case 'publicationPreferences':`)
+    .replace("case 'saveSettings':", "case 'hookSettings': return { start: { notify: false, command: '' }, complete: { notify: false, command: '' }, ed2k: false, timeoutSec: 30 }; case 'saveSettings':")
     .replace('const settings = {', `const settings = { ui: ${JSON.stringify({ ...DEFAULT_UI_PREFS, theme: 'light', motion: false })},`)
-    .replace('Object.assign(settings, args[0]);', 'if (args[0].ui) args[0].ui = { ...settings.ui, ...args[0].ui }; Object.assign(settings, args[0]);')
+    .replace('Object.assign(settings, args[0]);', 'if (args[0].ui) args[0].ui = { ...settings.ui, ...args[0].ui }; if (args[0].includeEpisodeTitle !== undefined) await ipcRenderer.invoke("naming-settings-smoke", args[0]); Object.assign(settings, args[0]);')
   const start = preload.indexOf('const audios = '), end = preload.indexOf('let jobs = ')
   assert.ok(start > 0 && end > start)
   const views = qualities.map((q, index) => ({ ...q, index, stream: q.id, hdr: q.hdr || '', audios: audios.map(a => ({ ...a, embedded: false })) }))
@@ -142,6 +157,21 @@ async function main() {
     const clickSelector = (selector: string) => click(`document.querySelector(${JSON.stringify(selector)})`)
     await win.loadFile(resolve('out/renderer/index.html'))
     await wait('window.__uiFlowFixture.snapshot().ready')
+    await click('Array.from(document.querySelectorAll(".side button")).find(e => e.textContent.trim() === "设置")')
+    await click('Array.from(document.querySelectorAll("nav.tabs button")).find(e => e.textContent.trim() === "命名与刮削")')
+    const toggle = 'document.querySelector("input[aria-label=\\"文件名包含单集标题\\"]")'
+    await wait(toggle)
+    assert.equal(await run(`${toggle}.checked`), false)
+    await run(`${toggle}.click()`)
+    await wait('window.__uiFlowFixture.snapshot().settings.includeEpisodeTitle === true')
+    await wait(`!${toggle}.disabled`)
+    assert.equal(core.state().settings.includeEpisodeTitle, true)
+    await run('document.fonts.ready.then(() => true)')
+    writeFileSync(join(output, `settings-${width}.png`), (await win.webContents.capturePage()).toPNG())
+    assert.equal(await run('document.documentElement.scrollWidth > innerWidth + 1'), false)
+    await run(`${toggle}.click()`)
+    await wait('window.__uiFlowFixture.snapshot().settings.includeEpisodeTitle === false')
+    await click('Array.from(document.querySelectorAll(".side button")).find(e => e.textContent.trim() === "搜索")')
     await wait('document.querySelector("input[type=search]")')
     await run('(() => { const input = document.querySelector("input[type=search]"); input.value = "此处通往繁星"; input.dispatchEvent(new Event("input", { bubbles: true })); input.form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); })()')
     await clickSelector('button[aria-label="打开 此处通往繁星"]')
@@ -189,7 +219,7 @@ async function main() {
     win.destroy(); win = undefined
   }
   assert.deepEqual(errors, [])
-  console.log('PASS: production Core and renderer preview full specs, update quality/default audio, preserve numbering and manual title/year/season, reset, copy, and wrap at 1440/1040/760px')
+  console.log('PASS: episode-title option defaults off, persists, preserves task names and filename specs; settings and previews wrap at 1440/1040/760px')
 }
 
 void main().catch(error => { console.error(error); process.exitCode = 1 }).finally(async () => {

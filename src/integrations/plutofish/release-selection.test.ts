@@ -85,3 +85,29 @@ test('换源账号后发布标识变了：沿用订阅记住的版本，已下�
   expect(preferRelease(bound, firstId).matchedId).toBe(secondId)
   await expect(releaseChoices(client([option({ episodes: [1, -1] })]), [draft(6)], preview)).rejects.toThrow('响应无效')
 })
+
+test('手动选版列出本作品 S00；普通季不默认匹配特别篇，切季后才允许绑定', async () => {
+  const queried: Array<number | undefined> = []
+  const reader = { request: async <T>(_binding: unknown, _path: unknown, body: unknown) => {
+    const { seasonNumber } = body as { seasonNumber?: number }
+    queried.push(seasonNumber)
+    const items = seasonNumber === 0 ? [option({ id: secondId, name: preview.replace('S01', 'S00') })] : []
+    return { items, total: items.length, page: 1, pageSize: 100, boundReleaseId: secondId } as T
+  } }
+  const choices = await releaseChoices(reader, [draft(3)], preview, true)
+  expect(queried).toEqual([1, 0])
+  expect(choices.items.map(item => [item.id, item.seasonNumber])).toEqual([[secondId, 0]])
+  expect(choices.matchedId).toBeUndefined()
+  expect(preferRelease(choices, secondId).matchedId).toBeUndefined()
+  expect(() => resolveReleaseSelection(choices, { context: choices.context, mode: 'existing', releaseId: secondId })).toThrow('不可用')
+  queried.length = 0
+  const specialDraft = preparePublication({ ...task(3), season: 0 }, connection, 'anime')
+  const special = await releaseChoices(reader, [specialDraft], preview.replace('S01', 'S00'), true)
+  expect(queried).toEqual([0])
+  expect(special.matchedId).toBe(secondId)
+  expect(resolveReleaseSelection(special, { context: special.context, mode: 'existing', releaseId: secondId })).toEqual({ existingReleaseId: secondId })
+  expect(special.context).not.toBe(choices.context)
+  queried.length = 0
+  expect((await releaseChoices(reader, [draft(3)], preview)).items).toEqual([])
+  expect(queried).toEqual([1])
+})
