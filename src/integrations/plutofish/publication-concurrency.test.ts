@@ -28,7 +28,7 @@ test('最多两个 PUT，排队文件提前哈希，暂停一路不影响另一�
     if (route === 'uploads/prepare') {
       expect(input.clientId).toBeDefined(); clients.add(input.clientId!)
       if (input.action === 'credentials') return { credentials: { accessKeyId: 'ID', accessKeySecret: 'SECRET', securityToken: 'TOKEN', expiration: new Date(Date.now() + 3600000).toISOString(), endpoint: 'https://up-file.115.com', rate: 51200, rateScope: input.taskKey } } as T
-      if (input.action === 'verify') return { dispatch: { status: 'ready', fileId: '123', pickCode: input.taskKey } } as T
+      if (input.action === 'complete') return { dispatch: { status: 'ready', fileId: '123', pickCode: input.taskKey } } as T
       return { dispatch: { status: 'uploading', pickCode: input.taskKey, bucket: 'bucket', object: input.taskKey, endpoint: 'https://up-file.115.com', callback: '{}' } } as T
     }
     throw new Error(`Unexpected ${route}`)

@@ -176,3 +176,28 @@ test('校验发现删除后可优先清理，无需等下一次一分钟扫描',
     expect(f.store.load()).toHaveLength(0)
   } finally { f.close() }
 })
+
+test('宿主确认整目录已删除后落盘删除事实，父目录缺失也能在重启后撤销校验资格', async () => {
+  const f = await fixture()
+  let worker: PublicationWorker | undefined
+  try {
+    const removed = f.create(1); removed.draft.output = join(f.directory, 'deleted-folder', 'video.mkv'); f.store.save(removed)
+    const unfinished = f.create(2); unfinished.snapshot.stage = 'uploading'; f.store.save(unfinished)
+    const unsynced = f.create(3); unsynced.acknowledged = 1; f.store.save(unsynced)
+    f.store.close()
+    worker = new PublicationWorker(f.connection, () => {}, { directory: f.directory, manual: true })
+    worker.localFilesDeleted([removed.draft.fileKey, unfinished.draft.fileKey, unsynced.draft.fileKey])
+    await worker.close(); worker = undefined
+    const restored = new Map(f.store.load().map(s => [s.draft.fileKey, s]))
+    expect(restored.get(removed.draft.fileKey)?.retention?.deletedAt).toBeNumber()
+    expect(restored.get(unfinished.draft.fileKey)?.retention?.deletedAt).toBeUndefined()
+    expect(restored.get(unsynced.draft.fileKey)?.retention?.deletedAt).toBeUndefined()
+    const calls: unknown[] = []
+    f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
+      expect(route).toBe('range-proofs/forget'); calls.push(body); return { accepted: true } as T
+    }
+    await new PublicationCleanup(f.connection, s => { f.store.removeCompleted(s); restored.delete(s.draft.fileKey) }).tick(restored, new AbortController().signal)
+    expect(calls).toEqual([{ taskKeys: [removed.draft.fileKey] }])
+    expect(restored.has(removed.draft.fileKey)).toBe(false)
+  } finally { await worker?.close(); f.close() }
+})

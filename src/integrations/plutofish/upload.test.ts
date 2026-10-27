@@ -137,7 +137,8 @@ test.each([0, 51200, 102400, 204800])('失败后只补传缺失分片并保留�
   expect(saved).not.toContain('TEMP-')
   expect(calls).toEqual([1, 2, 2, 3])
   expect(Buffer.concat([...remote.values()])).toEqual(data)
-  expect(cp.completing).toBeTrue()
+  expect(cp.completing).toBeFalse()
+  expect(cp.completion).toEqual({ pickCode: dispatch.pickCode! })
 })
 
 test('没有 TMDB 的身份不依赖名称和海报，清单租约与快照持久化', () => {

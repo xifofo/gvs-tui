@@ -26,7 +26,7 @@ test('旧服务端单路上传和提前准备；升级、回滚排空当前协�
     if (rejectInput && input.action === 'start') return Response.json({ error: { code: 'VALIDATION_FAILED', fieldErrors: { body: 'private error detail' } } }, { status: 422 })
     if (rejectExtensions && Object.hasOwn(input, 'clientId')) return Response.json({ error: { code: 'VALIDATION_FAILED', fieldErrors: { body: 'unknown property' } } }, { status: 422 })
     if (input.action === 'credentials') return Response.json({ credentials: { accessKeyId: 'ID', accessKeySecret: 'SECRET', securityToken: 'TOKEN', expiration: new Date(Date.now() + 3600000).toISOString(), endpoint: 'https://up-file.115.com', rate: 0, rateScope: 'shared' } })
-    return Response.json({ dispatch: { status: input.action === 'verify' ? 'ready' : 'uploading', fileId: '123', pickCode: input.taskKey,
+    return Response.json({ dispatch: { status: ['verify', 'complete'].includes(input.action) ? 'ready' : 'uploading', fileId: '123', pickCode: input.taskKey,
       bucket: 'bucket', object: input.taskKey, endpoint: 'https://up-file.115.com', callback: '{}' } })
   } })
   const connection = new PlutoFishConnection({ load: () => ({ url: server.url.origin, key: 'offline' }) })
@@ -85,7 +85,7 @@ test('旧服务端单路上传和提前准备；升级、回滚排空当前协�
     await until(() => active.has(keys[1]!) && active.has(keys[2]!))
     const legacy = requests.filter(r => r.taskKey === keys[0])
     expect(legacy.every(r => !Object.hasOwn(r, 'clientId'))).toBe(true)
-    expect(legacy.map(r => r.action)).toEqual(expect.arrayContaining(['start', 'credentials', 'heartbeat', 'verify', 'release']))
+    expect(legacy.map(r => r.action)).toEqual(expect.arrayContaining(['start', 'credentials', 'heartbeat', 'complete', 'release']))
 
     // 撤销能力后不再补充并发槽；原两路租约各自完成和释放后再进入旧协议。
     advertised = false
