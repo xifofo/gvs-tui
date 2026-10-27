@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkvLang, mkvmergeMuxArgs } from './mkvmerge.ts'
+import { mkvLang, mkvmergeMuxArgs, subtitleTrackName } from './mkvmerge.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'gvs-sync-test-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -80,4 +80,19 @@ test('the chosen audio moves to the first MKV audio with the only default flag',
   expect(args.flatMap((a, i) => a === '--default-track' ? [args[i + 1]] : [])).toEqual(['0:1', '0:0', '0:0'])
   const fallback = mkvmergeMuxArgs('out.mkv', 'v.mp4', [{ path: 'a.mp4', isDefault: false }])
   expect(fallback[fallback.indexOf('--default-track') + 1]).toBe('0:1')
+})
+
+test('simplified and traditional Chinese keep a remark that chi cannot express', () => {
+  expect(subtitleTrackName('zh-Hans')).toBe('简体中文')
+  expect(subtitleTrackName('zh-Hans-CN')).toBe('简体中文')
+  expect(subtitleTrackName('cmn-Hans')).toBe('简体中文')
+  expect(subtitleTrackName('zh-CN')).toBe('简体中文')
+  expect(subtitleTrackName('zh-Hant')).toBe('繁体中文')
+  expect(subtitleTrackName('zh-Hant-HK')).toBe('繁体中文')
+  expect(subtitleTrackName('yue-Hant')).toBe('繁体中文')
+  expect(subtitleTrackName('zh-TW')).toBe('繁体中文')
+  expect(subtitleTrackName('zh-HK')).toBe('繁体中文')
+  expect(subtitleTrackName('zh')).toBe('')
+  expect(subtitleTrackName('en')).toBe('')
+  expect(subtitleTrackName('')).toBe('')
 })
