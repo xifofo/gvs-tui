@@ -39,6 +39,12 @@ export function normalizeHttpProxy(value: string): string {
   }
 }
 
+/** TUI-only explicit media exit; desktop always routes media through the native
+ * transport above (system/PAC proxy per request), so there is nothing to pass. */
+export function mediaDownloadProxy(_savedProxy = ''): string {
+  return ''
+}
+
 export function inheritedProxyUrl(env: NodeJS.Dict<string> = process.env): string {
   if (env.GVS_PROXY?.trim()) return ''
   for (const [k, v] of Object.entries(env)) {
