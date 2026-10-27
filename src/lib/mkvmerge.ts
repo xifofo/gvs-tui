@@ -283,13 +283,20 @@ export async function mkvmergeTrackFiles(bin: string, inputs: string[], out: str
       } else if (track.type==='audio' && singleAudio && originalAudioLanguage
         && (isUnknownAudioLanguage(language) || /^(en|eng)(?:[-_]|$)/i.test(language))) {
         args.push('--language',`${track.id}:${originalAudioLanguage}`)
-      } else if (match && isUnknownAudioLanguage(language)) args.push('--language',`${track.id}:${match[1]}`)
+      } else if (match && isUnknownAudioLanguage(language)) args.push('--language',`${track.id}:${mkvLang(match[1]!)}`)
       if (track.type==='subtitles') {
         args.push('--default-track',`${track.id}:no`)
         // RE names the file from LANGUAGE and drops NAME when this mux runs.
         // Without a track name, 简体 and 繁体 both show up as bare 中文.
         const remark = subtitleTrackName(match?.[1] || language)
         if (remark) args.push('--track-name', `${track.id}:${remark}`)
+        // RE names the file from LANGUAGE. zh-Hans is not a language mkvmerge
+        // keeps on a text subtitle, so the merged track stays und.
+        const raw = match?.[1] || ''
+        const parts = raw.toLowerCase().split('-')
+        const scripted = /^(?:cmn|yue|zh|zho|chi)$/.test(parts[0] || '') && /^(?:hans|hant|cn|sg|tw|hk|mo)$/.test(parts[1] || '')
+        const tagged = scripted ? raw : mkvLang(raw)
+        if (tagged && tagged !== 'und') args.push('--language',`${track.id}:${tagged}`)
       }
       if (track.type==='audio') {
         args.push('--default-track',`${track.id}:${firstAudio?'yes':'no'}`)

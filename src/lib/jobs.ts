@@ -590,7 +590,7 @@ async function dlHongguo(
   if (direct) return
   const remux = (n: number, total: number) => emit('封装', 0.86 + 0.13 * (n / total), `封装 ${human(n)}/${human(total)}`)
   try {
-    await writeFinal(out, (dest) => mkvmerge ? mkvmergeRemux(mkvmerge, tmp, dest, remux, signal, '', group) : ffmpegRemux(ffmpeg, tmp, dest, remux, signal))
+    await writeFinal(out, (dest) => mkvmerge ? mkvmergeRemux(mkvmerge, tmp, dest, remux, signal, '', group) : ffmpegRemux(ffmpeg, tmp, dest, remux, signal, group))
   } catch (e) {
     if (signal?.aborted) throw e
     moveFileSync(tmp, out.slice(0, out.length - extname(out).length) + '.mp4')
@@ -699,7 +699,7 @@ async function dlHuangguo(
       emit('封装', 0.86 + 0.13 * (n / Math.max(1, total)), `封装 ${human(n)}/${human(total)}`)
     await writeFinal(out, (dest) => mkvmerge && extname(out).toLowerCase() === '.mkv'
       ? mkvmergeRemux(mkvmerge, muxSource, dest, remux, signal, '', group)
-      : ffmpegRemux(ffmpeg, muxSource, dest, remux, signal))
+      : ffmpegRemux(ffmpeg, muxSource, dest, remux, signal, group))
     for (const leftover of [raw, dec]) {
       try { unlinkSync(leftover) } catch { /* keep */ }
     }
@@ -1532,7 +1532,7 @@ async function dlManifestProvider(cli: GwClient, cfg: FileConfig, t: DlTask, out
             const mkvmerge = await ensureMkvmerge()
             if (!mkvmerge) throw new Error('没有 mkvmerge')
             emit('封装', 0.995, `挂入 ${files.length} 条字幕`)
-            await attachSubtitles(mkvmerge, dest, files.map(f => ({ ...f, isDefault: defaults.has(f.sub.id) })), signal)
+            await attachSubtitles(mkvmerge, dest, files.map(f => ({ ...f, isDefault: defaults.has(f.sub.id) })), signal, releaseGroup(t, cfg))
           } else {
             emit('字幕', 0.995, `${files.length} 条字幕已存到 ${join(work, 'subs')}`)
           }

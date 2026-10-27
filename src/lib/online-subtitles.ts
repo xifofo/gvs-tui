@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { mkvLang } from './mkvmerge.ts'
+import { withMkvGroupTags } from './release-group.ts'
 import { isObj } from './util.ts'
 
 /**
@@ -141,11 +142,12 @@ export async function attachSubtitles(
   video: string,
   files: ReadonlyArray<{ path: string; sub: OnlineSubtitle; isDefault?: boolean }>,
   signal?: AbortSignal,
+  group = '',
 ): Promise<void> {
   if (!files.length) return
   const dest = `${video}.subs.mkv`
   try {
-    await run(mkvmerge, attachSubtitleArgs(video, dest, files), signal)
+    await withMkvGroupTags(dest, group, tags => run(mkvmerge, [...tags, ...attachSubtitleArgs(video, dest, files)], signal))
     await rename(dest, video)
   } catch (e) {
     await rm(dest, { force: true }).catch(() => {})
