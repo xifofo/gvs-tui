@@ -7,6 +7,10 @@ import { verifiedGatewayKey } from '../../../src/integrations/plutofish/gateway.
 import { PlutoFishConnection } from '../../../src/integrations/plutofish/connection.ts'
 import { completePublication, preparePublication } from '../../../src/integrations/plutofish/publication.ts'
 import { savePublication } from '../../../src/integrations/plutofish/publication-store.ts'
+import { inspectPublicationFile, publicationFileIdentity, publicationFileNumbers, samePublicationFile,
+  type PublicationFileChoice, type PublicationFileIdentity, type PublicationFileNumbers } from '../../../src/integrations/plutofish/publication-file'
+import { fileFingerprint, probeFinishedMedia } from '@tui/gvs-record'
+import type { CompletedMedia } from '@tui/actual-version'
 import { PublicationPreferenceStore, type PublicationContext, type PublicationPreferences } from '../../../src/integrations/plutofish/publication-preferences.ts'
 import type { PlutoFishInput } from '../../../src/integrations/plutofish/types.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -110,6 +114,7 @@ import {
 import { mergeUiPrefs, sanitizeUiPrefs } from '@shared/ui-prefs'
 import { parseGatewayCalendar, type CalendarDay } from '@shared/calendar'
 import { installTunnelWebSocket } from './env'
+import { JobUpdateBatch } from './job-updates'
 import { desktopProxy, setDesktopProxy } from './desktop-network'
 import { normalizeDesktopProxy } from './desktop-proxy'
 import { detailPoster, posterOf, toCards } from './cards'
@@ -120,6 +125,7 @@ const SIGN_DEAD_RE = /not found|revoked|invalid Yk-Sign|yk_sign not found/i
 type Emit = {
   state: () => void
   jobs: (jobs: JobView[]) => void
+  jobPatch?: (jobs: JobView[]) => void
   toast: (message: string, tone: Tone) => void
 }
 
@@ -337,6 +343,7 @@ export class Core {
   private txAcct: TxAccount | null = null
   private tools: AppState['tools'] = []
   private readonly jobs = new Map<number, JobRecord>()
+  private readonly publicationFiles = new Map<number, { choice: PublicationFileChoice; identity: PublicationFileIdentity; measured: CompletedMedia; context: string }>()
   private readonly hub: JobHub
   private probeToken = 0
   private readonly probes = new Map<number, { provider: Provider; qualities: Quality[]; audios: Audio[]; subtitles?: Subtitle[] }>()
@@ -346,12 +353,17 @@ export class Core {
 
   readonly plutofish = new PlutoFishConnection({ changed: () => this.emit.state() })
   computePublicationED2K = (path: string, signal: AbortSignal, progress?: (done: number, total: number) => void) => ed2kFile(path, progress, signal)
+  probePublicationMedia = probeFinishedMedia
+  publicationFileRelinked?: (view: JobView, task: DlTask, previousPath: string) => void
 
-  private readonly publications = new PublicationWorker(this.plutofish, (draft, transient) => {
-    for (const rec of this.jobs.values()) if (rec.task.publication?.fileKey === draft.fileKey) rec.task.publication = draft
-    if (transient) { this.emit.jobs(this.jobList()); return }
-    this.pushJobs()
-  }, { beforeCleanup: () => this.flushJobs(true), retention: { compute: (path, signal, progress) => this.computePublicationED2K(path, signal, progress) } })
+  private readonly publications = new PublicationWorker(this.plutofish, (draft) => {
+    const changed: number[] = []
+    for (const rec of this.jobs.values()) if (rec.task.publication?.fileKey === draft.fileKey) {
+      rec.task.publication = draft
+      changed.push(rec.view.id)
+    }
+    if (changed.length) this.pushJobs(changed)
+  }, { autoUpload: () => this.cfg.plutofishAutoUpload !== false, beforeCleanup: () => this.flushJobs(true), retention: { compute: (path, signal, progress) => this.computePublicationED2K(path, signal, progress) } })
 
   constructor(private readonly emit: Emit) {
     this.hub = new JobHub((e) => this.onJob(e))
@@ -512,10 +524,7 @@ export class Core {
 
   /** 退出时调用：把还在跑的 pushJobs 收掉，不再往回写文件。 */
   dispose(): void {
-    if (this.pushTimer) {
-      clearTimeout(this.pushTimer)
-      this.pushTimer = null
-    }
+    this.jobUpdates.dispose()
     if (this.saveTimer) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
@@ -810,12 +819,13 @@ export class Core {
     return {
       host: c.host,
       desktopProxy: c.desktopProxy ?? '',
+      plutofishAutoUpload: c.plutofishAutoUpload !== false,
       keyMasked: mask(c.key),
       hasKey: !!c.key,
       outDir: c.outDir,
       tmpDir: c.tmpDir ?? '',
       releaseGroup: c.releaseGroup,
-      includeEpisodeTitle: c.includeEpisodeTitle !== false,
+      includeEpisodeTitle: c.filenameEpisodeTitle === true,
       tmdbKey: c.tmdbKey,
       tmdbLang: c.tmdbLang,
       threads: c.threads,
@@ -938,7 +948,8 @@ export class Core {
     if (patch.outDir !== undefined) c.outDir = normalizeOutDir(patch.outDir) || c.outDir
     if (patch.tmpDir !== undefined) c.tmpDir = normalizeTmpDir(patch.tmpDir)
     if (patch.releaseGroup !== undefined) c.releaseGroup = patch.releaseGroup.trim()
-    if (patch.includeEpisodeTitle !== undefined) c.includeEpisodeTitle = patch.includeEpisodeTitle === true
+    if (patch.includeEpisodeTitle !== undefined) c.filenameEpisodeTitle = patch.includeEpisodeTitle === true
+    if (patch.plutofishAutoUpload !== undefined) c.plutofishAutoUpload = patch.plutofishAutoUpload === true
     if (patch.tmdbKey !== undefined) c.tmdbKey = patch.tmdbKey.trim()
     if (patch.tmdbLang !== undefined) c.tmdbLang = patch.tmdbLang.trim() || 'zh-CN'
     if (patch.threads !== undefined) c.threads = clampThreads(patch.threads)
@@ -973,6 +984,7 @@ export class Core {
     if (patch.huangguoFmt !== undefined) c.huangguoFmt = patch.huangguoFmt
     if (patch.ui !== undefined) c.desktopUi = mergeUiPrefs(c.desktopUi, patch.ui)
     saveConfig(c)
+    if (patch.plutofishAutoUpload !== undefined) this.publications.refreshUploadPolicy()
     if (patch.tencentCookie !== undefined && this.has('tencent')) void this.refreshTencent()
     this.emit.state()
     return this.state()
@@ -1700,6 +1712,7 @@ export class Core {
         manualAudioDefault: !!req.defaultAudioId,
         namingVersion: ['youku', 'tencent', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(req.detail.provider) ? 1 : undefined,
         includeEpisodeTitle: this.cfg.includeEpisodeTitle !== false,
+        filenameEpisodeTitle: this.cfg.filenameEpisodeTitle === true,
         title: ep.title,
         series: movie ? req.detail.title : parseSeriesTitle(req.detail.title).title,
         vid: ep.vid,
@@ -1768,7 +1781,7 @@ export class Core {
   }
 
   /** 仅查询 PlutoFish 目录；预览使用当前探测数据，不触发下载、TMDB 或网盘调用。 */
-  async publicationReleases(req: EnqueueRequest) {
+  async publicationReleases(req: EnqueueRequest, includeSpecials = true) {
     this.plutofish.assertReady()
     const { tasks, quality } = this.buildTasks(req)
     const connection = this.plutofish.view()
@@ -1781,7 +1794,7 @@ export class Core {
     const match = [...stem.matchAll(/(?:^|\.)(\d{3,4}p)(?=\.|$)/gi)].at(-1)
     const specs = match ? stem.slice(match.index! + (match[0].startsWith('.') ? 1 : 0)) : `${first.height}p`
     const name = [first.kind === 'movie' ? '' : `S${String(first.season).padStart(2, '0')}`, specs].filter(Boolean).join('.')
-    return releaseChoices(this.plutofish, drafts, name)
+    return releaseChoices(this.plutofish, drafts, name, includeSpecials)
   }
 
   /**
@@ -1834,7 +1847,7 @@ export class Core {
   async subscriptionProgress(req: EnqueueRequest): Promise<SubscriptionProgress | null> {
     this.plutofish.assertReady()
     req = await this.withSavedPublication(structuredClone(req), false)
-    const choices = preferRelease(await this.publicationReleases(req), req.preferredReleaseId)
+    const choices = preferRelease(await this.publicationReleases(req, false), req.preferredReleaseId)
     const item = choices.matchedId ? choices.items.find(r => r.id === choices.matchedId) : undefined
     if (!item) return null
     return { releaseId: item.id, episodes: Array.isArray(item.episodes) ? [...item.episodes] : null,
@@ -1843,21 +1856,24 @@ export class Core {
 
   async enqueue(req: EnqueueRequest): Promise<number> {
     this.plutofish.assertReady()
-    req = await this.withSavedPublication(structuredClone(req), true)
+    const autoUpload = this.cfg.plutofishAutoUpload !== false
+    req = structuredClone(req)
+    // 本地下载不恢复隐藏的分类、版本和网盘目录，也不创建远端目录。
+    req = autoUpload ? await this.withSavedPublication(req, true) : { ...req, publication: undefined }
     const account = this.gatewayAccountFor(req.detail.provider)
     const cli = this.client().fixedAccount(req.detail.provider, account)
     const { tasks, qualityLabel } = this.buildTasks(req)
     let connection = this.plutofish.view()
-    const categoryError = publicationCategoryError(connection, req.publication?.category ?? '')
+    const categoryError = autoUpload && publicationCategoryError(connection, req.publication?.category ?? '')
     if (categoryError) throw new Error(categoryError)
     const binding = (view: typeof connection) => {
       const source = publicationSource(view, req.publication?.sourceAccountId)
       return JSON.stringify([view.url, view.identity?.id, source.id, source.alias, source.provider ?? '115'])
     }
     const expectedBinding = binding(connection)
-    const choices = preferRelease(await this.publicationReleases(req), req.preferredReleaseId)
-    const selected = resolveReleaseSelection(choices, req.publication?.releaseSelection)
-    const release = { existingReleaseId: selected.existingReleaseId, preserveKey: choices.match === 'binding' && selected.existingReleaseId === choices.matchedId, nonce: selected.forceNew ? randomUUID() : undefined }
+    const choices = autoUpload ? preferRelease(await this.publicationReleases(req, false), req.preferredReleaseId) : undefined
+    const selected = choices ? resolveReleaseSelection(choices, req.publication?.releaseSelection) : {}
+    const release = { existingReleaseId: selected.existingReleaseId, preserveKey: choices?.match === 'binding' && selected.existingReleaseId === choices.matchedId, nonce: selected.forceNew ? randomUUID() : undefined }
     await this.resolveFilenameTitle(tasks)
     this.plutofish.assertReady()
     connection = this.plutofish.view()
@@ -1969,7 +1985,7 @@ export class Core {
     } catch (err) {
       runLog(`lifecycle hook failed: ${err instanceof Error ? err.message : err}`)
     }
-    this.pushJobs()
+    this.pushJobs([e.id])
     // 进度可以合并，状态变化要立刻落盘。
     this.persist(e.done === true)
   }
@@ -1982,7 +1998,7 @@ export class Core {
     const rec = this.jobs.get(id)
     if (!rec) return
     fn(rec.view)
-    this.pushJobs()
+    this.pushJobs([id])
     this.persist(false)
   }
 
@@ -2005,19 +2021,26 @@ export class Core {
     this.scheduleJobsSave(soon)
   }
 
-  private pushTimer: NodeJS.Timeout | null = null
-  private pushJobs(): void {
-    if (this.pushTimer) return
-    this.pushTimer = setTimeout(() => {
-      this.pushTimer = null
-      this.emit.jobs(this.jobList())
-    }, 120)
+  private readonly jobUpdates = new JobUpdateBatch((ids) => {
+    if (!ids || !this.emit.jobPatch) this.emit.jobs(this.jobList())
+    else this.emit.jobPatch(ids.flatMap(id => {
+      const rec = this.jobs.get(id)
+      return rec ? [this.jobView(rec)] : []
+    }))
+  })
+
+  private pushJobs(ids?: Iterable<number>): void {
+    this.jobUpdates.schedule(ids)
+  }
+
+  private jobView(r: JobRecord): JobView {
+    return { ...r.view, vid: r.task.vid, publication: r.task.publication,
+      ed2k: r.task.publication?.ed2k ?? r.view.ed2k }
   }
 
   jobList(): JobView[] {
     // 旧 jobs.json 已保存 task.vid；直接补到 IPC 视图，不改写历史任务文件。
-    return [...this.jobs.values()].map((r) => ({ ...r.view, vid: r.task.vid, publication: r.task.publication,
-      ed2k: r.task.publication?.ed2k ?? r.view.ed2k }))
+    return [...this.jobs.values()].map((r) => this.jobView(r))
   }
 
   /** 排队中的任务没有进程，直接挂起；在跑的让 hub 停进程（保留已下载的分片）。 */
@@ -2026,7 +2049,7 @@ export class Core {
     if (!rec) return
     if (rec.view.state === 'paused' || rec.view.state === 'done' || rec.view.state === 'failed') return
     rec.view.busy = true
-    this.pushJobs()
+    this.pushJobs([id])
     try {
       // 排队中的任务也交给 hub 摘掉：它可能已经排在队列里，光改状态会被泵起来接着跑。
       // 排队中的是静默移除，正在跑的发 stopped:'pause' 并保留分片。
@@ -2042,7 +2065,7 @@ export class Core {
           cur.view.status = '已暂停'
           cur.view.err = ''
         }
-        this.pushJobs()
+        this.pushJobs([id])
         this.persist(true)
       }
     }
@@ -2060,7 +2083,7 @@ export class Core {
     rec.view.status = '排队中'
     rec.view.err = ''
     rec.view.log = ''
-    this.pushJobs()
+    this.pushJobs([id])
     this.persist(true)
     try {
       if (rec.task.publication) this.publications.control(rec.task.publication.fileKey, 'download')
@@ -2074,7 +2097,7 @@ export class Core {
       const cur = this.jobs.get(id)
       if (cur) {
         cur.view.busy = undefined
-        this.pushJobs()
+        this.pushJobs([id])
       }
     }
   }
@@ -2086,7 +2109,7 @@ export class Core {
     // 以 hub 为准：状态是 paused 但进程还没收干净时（退出超时）也要能取消。
     if (this.hub.isActive(id)) {
       rec.view.busy = true
-      this.pushJobs()
+      this.pushJobs([id])
       try {
         await this.hub.cancel(id, 'cancel')
       } catch (e) {
@@ -2133,7 +2156,98 @@ export class Core {
     if (rec.task.publication) this.publications.control(rec.task.publication.fileKey, 'download')
     Object.assign(rec.view, { status: '排队中', pct: 0, log: '', err: '', note: '', state: 'queued' })
     this.hub.enqueue(this.runCfg(rec), cli, id, rec.task)
-    this.pushJobs()
+    this.pushJobs([id])
+    this.persist(true)
+  }
+
+  private publicationFileRecord(id: number): JobRecord {
+    const rec = this.jobs.get(id)
+    if (!rec || rec.view.state !== 'done' || !rec.task.publication || !rec.view.output) throw new Error('请先完成下载')
+    this.publications.assertCanRelink(rec.task.publication.fileKey)
+    return rec
+  }
+
+  private publicationFileContext(rec: JobRecord): string {
+    const { progress: _, ed2k: __, retention: ___, updatedAt: ____, ...draft } = rec.task.publication!
+    return JSON.stringify([rec.view.state, rec.view.output, draft])
+  }
+
+  /** 系统文件选择器的初始位置；在打开选择器前先校验任务。 */
+  publicationFileStart(id: number): string { return this.publicationFileRecord(id).view.output }
+
+  async inspectPublicationFile(id: number, path: string): Promise<PublicationFileChoice> {
+    const rec = this.publicationFileRecord(id), previous = rec.task.publication!
+    const context = this.publicationFileContext(rec)
+    const file = await inspectPublicationFile(path, previous.measured?.file.size ?? rec.view.completedMedia?.file.size, this.probePublicationMedia)
+    if (this.publicationFileRecord(id) !== rec || this.publicationFileContext(rec) !== context) throw new Error('任务已改变，请重新选择文件')
+    const original = rec.view.actualVersion?.file?.fingerprint
+    if (original?.algorithm === 'sha256-samples-v1' && fileFingerprint(path).fingerprint.value !== original.value) {
+      throw new Error('所选文件与下载成品不一致，请选择改名或移动后的原视频')
+    }
+    const parsed = previous.workTarget.mediaType === 'tv' ? publicationFileNumbers(basename(path)) : undefined
+    const canEditNumbers = !previous.workTarget.category && !previous.progress
+    if (parsed && !canEditNumbers && (parsed.seasonNumber !== previous.seasonNumber || parsed.episodeNumber !== previous.episodeNumber)) {
+      throw new Error('文件名中的季集号与此任务已固定的发布信息不同，请选择对应集的任务')
+    }
+    const choice: PublicationFileChoice = { token: randomUUID(), path, name: basename(path), size: file.identity.size,
+      ...(previous.workTarget.mediaType === 'tv' ? { seasonNumber: parsed?.seasonNumber ?? previous.seasonNumber,
+        episodeNumber: parsed?.episodeNumber ?? previous.episodeNumber } : {}), numbersFromName: !!parsed, canEditNumbers }
+    this.publicationFiles.delete(id)
+    // 只保留最近的选择，取消/重启后不接受旧确认，避免长期持有任意路径。
+    if (this.publicationFiles.size >= 64) this.publicationFiles.delete(this.publicationFiles.keys().next().value!)
+    this.publicationFiles.set(id, { choice, ...file, context })
+    return choice
+  }
+
+  async relinkPublicationFile(id: number, token: string, numbers?: PublicationFileNumbers): Promise<void> {
+    const selected = this.publicationFiles.get(id)
+    if (!selected || selected.choice.token !== token) throw new Error('文件选择已失效，请重新选择')
+    const rec = this.publicationFileRecord(id)
+    const validate = () => {
+      if (this.jobs.get(id) !== rec || this.publicationFileContext(rec) !== selected.context) throw new Error('任务已改变，请重新选择文件')
+    }
+    validate()
+    const previous = rec.task.publication!, tv = previous.workTarget.mediaType === 'tv'
+    const season = tv ? numbers?.seasonNumber ?? selected.choice.seasonNumber : undefined
+    const episode = tv ? numbers?.episodeNumber ?? selected.choice.episodeNumber : undefined
+    if (tv && (!Number.isInteger(season) || season! < 0 || season! > 10000 || !Number.isInteger(episode) || episode! < 0 || episode! > 100000)) {
+      throw new Error('请填写有效的季号和集号（季号 0 为特别篇）')
+    }
+    if (!selected.choice.canEditNumbers && (season !== previous.seasonNumber || episode !== previous.episodeNumber)) throw new Error('此任务的发布季集号已经固定')
+    await this.publications.prepareRelink(previous.fileKey)
+    validate()
+    if (!samePublicationFile(selected.identity, await publicationFileIdentity(selected.choice.path))) throw new Error('所选文件已改变，请重新选择')
+    validate()
+    this.publications.assertCanRelink(previous.fileKey)
+    const task = { ...rec.task, ...(tv ? { season: season!, episode: episode!, outputNaming: { ...rec.task.outputNaming, season: season! } } : {}) }
+    const baseDraft = selected.choice.canEditNumbers ? preparePublication(task, this.plutofish.view(), '', previous.directoryId, previous.directoryPath, undefined, previous.binding.sourceAccount?.id) : previous
+    if (JSON.stringify(baseDraft.binding) !== JSON.stringify(previous.binding)) throw new Error('发布端或源账号已改变，请重新连接原账号后操作')
+    const draft = completePublication(baseDraft, selected.choice.path, selected.measured)
+    draft.ed2k = undefined; draft.retention = undefined
+    task.publication = draft
+    const affected = draft.fileKey === previous.fileKey ? [...this.jobs.values()].filter(r => r.task.publication?.fileKey === previous.fileKey && r.view.output === rec.view.output) : [rec]
+    const backups = affected.map(r => ({ rec: r, task: r.task, view: { ...r.view } }))
+    for (const r of affected) {
+      r.task = r === rec ? task : { ...r.task, publication: draft }
+      Object.assign(r.view, { output: draft.output, log: draft.output, completedMedia: selected.measured, ed2k: undefined,
+        label: tv ? `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}` : r.view.label })
+    }
+    try {
+      this.flushJobs(true)
+      savePublication(draft)
+      this.publications.relink(draft)
+    } catch (error) {
+      for (const backup of backups) { backup.rec.task = backup.task; backup.rec.view = backup.view }
+      this.flushJobs()
+      try { savePublication(previous) } catch { /* 原记录仍在 jobs.json，重启可恢复。 */ }
+      throw error
+    }
+    this.publicationFiles.delete(id)
+    for (const backup of backups) {
+      try { this.publicationFileRelinked?.(backup.rec.view, backup.rec.task, backup.view.output) }
+      catch { backup.rec.view.note = '新文件已关联，下载历史路径暂未更新' }
+    }
+    this.pushJobs(affected.map(r => r.view.id))
     this.persist(true)
   }
 
@@ -2160,7 +2274,8 @@ export class Core {
       } catch { rec.view.note = '当前任务可上传，但分类偏好保存失败，请检查目录权限' }
     }
     this.publications.event(draft, { id, done: true, status: '完成', pct: 1, log: rec.view.output, err: '' })
-    this.pushJobs()
+    this.publications.control(draft.fileKey, 'resume')
+    this.pushJobs([id])
     this.persist(true)
   }
 

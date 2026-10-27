@@ -312,6 +312,19 @@ const plat = (p: Provider) => hasProvider(p)
           <h2 class="h2s">命名与刮削</h2>
 
           <div class="srow">
+            <div class="sl">
+              <span class="st">文件名包含单集标题</span>
+              <span class="sd">默认关闭；开启后在季集号后加入单集标题，其余命名格式不变。仅影响新建任务。</span>
+            </div>
+            <div class="sc">
+              <label class="toggle">
+                <input type="checkbox" :checked="s.includeEpisodeTitle === true" :disabled="saving === 'episodeTitle'" aria-label="文件名包含单集标题" @change="save({ includeEpisodeTitle: ($event.target as HTMLInputElement).checked }, 'episodeTitle')" />
+                <span class="track"><span class="knob" /></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="srow">
             <div class="sl"><span class="st">发布组</span><span class="sd">文件名结尾的组名后缀；新下载的 MKV 同步写入 GROUP 标签。</span></div>
             <div class="sc"><input v-model="form.releaseGroup" class="input" style="width: 200px" @change="save({ releaseGroup: form.releaseGroup }, 'rg')" /></div>
           </div>
@@ -352,6 +365,22 @@ const plat = (p: Provider) => hasProvider(p)
 
         <div v-else-if="store.settingsTab === 'plutofish'">
           <IdentityInfo :connection="store.state?.plutofish" />
+          <section class="card auto-upload">
+            <h2 class="h2s">自动上传</h2>
+            <div class="srow">
+              <div class="sl">
+                <span class="st">下载完成后自动上传 PlutoFish</span>
+                <span class="sd">开启后自动上传到绑定的 115 账号，并核验、登记资源。关闭后等待手动上传，已开始上传的文件会继续完成。</span>
+                <span class="sd">重新开启仅对之后新加的任务生效；已有等待任务仍需点击“立即上传”，重启后也不会自动继续。</span>
+              </div>
+              <div class="sc">
+                <label class="toggle">
+                  <input type="checkbox" :checked="s.plutofishAutoUpload !== false" :disabled="saving === 'plutofishAutoUpload'" aria-label="下载完成后自动上传 PlutoFish" @change="save({ plutofishAutoUpload: ($event.target as HTMLInputElement).checked }, 'plutofishAutoUpload')" />
+                  <span class="track"><span class="knob" /></span>
+                </label>
+              </div>
+            </div>
+          </section>
           <RetentionSettings />
         </div>
 
@@ -410,6 +439,7 @@ const plat = (p: Provider) => hasProvider(p)
 .tab.on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--orange); margin-right: 8px; vertical-align: 2px; box-shadow: 0 0 8px rgb(var(--ui-accent-channel) / 70%); }
 .panel { flex-grow: 1; min-width: 0; max-width: 760px; }
 .card { overflow: hidden; }
+.auto-upload { margin-top: 16px; }
 /* :deep so the rule also reaches cards rendered by child components (设备文件、下载钩子). */
 .card > :deep(.h2s) { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
 .small { font-size: 13px; }

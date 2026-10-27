@@ -6,11 +6,13 @@ import { errText, gvs } from '../../store'
 
 const props = defineProps<{ request: EnqueueRequest | null; binding: string; disabled?: boolean }>()
 const model = defineModel<ReleaseSelection>()
+const emit = defineEmits<{ season: [number] }>()
 const choices = ref<ReleaseChoices | null>(null)
 const loading = ref(false)
 const error = ref('')
 let sequence = 0
 let timer: ReturnType<typeof setTimeout> | undefined
+let pendingSelection: { id: string; season: number } | undefined
 // 选择自身不影响查询；集号、季、画质、音轨、作品或源账号变化都必须重新匹配。
 const query = computed(() => {
   if (!props.request) return null
@@ -24,6 +26,7 @@ watch(queryKey, () => {
   choices.value = null
   model.value = undefined
   error.value = ''
+  if (pendingSelection && (query.value?.naming?.season ?? query.value?.tmdbSeason) !== pendingSelection.season) pendingSelection = undefined
   loading.value = !!query.value?.publication.category
   if (loading.value) timer = setTimeout(() => { void refresh() }, 250)
 }, { immediate: true })
@@ -42,7 +45,9 @@ async function refresh() {
     const result = await gvs('publicationReleases', request)
     if (seq !== sequence) return
     choices.value = result
-    if (result.matchedId) model.value = { context: result.context, mode: 'existing', releaseId: result.matchedId }
+    const carried = pendingSelection && result.seasonNumber === pendingSelection.season && result.items.find(item => item.id === pendingSelection!.id && item.seasonNumber === pendingSelection!.season)
+    pendingSelection = undefined
+    if (carried || result.matchedId) model.value = { context: result.context, mode: 'existing', releaseId: carried ? carried.id : result.matchedId! }
   } catch (e) { if (seq === sequence) error.value = errText(e) }
   finally { if (seq === sequence) loading.value = false }
 }
@@ -50,6 +55,13 @@ const valid = computed(() => !loading.value && !error.value && !!choices.value &
 const selected = computed(() => model.value?.mode === 'existing' ? model.value.releaseId : model.value?.mode === 'new' ? 'new' : '')
 function choose(value: string) {
   if (!choices.value) return
+  const item = choices.value.items.find(item => item.id === value)
+  if (item?.seasonNumber !== undefined && item.seasonNumber !== choices.value.seasonNumber) {
+    pendingSelection = { id: item.id, season: item.seasonNumber }
+    model.value = undefined
+    emit('season', item.seasonNumber)
+    return
+  }
   model.value = value === 'new' ? { context: choices.value.context, mode: 'new' }
     : value ? { context: choices.value.context, mode: 'existing', releaseId: value } : undefined
 }
@@ -67,6 +79,7 @@ defineExpose({ valid, loading, ready })
     <p v-else-if="error" class="small err" role="alert">{{ error }}</p>
     <template v-else-if="choices">
       <p class="small muted release-preview">当前规格：{{ choices.name }}</p>
+      <p v-if="choices.items.some(item => item.seasonNumber !== choices?.seasonNumber)" class="small muted">同时列出本作品的 S00 特别篇版本。选择其他季会同步修改命名季号，请确认发布集号。</p>
       <p v-if="choices.needsChoice" class="release-warning small" role="alert">当前为后续集数，未找到唯一匹配版本。请确认版本，选择已有版本或强制新版本。</p>
       <p v-else-if="choices.matchedId" class="small muted">已默认选择{{ choices.match === 'binding' ? '此前关联' : '规格匹配' }}的版本，可手动更改。</p>
       <p v-else class="small muted">{{ query?.detail.kind === 'movie' ? '未匹配到已有版本，完成后自动新建。' : '本批包含第 1 集，完成后可自动新建版本。' }}</p>
@@ -77,7 +90,7 @@ defineExpose({ valid, loading, ready })
         </label>
         <label v-for="item in choices.items" :key="item.id" class="release-option" :class="{ active: selected === item.id }">
           <input type="radio" name="publication-release" :value="item.id" :checked="selected === item.id" :disabled="disabled" @change="choose(item.id)" />
-          <span>{{ item.name }}<small>{{ item.latestEpisode !== undefined ? `更新至第 ${item.latestEpisode} 集 · ` : '' }}{{ { published: '已发布', draft: '草稿', unpublished: '已下架' }[item.status] }}{{ choices.matchedId === item.id ? ' · 匹配版本' : '' }}</small></span>
+          <span>{{ item.name }}<small>{{ item.seasonNumber === 0 ? 'S00 特别篇 · ' : '' }}{{ item.latestEpisode !== undefined ? `更新至第 ${item.latestEpisode} 集 · ` : '' }}{{ { published: '已发布', draft: '草稿', unpublished: '已下架' }[item.status] }}{{ choices.matchedId === item.id ? ' · 匹配版本' : '' }}</small></span>
         </label>
         <label class="release-option" :class="{ active: selected === 'new' }">
           <input type="radio" name="publication-release" value="new" :checked="selected === 'new'" :disabled="disabled" @change="choose('new')" />

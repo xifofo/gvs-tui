@@ -635,7 +635,7 @@ export class Runtime {
   }
 
   private settingFields(): string[] {
-    const f = ['隧道', '网关', '网关代理', 'Key', '下载目录', '下载线程']
+    const f = ['隧道', '网关', '网关代理', 'Key', '下载目录', '下载线程', '文件名单集标题']
     if (this.has('youku') || this.has('tencent') || this.has('hongguo') || this.has('huangguo') || this.has('mgtv') || this.has('bilibili') || this.has('migu'))
       f.push('发布组')
     if (this.providers().some(supportsTmdb)) f.push('TMDB Key', 'TMDB 代理')
@@ -718,6 +718,8 @@ export class Runtime {
         return this.cfg.outDir
       case '下载线程':
         return `${this.cfg.threads} 路并发`
+      case '文件名单集标题':
+        return this.cfg.filenameEpisodeTitle === true ? '开' : '关（默认）'
       case '发布组':
         return this.cfg.releaseGroup || '未设'
       case 'TMDB Key':
@@ -2185,6 +2187,12 @@ export class Runtime {
       this.emit()
       return
     }
+    if (f === '文件名单集标题') {
+      this.cfg.filenameEpisodeTitle = !this.cfg.filenameEpisodeTitle
+      this.persistConfig()
+      this.emit()
+      return
+    }
     if (f === '红果合并') {
       this.cfg.hongguoMerge = !this.cfg.hongguoMerge
       this.persistConfig()
@@ -2536,6 +2544,7 @@ export class Runtime {
       posterUrl: this.detailInfo?.posterUrl,
       namingVersion: ['youku', 'tencent', 'iq', 'iqcn', 'mgtv', 'bilibili', 'migu'].includes(this.detailProv) ? 1 : undefined,
       includeEpisodeTitle: this.cfg.includeEpisodeTitle !== false,
+      filenameEpisodeTitle: this.cfg.filenameEpisodeTitle === true,
       title: ep.title,
       series: movie ? this.detailTitle : parseSeriesTitle(this.detailTitle).title,
       vid: ep.vid,

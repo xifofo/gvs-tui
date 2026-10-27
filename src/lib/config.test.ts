@@ -191,3 +191,51 @@ test('legacy episode-title preference remains readable and persists an explicit 
     rmSync(appdata, { recursive: true, force: true })
   }
 })
+
+test('current filename episode-title option defaults off independently of the retired preference and persists', () => {
+  const appdata = mkdtempSync(join(tmpdir(), 'gvs-filename-title-setting-'))
+  const previous = process.env.APPDATA
+  process.env.APPDATA = appdata
+  try {
+    expect(defaultConfig().filenameEpisodeTitle).toBe(false)
+    expect(loadConfig().filenameEpisodeTitle).toBe(false)
+    const file = join(appdata, 'gvs', 'tui.json')
+    mkdirSync(dirname(file), { recursive: true })
+    for (const includeEpisodeTitle of [true, false]) {
+      writeFileSync(file, JSON.stringify({ outDir: join(appdata, 'library'), includeEpisodeTitle }))
+      const cfg = loadConfig()
+      expect(cfg.filenameEpisodeTitle).toBe(false)
+      saveConfig({ ...cfg, filenameEpisodeTitle: true })
+      expect(loadConfig().filenameEpisodeTitle).toBe(true)
+      saveConfig({ ...cfg, filenameEpisodeTitle: false })
+      expect(loadConfig().filenameEpisodeTitle).toBe(false)
+      expect(loadConfig().includeEpisodeTitle).toBe(includeEpisodeTitle)
+    }
+  } finally {
+    if (previous === undefined) delete process.env.APPDATA
+    else process.env.APPDATA = previous
+    rmSync(appdata, { recursive: true, force: true })
+  }
+})
+
+test('automatic PlutoFish upload stays enabled for old configs and persists an explicit off/on choice', () => {
+  const appdata = mkdtempSync(join(tmpdir(), 'gvs-auto-upload-setting-'))
+  const previous = process.env.APPDATA
+  process.env.APPDATA = appdata
+  try {
+    expect(defaultConfig().plutofishAutoUpload).toBe(true)
+    const file = join(appdata, 'gvs', 'tui.json')
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ outDir: join(appdata, 'library') }))
+    const cfg = loadConfig()
+    expect(cfg.plutofishAutoUpload).toBe(true)
+    saveConfig({ ...cfg, plutofishAutoUpload: false })
+    expect(loadConfig().plutofishAutoUpload).toBe(false)
+    saveConfig({ ...cfg, plutofishAutoUpload: true })
+    expect(loadConfig().plutofishAutoUpload).toBe(true)
+  } finally {
+    if (previous === undefined) delete process.env.APPDATA
+    else process.env.APPDATA = previous
+    rmSync(appdata, { recursive: true, force: true })
+  }
+})

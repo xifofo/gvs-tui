@@ -67,6 +67,12 @@ export class HistoryDB {
     this.db.prepare('UPDATE downloads SET ed2k = ?, ed2k_link = ? WHERE id = ?').run(hash, link, id)
   }
 
+  /** 用户重新关联成品时更新展示路径和季集；旧 ED2K 链接包含原文件名，需要重新计算。 */
+  relinkFile(key: string, expectedPath: string, path: string, size: number, season: number, episode: number, label: string): void {
+    this.db.prepare(`UPDATE downloads SET file_path = ?, size = ?, season = ?, episode = ?, label = ?, ed2k = '', ed2k_link = ''
+      WHERE job_key = ? AND file_path = ?`).run(path, size, season, episode, label, key, expectedPath)
+  }
+
   list(q: HistoryQuery = {}): { items: HistoryEntry[]; total: number } {
     const where: string[] = []
     const args: unknown[] = []

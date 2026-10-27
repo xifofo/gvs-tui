@@ -82,6 +82,7 @@ const core = new Core({
     }, 50)
   },
   jobs: (jobs: JobView[]) => send('gvs:jobs', jobs),
+  jobPatch: (jobs: JobView[]) => send('gvs:jobPatch', jobs),
   toast: (message: string, tone: Tone) => send('gvs:toast', { message, tone }),
 })
 
@@ -105,6 +106,7 @@ core.lifecycle = (event, view, task) => {
   if (event === 'start') history().onStart(view, task)
   else history().onComplete(view, task)
 }
+core.publicationFileRelinked = (view, task, previousPath) => history().relinkFile(view, task, previousPath)
 
 // ---------------------------------------------------------------- 多账号
 const accountsPath = () => join(app.getPath('userData'), 'accounts.json')
@@ -257,6 +259,15 @@ const api: { [K in keyof GvsApi]: (...args: Parameters<GvsApi[K]>) => unknown } 
   retryJob: (id) => core.retryJob(id),
   controlPublication: (id, action) => core.controlPublication(id, action),
   completePublicationSetup: (id, category) => core.completePublicationSetup(id, category),
+  choosePublicationFile: async (id) => {
+    const previous = core.publicationFileStart(id)
+    const result = await dialog.showOpenDialog(win!, {
+      title: '选择改名或移动后的原视频', defaultPath: previous, properties: ['openFile'],
+      filters: [{ name: '视频文件', extensions: ['mkv', 'mp4', 'm4v', 'mov', 'ts', 'm2ts', 'avi', 'webm'] }],
+    })
+    return result.canceled || !result.filePaths[0] ? null : core.inspectPublicationFile(id, result.filePaths[0])
+  },
+  relinkPublicationFile: (id, token, numbers) => core.relinkPublicationFile(id, token, numbers),
   createPublisherDirectories: (sourceAccountId, directoryId, segments) => core.plutofish.createDirectories(sourceAccountId, directoryId, segments),
   publisherDirectories: (sourceAccountId, directoryId, cursor) => core.plutofish.directories(sourceAccountId, directoryId, cursor),
   pauseJob: (id) => core.pauseJob(id),

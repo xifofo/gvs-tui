@@ -35,6 +35,17 @@ test('re-download of the same episode updates the row and keeps ed2k', () => {
   expect(db.list().total).toBe(1)
 })
 
+test('relink keeps history identity and completion time, updates the path and confirmed numbers, and clears old-name links', () => {
+  const db = mk(), entry = db.record(historyFromJob(view(), task, 1024))
+  db.setEd2k(entry.id, 'ab', 'ed2k://|file|old-name|1024|AB|/')
+  db.relinkFile(entry.jobKey, 'stale-path', '/new-name.mkv', 1024, 0, 151, 'S00E151')
+  expect(db.byId(entry.id)?.filePath).toBe(entry.filePath)
+  db.relinkFile(entry.jobKey, entry.filePath, '/new-name.S00E151.mkv', 1024, 0, 151, 'S00E151')
+  const renamed = db.byId(entry.id)!
+  expect([renamed.id, renamed.completedAt, renamed.vid]).toEqual([entry.id, entry.completedAt, entry.vid])
+  expect([renamed.filePath, renamed.season, renamed.episode, renamed.label, renamed.ed2kLink]).toEqual(['/new-name.S00E151.mkv', 0, 151, 'S00E151', ''])
+})
+
 test('list filters by text/provider with paging, newest first', () => {
   const db = mk()
   for (let i = 1; i <= 5; i++) db.record(historyFromJob(view({ label: `S01E0${i}`, finishedAt: i }), { ...task, vid: `v${i}`, episode: i }, i))

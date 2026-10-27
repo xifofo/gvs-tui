@@ -51,10 +51,11 @@ export class PublicationWorker {
   private readonly syncErrors = new Map<string, PublisherError>()
 
   constructor(private readonly connection: PlutoFishConnection, private readonly changed: (draft: PublicationDraft, transient?: boolean) => void,
-    options: { directory?: string; factory?: OSSFactory; manual?: boolean; beforeCleanup?: () => void; now?: () => number; retention?: RetentionOptions } = {}) {
+    options: { directory?: string; factory?: OSSFactory; manual?: boolean; autoUpload?: () => boolean; beforeCleanup?: () => void; now?: () => number; retention?: RetentionOptions } = {}) {
     this.store = new PublicationStore(options.directory ?? publicationDirectory())
     this.uploadPauses = new UploadPauses(this.store.directory, options.now)
     this.factory = options.factory
+    this.autoUpload = options.autoUpload ?? (() => true)
     this.cleanup = new PublicationCleanup(connection, state => {
       if (this.states.get(state.draft.fileKey) !== state || this.running.has(state.draft.fileKey) || this.preparing?.key === state.draft.fileKey || this.proofs.isUsing(state) || localFileInUse(state.draft.output)) return
       this.store.removeCompleted(state)
@@ -67,6 +68,27 @@ export class PublicationWorker {
     if (!options.manual) { this.timer = setInterval(() => { void this.tick() }, 2000); this.timer.unref?.() }
   }
   private readonly factory?: OSSFactory
+  private readonly autoUpload: () => boolean
+
+  /** Persist waiting tasks when disabled; re-enabling applies only to new tasks. */
+  refreshUploadPolicy(): void {
+    this.load()
+    for (const state of this.states.values()) {
+      this.holdAutomaticUpload(state)
+      this.publish(state)
+    }
+  }
+
+  private holdAutomaticUpload(state: PublicationState): void {
+    if (this.autoUpload() || state.autoUploadBlocked || state.manualUpload || state.snapshot.stage === 'completed'
+      || this.running.has(state.draft.fileKey)) return
+    state.autoUploadBlocked = true
+    this.store.save(state)
+  }
+
+  private uploadAllowed(state: PublicationState): boolean {
+    return state.manualUpload === true || (this.autoUpload() && !state.autoUploadBlocked)
+  }
 
   private load(): void {
     if (this.loaded) return
@@ -85,6 +107,8 @@ export class PublicationWorker {
       }
       // 计算线程不能跨进程续跑；已落盘摘要由 publish 恢复，其余重新排队。
       state.draft.ed2k = undefined
+      this.restoreUploadHold(state, state.draft)
+      this.holdAutomaticUpload(state)
       this.states.set(state.draft.fileKey, state)
     }
     this.loaded = true
@@ -98,7 +122,7 @@ export class PublicationWorker {
     if (!state) {
       // 桌面下载历史会在启动时重新 register；已完成并同步的旧条目不能复活已清理的发布清单。
       if (draft.progress?.stage === 'completed' && draft.progress.synced) return
-      state = { draft: structuredClone(draft), acknowledged: 0, snapshot: {
+      state = { draft: structuredClone(draft), acknowledged: 0, autoUploadBlocked: !this.autoUpload() || draft.progress?.autoUploadBlocked === true || draft.progress?.awaitingManual === true, snapshot: {
         taskKey: draft.fileKey, releaseKey: draft.releaseKey, sourceAccount: draft.binding.sourceAccount!.alias,
         workTarget: structuredClone(draft.workTarget), title: draft.title,
         seasonNumber: draft.seasonNumber, episodeNumber: draft.episodeNumber, episodeTitle: draft.episodeTitle,
@@ -107,7 +131,16 @@ export class PublicationWorker {
       this.states.set(draft.fileKey, state)
       this.store.save(state)
     }
+    this.restoreUploadHold(state, draft)
+    this.holdAutomaticUpload(state)
     this.publish(state)
+  }
+
+  private restoreUploadHold(state: PublicationState, draft: PublicationDraft): void {
+    if (!state.autoUploadBlocked && !state.manualUpload && (draft.progress?.autoUploadBlocked || draft.progress?.awaitingManual)) {
+      state.autoUploadBlocked = true
+      this.store.save(state)
+    }
   }
 
   /** 重启后恢复已下载成品的操作入口；原下载任务不能只靠发布快照重新下载。 */
@@ -125,11 +158,14 @@ export class PublicationWorker {
     else if (state.draft.output && ['processing', 'uploading', 'completed'].includes(p.stage)) {
       state.draft.ed2k ??= { state: 'queued', pct: 0, link: '' }
     }
-    state.draft.progress = { stage: p.stage, phase: state.draft.progress?.phase, downloadPercent: p.downloadPercent, uploadPercent: p.uploadPercent,
+    state.draft.progress = { stage: p.stage, phase: state.draft.progress?.phase, autoUploadBlocked: state.autoUploadBlocked === true, downloadPercent: p.downloadPercent, uploadPercent: p.uploadPercent,
       uploadedBytes: p.uploadedBytes, sizeBytes: p.sizeBytes, error: message, synced: state.acknowledged >= p.sequence,
       errorDetails: !error && p.stage === 'failed' && p.errorMessage ? state.failure?.diagnostic : message === syncError?.message ? syncError?.diagnostic : undefined,
       failure: p.stage === 'failed' && state.failure ? { ...state.failure, id: `${p.attempt}:${p.sequence}` } : undefined }
     const view = structuredClone(state.draft)
+    view.progress!.canRelink = !state.checkpoint && p.stage !== 'completed' && !this.running.has(state.draft.fileKey) && this.preparing?.key !== state.draft.fileKey
+    view.progress!.awaitingManual = !!state.draft.output && ['processing', 'uploading'].includes(p.stage)
+      && !this.uploadAllowed(state) && !this.running.has(state.draft.fileKey)
     // 发送中的字节未获 OSS 确认，仅通过内存视图推送；快照序号和断点仍按整片回执落盘。
     const transfer = this.transfers.get(state.draft.fileKey)
     if (transfer && p.stage === 'uploading' && view.progress?.phase === 'uploading') view.progress.transfer = { ...transfer }
@@ -157,7 +193,7 @@ export class PublicationWorker {
     const state = this.states.get(draft.fileKey)
     if (!state || state.snapshot.stage === 'completed') return
     state.draft = structuredClone(draft)
-    if (!event.done) { state.draft.output = ''; state.draft.measured = undefined }
+    if (!event.done) { state.draft.output = ''; state.draft.measured = undefined; state.manualUpload = undefined }
     const stage = event.stopped === 'pause' ? 'paused' : event.stopped === 'cancel' ? 'cancelled' : event.err ? 'failed'
       : event.done ? 'processing' : /封装|解密|校验|音轨/.test(event.status) ? 'processing' : 'downloading'
     const downloadPercent = Math.max(state.snapshot.downloadPercent, Math.min(100, Math.max(0, Number.isFinite(event.pct) ? event.pct * 100 : 0)))
@@ -174,6 +210,8 @@ export class PublicationWorker {
     const state = this.states.get(key)
     if (!state || state.snapshot.stage === 'completed') return
     if (action === 'resume' && !automatic) this.resumeAccount(state.draft.binding)
+    if (action === 'resume' && !automatic) state.manualUpload = true
+    else if (action !== 'resume') state.manualUpload = undefined
     this.running.get(key)?.abort.abort()
     if (this.preparing?.key === key) this.preparing.abort.abort()
     this.prepared.delete(key)
@@ -221,6 +259,7 @@ export class PublicationWorker {
       this.proofRunning ??= this.proofs.run(() => [...this.states.values()], this.syncAbort.signal)
       for (const state of this.states.values()) {
         if (this.closed) return
+        this.holdAutomaticUpload(state)
         if (state.acknowledged >= state.snapshot.sequence || (this.retryAt.get(state.draft.fileKey) ?? 0) > Date.now()) continue
         const snapshot = structuredClone(state.snapshot)
         try {
@@ -241,7 +280,7 @@ export class PublicationWorker {
       try { this.retention.tick(this.states, this.syncAbort.signal) } catch { /* 无法读取策略或保存状态时不删除成品 */ }
       try { await this.cleanup.tick(this.states, this.syncAbort.signal) } catch { /* 清理失败保留原记录，下轮或重启后继续 */ }
       if (!this.closed) {
-        const eligible = [...this.states.values()].filter(s => !this.uploadPauses.paused(s.draft.binding) && ['processing', 'uploading'].includes(s.snapshot.stage) && s.draft.output && !this.running.has(s.draft.fileKey) && s.acknowledged >= s.snapshot.sequence && (this.retryAt.get(s.draft.fileKey) ?? 0) <= Date.now())
+        const eligible = [...this.states.values()].filter(s => this.uploadAllowed(s) && !this.uploadPauses.paused(s.draft.binding) && ['processing', 'uploading'].includes(s.snapshot.stage) && s.draft.output && !this.running.has(s.draft.fileKey) && s.acknowledged >= s.snapshot.sequence && (this.retryAt.get(s.draft.fileKey) ?? 0) <= Date.now())
         for (const state of eligible.filter(s => this.prepared.has(s.draft.fileKey))) {
           const grouped = this.connection.groupedUploads
           // 后台重验可能发现部署或回滚：原上传所有请求保持同一租约协议，排空后再切换。
@@ -392,6 +431,47 @@ export class PublicationWorker {
     this.control(key, action)
     await running
     await preparing
+    const state = this.states.get(key)
+    if (state) this.publish(state)
+  }
+
+  /** 尚未申请上传的成品可重新关联；已有上传断点保持原文件身份和名称。 */
+  assertCanRelink(key: string): void {
+    if (this.closed) throw new Error('发布器正在关闭，请重新打开后操作')
+    this.load()
+    const state = this.states.get(key)
+    if (state && (state.checkpoint || state.snapshot.stage === 'completed' || this.running.has(key) || this.preparing?.key === key)) {
+      throw new Error('此任务已开始上传，不能更换上传文件；请对尚未开始上传的任务重新选择文件')
+    }
+  }
+
+  async prepareRelink(key: string): Promise<void> {
+    this.assertCanRelink(key)
+    if (!this.states.has(key)) return
+    await this.stop(key, 'pause')
+    await this.retention.stop(key)
+    this.assertCanRelink(key)
+  }
+
+  /** 与原任务共用发布身份，只更新本地路径和实测规格；确认关联不会启动上传。 */
+  relink(draft: PublicationDraft): void {
+    this.assertCanRelink(draft.fileKey)
+    const state = this.states.get(draft.fileKey)
+    if (!state) return
+    if (state.draft.releaseKey !== draft.releaseKey || state.draft.seasonNumber !== draft.seasonNumber || state.draft.episodeNumber !== draft.episodeNumber) {
+      throw new Error('任务发布信息已固定，不能在重新关联文件时改动')
+    }
+    const next: PublicationState = { ...state, draft: structuredClone(draft), manualUpload: undefined, autoUploadBlocked: true,
+      retention: undefined, failure: undefined, snapshot: { ...state.snapshot, stage: 'paused', attempt: state.snapshot.attempt + 1,
+        sequence: state.snapshot.sequence + 1, downloadPercent: 100, uploadPercent: 0, uploadedBytes: 0,
+        sizeBytes: draft.measured?.file.size ?? 0, errorMessage: '' } }
+    this.store.save(next)
+    // 保留对象引用；正在等待旧任务上报回执的循环仍只会保存这个新路径。
+    Object.assign(state, next)
+    this.prepared.delete(draft.fileKey)
+    this.retryAt.delete(draft.fileKey)
+    this.syncErrors.delete(draft.fileKey)
+    this.publish(state)
   }
 
   async close(): Promise<void> {

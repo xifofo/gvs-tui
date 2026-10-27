@@ -43,6 +43,7 @@ function toggleSubtitle(id: string) {
 const preferredAudioId = ref('')
 const tmdb = ref<TmdbHit | null>(null)
 const publication = ref<PublicationInput>({ category: '' })
+const autoUpload = computed(() => store.state?.settings.plutofishAutoUpload !== false)
 const releasePicker = ref<InstanceType<typeof ReleasePicker> | null>(null)
 const releaseBinding = computed(() => JSON.stringify([store.state?.plutofish?.status, store.state?.plutofish?.url, store.state?.plutofish?.identity]))
 const publicationFields = ref<InstanceType<typeof PublicationFields> | null>(null)
@@ -173,7 +174,7 @@ async function loadTmdb() {
     const saved = await gvs('publicationPreferences', { provider: v.provider, sourceWorkId: v.id, kind: v.kind })
     if (seq !== tmdbSeq || d.value !== v) return
     if (saved?.tmdb) { restorePublication(saved); return }
-    if (store.state?.plutofish?.status === 'verified' || !store.state?.settings.tmdbKey || !canMatchTmdb.value) return
+    if ((autoUpload.value && store.state?.plutofish?.status === 'verified') || !store.state?.settings.tmdbKey || !canMatchTmdb.value) return
     const hits = await gvs('tmdbSearch', v.title, v.kind !== 'movie')
     if (seq !== tmdbSeq || d.value !== v) return
     tmdbHits.value = hits
@@ -321,7 +322,7 @@ const request = computed<EnqueueRequest | null>(() => {
     ...(subtitles.value.length ? { subtitleIds: [...subtitleIds.value] } : {}),
     defaultAudioId: preferredAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
-    publication: { sourceAccountId: publication.value.sourceAccountId, releaseSelection: publication.value.releaseSelection, category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, directoryCreation: publication.value.directoryCreation ? { ...publication.value.directoryCreation } : undefined, episodeNumbers: { ...publication.value.episodeNumbers } },
+    publication: autoUpload.value ? { sourceAccountId: publication.value.sourceAccountId, releaseSelection: publication.value.releaseSelection, category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, directoryCreation: publication.value.directoryCreation ? { ...publication.value.directoryCreation } : undefined, episodeNumbers: { ...publication.value.episodeNumbers } } : undefined,
     tmdbSeason: tmdb.value?.kind === 'show' ? selectedSeasonRow.value?.number : undefined,
     accountId: store.accountPick[v.provider] || undefined,
   }
@@ -349,15 +350,22 @@ const totalSize = computed(() => (quality.value?.size ?? 0) * store.probeEpisode
 const hasDts = computed(() => audios.value.some((a) => audioIds.value.includes(a.id) && /dts/i.test(a.codec + a.label + a.id)))
 const count = computed(() => store.probeEpisodes.length)
 const noun = computed(() => isMovie.value ? '个版本' : '集')
-const publicationRequired = computed(() => !publicationFields.value?.categoryValid)
-const canStart = computed(() => !!releasePicker.value?.valid && !publicationRequired.value && !starting.value && !namingLoading.value && !namingInputError.value && !namingError.value && !store.probing && !store.probeError && !!request.value?.episodes.length && !!quality.value && !tmdbLoading.value && !publicationFields.value?.loading)
+const publicationRequired = computed(() => autoUpload.value && !publicationFields.value?.categoryValid)
+const canStart = computed(() => (!autoUpload.value || !!releasePicker.value?.valid) && !publicationRequired.value && !starting.value && !namingLoading.value && !namingInputError.value && !namingError.value && !store.probing && !store.probeError && !!request.value?.episodes.length && !!quality.value && !tmdbLoading.value && (!autoUpload.value || !publicationFields.value?.loading))
+
+function selectReleaseSeason(season: number) {
+  manualSeason.value = String(season)
+  selectedSeason.value = ''
+}
 
 async function start() {
   if (!canStart.value || !request.value) return
   starting.value = true
   try {
-    await publicationFields.value?.ready()
-    releasePicker.value?.ready()
+    if (autoUpload.value) {
+      await publicationFields.value?.ready()
+      releasePicker.value?.ready()
+    }
     const r = request.value
     if (!r) return
     const n = await gvs('enqueue', r)
@@ -371,7 +379,7 @@ async function start() {
 }
 
 async function rememberPublication() {
-  await publicationFields.value?.save()
+  if (autoUpload.value) await publicationFields.value?.save()
 }
 defineExpose({ start, canStart, starting, rememberPublication })
 
@@ -692,7 +700,8 @@ async function applyRule() {
           <div class="output-heading"><h3>发布与保存</h3></div>
           <div class="publication-grid">
             <div class="publication-settings-group">
-              <PublicationFields v-if="d" ref="publicationFields" v-model="publication" class="publication-settings" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :recognition-file-name="!namingLoading && !namingError ? naming?.file : undefined" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :effective-season="naming?.season" :directory-preview-ready="!namingLoading && !namingError && !namingInputError" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="starting || tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @recognized="applyRecognizedPublication" @match="selectManualTmdb" @restore="restorePublication" />
+              <PublicationFields v-if="d && autoUpload" ref="publicationFields" v-model="publication" class="publication-settings" :connection="store.state?.plutofish" :provider="d.provider" :source-work-id="d.id" :revision="probe?.token" :recognition-file-name="!namingLoading && !namingError ? naming?.file : undefined" :tmdb="tmdb" :tmdb-season="tmdb ? (request?.naming?.season ?? request?.tmdbSeason) : undefined" :naming="namingOverrides" :effective-season="naming?.season" :directory-preview-ready="!namingLoading && !namingError && !namingInputError" :output-folders="!namingLoading && !namingError && !namingInputError ? naming?.relativeFolders : undefined" :busy="starting || tmdbLoading || !!namingInputError" :kind="d.kind" :title="d.title" :year="d.year" :episodes="store.probeEpisodes" @recognized="applyRecognizedPublication" @match="selectManualTmdb" @restore="restorePublication" />
+              <p v-if="!autoUpload" class="small muted">自动上传已关闭，本次只下载到本地，无需填写发布信息。之后可在下载任务中手动上传。</p>
               <div class="save-paths">
                 <div class="blk"><span class="lab">本地保存目录</span>
                   <button type="button" class="dir mono" :title="store.state?.settings.outDir" @click="openSettings('download')">
@@ -706,7 +715,7 @@ async function applyRule() {
                 </div>
               </div>
             </div>
-            <ReleasePicker ref="releasePicker" v-model="publication.releaseSelection" :request="request" :binding="releaseBinding" :disabled="starting || tmdbLoading || !!namingInputError" />
+            <ReleasePicker v-if="autoUpload" ref="releasePicker" v-model="publication.releaseSelection" :request="request" :binding="releaseBinding" :disabled="starting || tmdbLoading || !!namingInputError" @season="selectReleaseSeason" />
           </div>
         </section>
       </div>

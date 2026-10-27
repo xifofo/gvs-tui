@@ -1,4 +1,6 @@
 import type { Recognition } from '../../../src/integrations/plutofish/recognition-types'
+import type { PublicationFileChoice, PublicationFileNumbers } from '../../../src/integrations/plutofish/publication-file-types'
+export type { PublicationFileChoice, PublicationFileNumbers } from '../../../src/integrations/plutofish/publication-file-types'
 export type { Recognition, RecognizedWork } from '../../../src/integrations/plutofish/recognition-types'
 import type { RetentionSettings } from '../../../src/integrations/plutofish/retention-settings.ts'
 import type { ReleaseChoices } from '../../../src/integrations/plutofish/release-selection.ts'
@@ -51,12 +53,14 @@ export type AccountView = {
 export type SettingsView = {
   host: string
   desktopProxy: string
+  plutofishAutoUpload: boolean
   keyMasked: string
   hasKey: boolean
   outDir: string
   /** 临时目录：下载分片、解密、封装的中间文件。空 = 自动（放在下载目录所在盘的 .gvs-tmp，完成后直接改名，不跨盘复制） */
   tmpDir: string
   releaseGroup: string
+  /** Current filename template opt-in; saved separately from the retired legacy setting. */
   includeEpisodeTitle: boolean
   tmdbKey: string
   tmdbLang: string
@@ -361,6 +365,9 @@ export interface GvsApi {
   /** 暂停：停掉进程、保留已下载的部分；排队中的直接挂起 */
   controlPublication(id: number, action: 'pause' | 'resume'): Promise<void>
   completePublicationSetup(id: number, category: string): Promise<void>
+  /** 选择并检查改名/移动后的原视频；取消不改动任务。确认关联本身不启动上传。 */
+  choosePublicationFile(id: number): Promise<PublicationFileChoice | null>
+  relinkPublicationFile(id: number, token: string, numbers?: PublicationFileNumbers): Promise<void>
   createPublisherDirectories(sourceAccountId: string, directoryId: string, segments: string[]): Promise<PublisherDirectoryPage>
   publisherDirectories(sourceAccountId: string, directoryId: string, cursor?: string): Promise<PublisherDirectoryPage>
   pauseJob(id: number): Promise<void>
@@ -445,6 +452,8 @@ export interface GvsApi {
 export type GvsEvents = {
   state: AppState
   jobs: JobView[]
+  /** 已有任务的增量更新；新增、删除及初始加载仍使用 jobs 快照。 */
+  jobPatch: JobView[]
   toast: { message: string; tone: Tone }
   update: UpdateState
   subs: SubsView

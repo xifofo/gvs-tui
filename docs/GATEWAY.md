@@ -477,7 +477,7 @@ output_template:
   use_last_audio: false
 ```
 
-例如：`Tigers.Sniff.the.Rose.2026.S01E01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP.5.1.H.265-PFWEB.mkv`。不追加平台单集标题；已有的 MAXPLUS/HQ、HDR/DV 和高帧率标签仍保留在音视频编码之前。音频沿用输出默认音轨，不取末轨；视频按已知规格显示 `H.265` / `H.264` 等编码，封装后按实际规格校正。未知字段省略，不虚构编码。
+例如：`Tigers.Sniff.the.Rose.2026.S01E01.2160p.TX.WEB-DL.MAXPLUS.HDR.60fps.DDP.5.1.H.265-PFWEB.mkv`。默认不追加平台单集标题；可在「设置 → 命名与刮削 → 文件名包含单集标题」开启，仅在季集号后加入标题，其余命名顺序不变。已有的 MAXPLUS/HQ、HDR/DV 和高帧率标签仍保留在音视频编码之前。音频沿用输出默认音轨，不取末轨；视频按已知规格显示 `H.265` / `H.264` 等编码，封装后按实际规格校正。未知字段省略，不虚构编码。
 
 新安装默认发布组为 `PFWEB`，已有配置的发布组和自定义值继续保留。上述 YAML 用于说明内置命名规则，不是新增的可导入配置。未记录 `namingOrder: title-year` 的旧队列沿用原命名和单集标题选择；旧 `includeEpisodeTitle` 配置仍可读取。红果/抖音短剧沿用原规则。
 

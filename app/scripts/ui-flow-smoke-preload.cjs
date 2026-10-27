@@ -13,7 +13,7 @@ function poster(index) {
 }
 const settings = {
   host: 'https://gateway.example.invalid', desktopProxy: '', keyMasked: 'offline-fixture', hasKey: true,
-  outDir: 'D:/GVS/Downloads', tmpDir: '', releaseGroup: 'GVS', includeEpisodeTitle: true,
+  outDir: 'D:/GVS/Downloads', tmpDir: '', releaseGroup: 'GVS', includeEpisodeTitle: false,
   tmdbKey: '', tmdbLang: 'zh-CN', threads: 4, tencentObservations: false, hamiClient: 'tv',
   tencentCookie: '', douyinCookie: '', iqCookie: '', iqProfile: '',
   hongguoNfo: true, huangguoNfo: true, hongguoFmt: 'mkv', huangguoFmt: 'mkv',

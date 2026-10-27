@@ -21,17 +21,13 @@ const page = ref<HTMLElement | null>(null)
 type Filter = 'all' | 'active' | 'pending' | 'paused' | 'failed' | 'done'
 const filter = computed({ get: () => store.dlFilter as Filter, set: (v: Filter) => (store.dlFilter = v) })
 
-const count = (pred: (j: JobView) => boolean) => store.jobs.filter(pred).length
 const isActive = (j: JobView) => transferState(j) === 'active'
 const isDone = (j: JobView) => transferState(j) === 'done'
-const counts = computed(() => ({
-  all: store.jobs.length,
-  active: count(isActive),
-  pending: count((j) => transferState(j) === 'pending'),
-  paused: count((j) => transferState(j) === 'paused'),
-  failed: count((j) => transferState(j) === 'failed'),
-  done: count(isDone),
-}))
+const counts = computed(() => {
+  const result = { all: store.jobs.length, active: 0, pending: 0, paused: 0, failed: 0, done: 0 }
+  for (const job of store.jobs) result[transferState(job)]++
+  return result
+})
 const TABS: Array<{ key: Filter; label: string; empty: string }> = [
   { key: 'all', label: '全部', empty: '还没有下载任务。搜一部剧，选好集数和画质就能开始。' },
   { key: 'active', label: '进行中', empty: '没有正在下载、上传或排队的任务' },
@@ -223,7 +219,18 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
               </div>
               <span v-if="sub(j)" class="muted sub" :title="subTitle(j)">{{ sub(j) }}</span>
               <span v-if="mediaSummary(j)" class="muted sub" :title="mediaDetail(j)">{{ mediaSummary(j) }}</span>
+            </div>
+            <div class="job-progress">
               <UploadProgress v-if="j.state === 'done' && j.publication" :job="j" />
+              <section v-else class="download-progress" aria-label="下载进度" :class="{ completed: j.state === 'done', failed: j.state === 'failed' }">
+                <div class="transfer-heading">
+                  <strong>{{ j.state === 'done' ? '下载已完成' : '下载' }}<span v-if="j.publication" class="next-stage">{{ j.publication.progress?.autoUploadBlocked || store.state?.settings.plutofishAutoUpload === false ? '完成后等待手动上传' : '下一步：上传' }}</span></strong>
+                  <span class="mono">{{ pct(j) }}%</span>
+                </div>
+                <div class="progress" :class="barClass(j)" role="progressbar" aria-label="下载" :aria-valuenow="pct(j)" :aria-valuemin="0" :aria-valuemax="100"><div :style="{ width: pct(j) + '%' }" /></div>
+              </section>
+            </div>
+            <div v-if="j.publication || (j.state === 'done' && j.note) || j.hooks?.length || j.ed2k" class="job-extra">
               <PublicationDetails :draft="j.publication" />
               <RetentionProgress :progress="j.publication?.retention" />
               <span v-if="j.state === 'done' && j.note" class="sub job-note" :title="j.note">{{ j.note }}</span>
@@ -236,11 +243,6 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
                 <span v-else-if="j.ed2k?.state === 'done'" class="chip tiny ok">ED2K 已生成</span>
                 <span v-else-if="j.ed2k?.state === 'failed'" class="chip tiny warn" :title="j.ed2k.message">ED2K 计算失败</span>
               </span>
-            </div>
-            <div class="bar">
-              <span class="small dim">下载</span>
-              <div class="progress" :class="barClass(j)"><div :style="{ width: pct(j) + '%' }" /></div>
-              <span class="mono small dim pc">{{ pct(j) }}%</span>
             </div>
             <div class="ja">
               <button v-if="j.provider === 'tencent'" type="button" class="btn sm diag" title="腾讯诊断" @click="diagnosticsJob = j.id; showDiagnostics = true"><Icon name="info" :size="14" /><span class="diag-t">腾讯诊断</span></button>
@@ -335,13 +337,15 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
 .fold[aria-expanded="false"] { transform: rotate(-90deg); }
 .jobs { border-top: 1px solid var(--line); }
 .job {
-  min-height: 58px; padding: 8px 18px; display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) minmax(140px, 240px) max-content;
-  grid-template-areas: "lbl st bar ja"; align-items: center; column-gap: 18px; row-gap: 6px; border-top: 1px solid var(--line);
+  min-height: 58px; padding: 12px 18px; display: grid; grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) max-content;
+  grid-template-areas: "lbl st ja" "lbl transfer transfer" "lbl extra extra"; align-items: start; column-gap: 18px; row-gap: 8px; border-top: 1px solid var(--line);
 }
 .job:first-child { border-top: 0; }
 /* 日期集号等长编号按内容扩列，超长编号在列内换行，避免侵入状态栏。 */
-.lbl { grid-area: lbl; min-width: 0; max-width: 16ch; overflow-wrap: anywhere; font-size: 14px; font-weight: 500; }
+.lbl { grid-area: lbl; align-self: center; min-width: 0; max-width: 16ch; overflow-wrap: anywhere; font-size: 14px; font-weight: 500; }
 .st { grid-area: st; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.job-progress { grid-area: transfer; min-width: 0; }
+.job-extra { grid-area: extra; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .status-line { display: flex; align-items: baseline; gap: 8px; }
 .completed-at { font-size: 12px; white-space: nowrap; }
 .stt { font-size: 14px; font-weight: 700; }
@@ -352,20 +356,23 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
 .stt.queued { color: var(--ink-3); font-weight: 500; }
 .sub { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .job-note { color: var(--orange-text); }
-.bar { grid-area: bar; min-width: 0; display: flex; align-items: center; gap: 10px; }
-.bar .progress { flex: 1; min-width: 0; }
+.download-progress { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); font-size: 12px; min-width: 0; }
+.transfer-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.transfer-heading strong { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-width: 0; color: var(--orange-text); }
+.transfer-heading .mono { flex-shrink: 0; white-space: nowrap; }
+.next-stage { color: var(--ink-3); font-weight: 400; }
+.download-progress.completed strong { color: var(--ok); }
+.download-progress.failed strong { color: var(--err); }
 .progress.pause > div { background: var(--ink-3); }
-.pc { width: 38px; flex-shrink: 0; text-align: right; }
 .ja { grid-area: ja; display: flex; flex-wrap: nowrap; gap: 6px; justify-content: flex-end; min-width: 104px; }
 .diag { white-space: nowrap; }
 .del:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
 @media (max-width: 1200px) {
   .gbar { width: 200px; }
-  .job { grid-template-columns: minmax(66px, max-content) minmax(0, 1fr) minmax(120px, 180px) max-content; column-gap: 12px; }
+  .job { grid-template-columns: minmax(66px, max-content) minmax(0, 1fr) max-content; column-gap: 12px; }
 }
-/* 窄窗：进度条换到第二行，按钮列永远不和进度/百分比重叠 */
+/* 当前阶段的进度区始终横跨信息和操作列，避免完成后留下空的下载进度列。 */
 @media (max-width: 1080px) {
-  .job { grid-template-columns: minmax(66px, max-content) minmax(0, 1fr) max-content; grid-template-areas: "lbl st ja" ". bar bar"; }
   .gbar { width: 160px; }
 }
 @media (max-width: 900px) { .diag-t { display: none; } }
@@ -374,7 +381,7 @@ const HOOK_STATE: Record<string, string> = { running: '运行中', ok: '成功',
   .gh { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; padding: 12px; }
   .ga { grid-column: 3; grid-row: 1; }
   .gbar { grid-column: 1 / -1; width: 100%; }
-  .job { padding: 12px; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "lbl ja" "st st" "bar bar"; row-gap: 10px; }
+  .job { padding: 12px; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "lbl ja" "st st" "transfer transfer" "extra extra"; row-gap: 10px; }
 }
 .diag-layer { position: fixed; inset: 0; z-index: 60; background: rgb(0 0 0 / 38%); display: flex; justify-content: flex-end; }
 .diag-drawer { width: min(520px, 92vw); height: 100%; margin: 0 !important; border-radius: 16px 0 0 16px; overflow: auto; box-shadow: var(--ui-shadow-surface); }

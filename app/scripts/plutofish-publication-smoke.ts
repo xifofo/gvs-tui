@@ -2,22 +2,38 @@
 import { app } from 'electron'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Core } from '../src/main/core'
 import { GwClient } from '../../src/lib/client'
 import { publicationDirectory } from '../../src/integrations/plutofish/publication-store'
 import { completePublication, preparePublication } from '../../src/integrations/plutofish/publication'
-import type { EnqueueRequest } from '../src/shared/api'
+import type { EnqueueRequest, JobView } from '../src/shared/api'
 
 const profile = mkdtempSync(join(tmpdir(), 'gvs-publication-core-'))
 process.env.APPDATA = profile
 app.setPath('userData', profile)
 app.disableHardwareAcceleration()
-let uploadStarts = 0, fileReports = 0, identityReads = 0
+let uploadStarts = 0, fileReports = 0, identityReads = 0, releaseReads = 0
+const uploadNames: string[] = [], reportedFiles: Array<{ name: string; episodeNumber?: number; releaseTarget: { seasonNumber?: number } }> = []
 let identityCategories: Array<{ value: string; label: string }> | undefined = [{ value: 'anime', label: '动漫' }]
 const server = createServer(async (req, res) => {
+  if (req.url === '/api/v1/publisher/releases/query') {
+    releaseReads++
+    res.setHeader('content-type', 'application/json')
+    const releaseId = 'a'.repeat(32)
+    res.end(JSON.stringify({ items: [{ id: releaseId, name: '4K', resolution: '2160p', dynamicRange: 'sdr', status: 'draft' }],
+      total: 1, page: 1, pageSize: 100, boundReleaseId: releaseId })); return
+  }
+  if (req.url === '/api/v1/publisher/range-proofs/pending') {
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ jobs: [] })); return
+  }
+  if (req.url === '/api/v1/publisher/files/ed2k') {
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ accepted: true })); return
+  }
   if (req.url === '/api/v1/publisher/directories') {
     assert.equal(req.headers.authorization, 'Bearer fixture-only')
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -26,12 +42,14 @@ const server = createServer(async (req, res) => {
   }
   if (req.url === '/api/v1/publisher/uploads/prepare') {
     let body = ''; for await (const chunk of req) body += chunk
-    if (JSON.parse(body).action === 'start') uploadStarts++
+    if (JSON.parse(body).action === 'start') { uploadStarts++; uploadNames.push(JSON.parse(body).name) }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ dispatch: { status: 'ready', fileId: 'fixture-file', pickCode: 'fixture-pick' } }))
     return
   }
   if (req.url === '/api/v1/publisher/files/report') {
+    let body = ''; for await (const chunk of req) body += chunk
+    reportedFiles.push(JSON.parse(body))
     fileReports++
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ outcome: 'applied' })); return
   }
@@ -58,8 +76,11 @@ async function main() {
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`
   let calls = 0
+  const fullEvents: JobView[][] = [], patches: JobView[][] = []
+  const settle = () => new Promise(resolve => setTimeout(resolve, 180))
   async function create() {
-    const value = new Core({ state: () => {}, jobs: () => {}, toast: () => {} })
+    const value = new Core({ state: () => {}, jobs: jobs => fullEvents.push(structuredClone(jobs)),
+      jobPatch: jobs => patches.push(structuredClone(jobs)), toast: () => {} })
     const internal = value as any
     await value.plutofish.verify({ url, key: 'fixture-only' })
     internal.cli = new GwClient(url, 'fixture-only')
@@ -100,10 +121,27 @@ async function main() {
   assert.equal(core.jobList()[0]!.publication!.directoryPath, '/红果')
   assert.ok(core.jobList().every(j => j.state === 'paused'))
   await core.resumeJob(before[0]!.id)
+  await settle()
   assert.equal(core.jobList()[0]!.publication!.fileKey, keys[0])
+  fullEvents.length = 0; patches.length = 0
   ;(core as any).onJob({ id: before[0]!.id, status: '完成', pct: 1, log: '/tmp/fixture.mkv', err: '', done: true,
     completedMedia: { media: { status: 'probed', width: 1920, height: 1080, codec: 'h264' }, file: { size: 2048 } } })
   const completed = core.jobList()[0]!.publication!
+  await settle()
+  assert.equal(fullEvents.length, 0, '下载完成只推送变化任务，不能重发所有历史记录')
+  assert.ok(patches.length > 0)
+  assert.ok(patches.every(jobs => jobs.length === 1 && jobs[0]!.id === before[0]!.id))
+  assert.equal(patches.at(-1)![0]!.publication!.measured!.media.height, 1080)
+  fullEvents.length = 0; patches.length = 0
+  for (let i = 0; i < 30; i++) {
+    const draft = structuredClone(completed)
+    draft.progress = { ...draft.progress!, stage: 'uploading', phase: 'uploading', uploadPercent: i }
+    ;(core as any).publications.changed(draft, true)
+  }
+  await settle()
+  assert.equal(fullEvents.length, 0, '瞬时上传进度必须使用增量事件')
+  assert.equal(patches.length, 1, '多个上传进度必须合并刷新')
+  assert.equal(patches[0]![0]!.publication!.progress!.uploadPercent, 29)
   assert.equal(completed.measured!.media.height, 1080)
   assert.equal(completed.fileKey, keys[0])
   const manifest = readdirSync(publicationDirectory()).filter(p => p.endsWith('.json')).map(p => JSON.parse(readFileSync(join(publicationDirectory(), p), 'utf8'))).find(d => d.fileKey === keys[0])
@@ -139,11 +177,61 @@ async function main() {
   assert.equal(fileReports, 1)
   await assert.rejects(() => core!.completePublicationSetup(before[1]!.id, 'anime'), /已进入/)
   assert.equal(core.publicationPreferences({ provider: 'youku', sourceWorkId: 'show', kind: 'show' })?.publication.category, 'anime')
+  // Global OFF bypasses publication validation, stale hidden inputs and all release requests.
+  await core.saveSettings({ plutofishAutoUpload: false })
+  const readsBeforeLocal = releaseReads
+  assert.equal(await core.enqueue({ ...request, publication: undefined }), 2)
+  assert.equal(await core.enqueue({ ...request, publication: { category: 'disabled', directoryId: 'invalid', episodeNumbers: { ep1: 999 } } }), 2)
+  assert.equal(releaseReads, readsBeforeLocal)
+  const localJobs = core.jobList().slice(2)
+  assert.equal(localJobs.length, 4)
+  for (const job of localJobs) {
+    assert.equal(job.publication!.workTarget.category, '')
+    assert.equal(job.publication!.directoryId, '0')
+    assert.equal(job.publication!.existingReleaseId, undefined)
+  }
+  assert.equal(localJobs[2]!.publication!.episodeNumber, 1, '隐藏的发布集号不能修改本地下载')
+  assert.equal(localJobs[2]!.publication!.seasonNumber, 0, '显式本地命名季号 0 必须保留')
+  const originalLocal = join(profile, 'Original.S00E01.mkv'), renamedLocal = join(profile, 'Natural.High.2023.S00E151.1080p.TX.WEB-DL.AVC-WF.mkv')
+  writeFileSync(originalLocal, Buffer.alloc(2048, 3))
+  ;(core as any).onJob({ id: localJobs[0]!.id, status: '完成', pct: 1, log: originalLocal, err: '', done: true, completedMedia: measured })
+  core.probePublicationMedia = async () => measured.media
+  const inspectedOnly = await core.inspectPublicationFile(localJobs[0]!.id, originalLocal)
+  assert.equal(core.jobList()[2]!.output, originalLocal, '取消选择不能改动任务')
+  renameSync(originalLocal, renamedLocal)
+  await assert.rejects(() => core!.relinkPublicationFile(localJobs[0]!.id, inspectedOnly.token), /找不到/)
+  const renamedChoice = await core.inspectPublicationFile(localJobs[0]!.id, renamedLocal)
+  assert.deepEqual([renamedChoice.seasonNumber, renamedChoice.episodeNumber, renamedChoice.numbersFromName, renamedChoice.canEditNumbers], [0, 151, true, true])
+  await assert.rejects(() => core!.relinkPublicationFile(localJobs[0]!.id, 'invalid'), /失效/)
+  await core.relinkPublicationFile(localJobs[0]!.id, renamedChoice.token, { seasonNumber: 0, episodeNumber: 151 })
+  assert.equal(core.jobList()[2]!.output, renamedLocal)
+  assert.equal(core.jobList()[2]!.label, 'S00E151')
+  assert.equal(core.jobList()[2]!.publication!.episodeNumber, 151)
+  assert.equal(existsSync(originalLocal), false, '不能把用户文件改回旧名称')
+  assert.equal(uploadStarts, 1, '确认关联只更新文件，不启动上传')
+  await assert.rejects(() => core!.relinkPublicationFile(localJobs[0]!.id, renamedChoice.token), /失效/)
+  await core.shutdown(); core.dispose(); core = await create()
+  await core.saveSettings({ plutofishAutoUpload: true })
+  await settle()
+  assert.equal(core.jobList()[2]!.publication!.workTarget.category, '')
+  assert.equal(uploadStarts, 1, '重新开启不能上传关闭期间创建的本地任务')
+  assert.equal(core.jobList()[2]!.output, renamedLocal)
+  assert.equal(core.jobList()[2]!.publication!.episodeNumber, 151)
+  await core.completePublicationSetup(localJobs[0]!.id, 'anime')
+  const renamedDeadline = Date.now() + 10000
+  while (core.jobList()[2]!.publication!.progress?.stage !== 'completed' && Date.now() < renamedDeadline) await new Promise(r => setTimeout(r, 50))
+  assert.equal(core.jobList()[2]!.publication!.progress?.stage, 'completed')
+  assert.equal(uploadNames.at(-1), 'Natural.High.2023.S00E151.1080p.TX.WEB-DL.AVC-WF.mkv')
+  assert.equal(reportedFiles.at(-1)!.name, uploadNames.at(-1))
+  assert.equal(reportedFiles.at(-1)!.releaseTarget.seasonNumber, 0)
+  assert.equal(reportedFiles.at(-1)!.episodeNumber, 151)
+  assert.equal(calls, downloadsBefore + 4, '改名后的手动上传不能触发重新下载')
+  const countBeforeFailure = core.jobList().length
   const n = calls
   rmSync(join(profile, 'jobs.json')); mkdirSync(join(profile, 'jobs.json'))
   await assert.rejects(() => core!.enqueue(request), /任务保存失败/)
   assert.equal(calls, n)
-  assert.equal(core.jobList().length, 2)
+  assert.equal(core.jobList().length, countBeforeFailure)
   console.log('PASS: Core validates required categories, restores incomplete downloads, uploads existing media automatically without re-downloading, remembers repaired settings, and preserves pending tasks')
 }
 

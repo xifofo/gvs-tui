@@ -80,6 +80,8 @@ export type DlTask = {
   namingEvidence?: NamingEvidence
   /** Pinned at task creation so pause/retry keeps the same name. Legacy tasks include titles. */
   includeEpisodeTitle?: boolean
+  /** Pinned current-template opt-in; absent on saved tasks that must keep omitting titles. */
+  filenameEpisodeTitle?: boolean
   /** Audio tracks to mux in (空格勾选的那些）；空 = 只封平台默认音轨。 */
   audioTracks?: Array<{ id: string; label: string; lang: string; vid?: string; codec?: string; isDefault?: boolean }>
   /** True only when the user explicitly chose a default, retained for retries. */
@@ -296,16 +298,19 @@ export function jobTitle(t: DlTask): string {
 
 /** The confirmation preview and the downloader use the same naming fields. */
 export function jobNaming(t: DlTask, cfg: FileConfig): Naming {
+  const kind = t.kind ?? (t.provider === 'hongguo' || t.provider === 'huangguo' || t.provider === 'douyin' ? 'short' : 'show')
   return {
-    kind: t.kind ?? (t.provider === 'hongguo' || t.provider === 'huangguo' || t.provider === 'douyin' ? 'short' : 'show'),
+    kind,
     title: t.series || t.title,
     nameDots: t.nameDots,
     filenameTitle: t.filenameTitle,
     namingOrder: t.namingOrder,
+    filenameEpisodeTitle: t.filenameEpisodeTitle === true,
     year: t.year,
     season: t.season,
     episode: t.episode,
-    episodeTitle: t.includeEpisodeTitle === false ? undefined : t.title,
+    episodeTitle: t.namingOrder === 'title-year' && kind !== 'short'
+      ? t.title : t.includeEpisodeTitle === false ? undefined : t.title,
     height: t.height,
     codec: t.codec || (t.namingOrder === 'title-year' ? '' : 'H264'),
     edition: t.edition,
