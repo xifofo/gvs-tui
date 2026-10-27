@@ -71,3 +71,38 @@ test('上传调度 502 的具体代码和请求编号保留到错误详情', asy
     expect(JSON.stringify(error)).not.toContain('SECRET')
   } finally { connection.close(); server.stop(true) }
 })
+
+test('历史核验显示实际阶段和数字原始码，只有确认清理候选才重试', async () => {
+  let code = 'CLOUD_PROVIDER_REJECTED', provider = '400123', stage = 'verify_reuse', providerStatus = '200'
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => Response.json({ error: { code, message: 'PRIVATE-BODY' } },
+    { status: code === 'CLOUD_UPLOAD_REUSE_INVALID' ? 409 : 502, headers: { 'x-plutofish-upload-stage': stage, 'x-plutofish-provider-code': provider, 'x-plutofish-provider-status': providerStatus } }) })
+  const identity = { id: 'publisher', name: '上传端', kind: 'publisher' as const, sourceAccount: { id: 'source', name: '源账号', alias: 'main' } }
+  const connection = new PlutoFishConnection({ load: () => ({ url: server.url.origin, key: 'offline-key' }), verify: async () => identity })
+  try {
+    await connection.verify()
+    const request = () => connection.request({ url: server.url.origin, publisherId: identity.id, sourceAccount: identity.sourceAccount }, 'uploads/prepare', { action: 'start' }).then(
+      () => { throw new Error('应返回上传失败') },
+      (error: unknown) => { if (!(error instanceof PublisherError)) throw error; return error },
+    )
+    let error = await request()
+    expect(error).toBeInstanceOf(PublisherError)
+    expect(error.retryable).toBe(false)
+    expect(error.message).toContain('核验历史文件')
+    expect(error.message).toContain('115 错误码：400123')
+    expect(error.diagnostic?.stage).toBe('核验历史文件')
+    expect(error.diagnostic?.providerCode).toBe('400123')
+    expect(error.diagnostic?.providerHttpStatus).toBe(200)
+    expect(JSON.stringify(error)).not.toContain('PRIVATE')
+    stage = 'PRIVATE-STAGE'; provider = 'https://private.invalid/PRIVATE'; providerStatus = 'PRIVATE'
+    error = await request()
+    expect(error.diagnostic?.stage).toBe('申请上传')
+    expect(error.diagnostic?.providerCode).toBeUndefined()
+    expect(error.diagnostic?.providerHttpStatus).toBeUndefined()
+    expect(JSON.stringify(error)).not.toContain('PRIVATE')
+    code = 'CLOUD_UPLOAD_REUSE_INVALID'
+    error = await request()
+    expect(error.retryable).toBe(true)
+    expect(error.message).toContain('退出复用')
+    expect(connection.ready).toBe(true)
+  } finally { connection.close(); server.stop(true) }
+})
