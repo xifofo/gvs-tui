@@ -51,6 +51,14 @@ function run(bin: string, args: string[], phase?: Phase, signal?: AbortSignal): 
   return promise
 }
 
+/** Track name players show as 备注. ISO 639-2 collapses both scripts to chi. */
+export function subtitleTrackName(lang: string): string {
+  const tag = lang.trim().toLowerCase().replace(/_/g, '-')
+  if (/(?:^|-)hant(?:-|$)/.test(tag) || /-(?:tw|hk|mo)$/.test(tag)) return '繁体中文'
+  if (/(?:^|-)hans(?:-|$)/.test(tag) || tag === 'chs' || /-(?:cn|sg)$/.test(tag)) return '简体中文'
+  return ''
+}
+
 /** Display names from 优酷 → ISO 639-2 for mkvmerge `--language`. */
 export function mkvLang(lang: string): string {
   const s = lang.trim().toLowerCase()
@@ -272,7 +280,13 @@ export async function mkvmergeTrackFiles(bin: string, inputs: string[], out: str
         && (isUnknownAudioLanguage(language) || /^(en|eng)(?:[-_]|$)/i.test(language))) {
         args.push('--language',`${track.id}:${originalAudioLanguage}`)
       } else if (match && isUnknownAudioLanguage(language)) args.push('--language',`${track.id}:${match[1]}`)
-      if (track.type==='subtitles') args.push('--default-track',`${track.id}:no`)
+      if (track.type==='subtitles') {
+        args.push('--default-track',`${track.id}:no`)
+        // RE names the file from LANGUAGE and drops NAME when this mux runs.
+        // Without a track name, 简体 and 繁体 both show up as bare 中文.
+        const remark = subtitleTrackName(match?.[1] || language)
+        if (remark) args.push('--track-name', `${track.id}:${remark}`)
+      }
       if (track.type==='audio') {
         args.push('--default-track',`${track.id}:${firstAudio?'yes':'no'}`)
         firstAudio = false
