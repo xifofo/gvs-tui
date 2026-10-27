@@ -9,6 +9,9 @@ import { firstPresentationMs, inspectMediaTiming } from './media-timing.ts'
 const exponent = '[eac3 @ 0x123] expacc 126 is out-of-range\n[eac3 @ 0x123] error decoding the audio block\n'
 const progress = 'out_time_us=5862464000\nprogress=end\n'
 const spectral = '[eac3 @ 0x123] invalid spectral extension range (11 >= 11)\n[eac3 @ 0x123] error decoding the audio block\n'
+const opening = '[eac3 @ 0x123] exponent -1 is out-of-range\n[eac3 @ 0x123] error decoding the audio block\n'
+const second = opening.replace('exponent -1', 'exponent 28')
+const twoFrames = opening.repeat(2) + second
 const codecs = '#codec_id 0: eac3\n#codec_id 1: aac\n'
 const packet = '#tb 0: 1/48000\n#media_type 0: audio\n0, 12000, 12000, 1536, 384, 0x1\n'
 type Reply = { exit?: number; stdout?: string; stderr?: string; wait?: boolean }
@@ -39,6 +42,42 @@ esac
 
 const hostTest = process.platform !== 'win32' ? test : test.skip
 const macTest = process.platform === 'darwin' ? test : test.skip
+
+test('two observed exponent faults have exact values and bounded probe/decode counts', () => {
+  for (const text of [opening, second, twoFrames]) {
+    expect(isEac3CompatibilityError(text)).toBe(true)
+    expect(isEac3CompatibilityDiagnostic(text)).toBe(true)
+  }
+  for (const text of [opening.repeat(3), second.repeat(2), twoFrames + second, twoFrames.replace('exponent 28', 'exponent 27'),
+    twoFrames + 'frame CRC mismatch\n', twoFrames + 'partial file\n', twoFrames + spectral, opening.split('\n')[0]!]) {
+    expect(isEac3CompatibilityDiagnostic(text)).toBe(false)
+  }
+})
+
+macTest('the original two-fault audio is fully verified without dropping packets', async () => {
+  const f = fixture([{ stdout: packet, stderr: opening }, { stdout: progress, stderr: twoFrames },
+    { stdout: codecs, stderr: opening }, { stdout: progress, stderr: opening }])
+  try {
+    expect(await firstPresentationMs(f.bin, 'wolf.ts', 'a:0')).toBe(250)
+    expect(f.calls()).toHaveLength(4)
+    expect(f.calls()[1]).toContain('crccheck')
+    expect(f.calls()[3]).toContain('eac3_at')
+    for (const args of f.calls()) expect(args.some(a => a.startsWith('noise=') || a === '-ss' || a === '-t')).toBe(false)
+  } finally { f.dispose() }
+})
+
+macTest('two-fault audio still rejects CRC damage, extra errors and incomplete native decode', async () => {
+  for (const bad of [twoFrames + '[eac3 @ 0x123] frame CRC mismatch\n', twoFrames + second]) {
+    const f = fixture([{ stdout: progress, stderr: bad }])
+    try { await expect(validateEac3WithAudioToolbox(f.bin, 'wolf.ts')).rejects.toThrow('数据复核未通过') }
+    finally { f.dispose() }
+  }
+  for (const bad of [{ stdout: 'progress=end\n' }, { stdout: progress, stderr: second.repeat(2) }, { stdout: progress, stderr: '[eac3_at @ 0x123] decode failed' }]) {
+    const f = fixture([{ stdout: progress, stderr: twoFrames }, { stdout: codecs }, bad])
+    try { await expect(validateEac3WithAudioToolbox(f.bin, 'wolf.ts')).rejects.toThrow() }
+    finally { f.dispose() }
+  }
+})
 
 test('only the observed E-AC-3 exponent failure is eligible for compatibility validation', () => {
   expect(isEac3ExponentError(exponent)).toBe(true)

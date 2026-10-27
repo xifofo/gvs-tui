@@ -41,13 +41,27 @@ export function isEac3ExponentError(message: string): boolean {
 /** Eligibility alone is not validation: require the bounded CRC diagnostics below. */
 export function isEac3CompatibilityError(message: string): boolean {
   return (isEac3ExponentError(message)
+    || /\[eac3 @[^\]]+\] exponent (?:-1|28) is out-of-range/.test(message)
     || /\[eac3 @[^\]]+\] invalid spectral extension range \(11 >= 11\)/.test(message))
     && !/CRC mismatch|partial file|File ended prematurely|Error during demuxing/i.test(message)
 }
 
-/** Only the observed opening-frame diagnostics, at most probe + decode. */
+/** Only the observed diagnostics with bounded probe/decode counts. */
 export function isEac3CompatibilityDiagnostic(text: string): boolean {
   const lines = text.trim().split(/\r?\n/).filter(Boolean)
+  // Observed stereo stream: the opening frame (-1) is reported during probe
+  // and decode; frame 13 (28) is reported once during full decode. Keep the
+  // exact values and counts bounded; CRC and independent decode remain required.
+  if (lines.length > 0 && lines.length <= 6 && lines.length % 2 === 0) {
+    const values: string[] = []
+    for (let i = 0; i < lines.length; i += 2) {
+      const value = /^\[eac3 @[^\]]+\] exponent (-1|28) is out-of-range$/.exec(lines[i]!)?.[1]
+      if (!value || !/^\[eac3 @[^\]]+\] error decoding the audio block$/.test(lines[i + 1]!)) break
+      values.push(value)
+    }
+    if (values.length === lines.length / 2 && values.filter(v => v === '-1').length <= 2
+      && values.filter(v => v === '28').length <= 1) return true
+  }
   const detail = /^\[eac3 @[^\]]+\] (?:expacc (?:125|126|127) is out-of-range|invalid spectral extension range \(11 >= 11\))$/
   const block = /^\[eac3 @[^\]]+\] error decoding the audio block$/
   return lines.length > 0 && lines.length <= 4 && lines.some(line => detail.test(line))
@@ -64,8 +78,8 @@ export async function validateEac3WithAudioToolbox(ffmpeg: string, path: string,
   const output = ['-map', '0:a', '-progress', 'pipe:1', '-stats_period', '10', '-f', 'null', '-']
   const crc = await decode(ffmpeg, ['-err_detect', 'crccheck', '-i', path, ...output], signal)
   const duration = completedDuration(crc.stdout)
-  // Bound the known two-line error to two reports (probe and decode in the
-  // observed sample). Repeated faults, CRC mismatches and other errors fail.
+  // Bound the observed fault combinations. Additional repetitions, CRC
+  // mismatches and unrelated errors fail before trying the system decoder.
   if (!duration || !isEac3CompatibilityDiagnostic(crc.stderr)) {
     throw new Error(`E-AC-3 数据复核未通过：${crc.stderr.slice(0, 500) || '未确认完整解码'}`)
   }

@@ -41,6 +41,7 @@ export function userMessage(error: unknown, fallback = defaultErrorMessage): str
   if (/IQ 音轨分段下载失败/.test(raw)) return iqAudioTransferMessage
   if (/N_m3u8DL-RE 下载失败 \(SIG(?:ABRT|SEGV|BUS|ILL)\)/.test(raw)) return downloaderCrashMessage
   if (/IQ 封装或音轨验收失败/.test(raw)) return '音视频封装或音轨检查未通过，未生成成品。请继续任务重试，已完成的视频会保留。'
+  if (/首帧修复校验失败|音轨解码校验失败|E-AC-3.*复核未通过|E-AC-3 复核失败/.test(raw)) return '音轨解码检查未通过，未生成成品。已下载文件保留，请更新客户端后继续任务，或重新选择音轨。'
   if (/解密后音视频校验失败/.test(raw)) return decodeCheckMessage
   if (raw && [...raw].length <= 180 && /\p{Script=Han}/u.test(raw) && !technical.test(raw)) return raw
   const text = raw.split('; diagnostic=')[0]!.slice(0, 8192)
