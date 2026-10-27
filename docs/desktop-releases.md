@@ -1,6 +1,6 @@
 # GitHub Actions 桌面端发布
 
-安装包由本仓库的 `desktop` 工作流构建，发布到 `xifofo/gvs-tui` 的 GitHub Releases。Windows x64 使用 NSIS，macOS 同时生成 arm64 和 x64 DMG。桌面版使用 `desktop-v*` 标签，与 TUI 的 `v*` 标签独立，不占用 TUI 的 Latest。
+安装包由本仓库的 `desktop` 工作流构建。源码验证后直接推送 `main`，无需 PR，即会自动生成 Windows x64 NSIS 和 macOS arm64／x64 DMG，产物在该次 Actions 运行中保留 14 天。正式发布使用 `desktop-v*` 标签，将安装包上传到 `xifofo/gvs-tui` 的 GitHub Releases；与 TUI 的 `v*` 标签独立，不占用 TUI 的 Latest。
 
 ## 正式发布
 

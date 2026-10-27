@@ -18,7 +18,7 @@ git remote set-url --push upstream DISABLED
 git config remote.pushDefault origin
 ```
 
-`main` 跟踪 `origin/main`。日常改动在 `codex/` 前缀的开发分支完成，推送同名分支并通过 PR 合入 `main`。更新前先检查 `git status`，提交已有修改；不要用其他仓库的文件或安装包覆盖正在维护的版本。
+`main` 跟踪 `origin/main`。本仓库直接提交源码到 `main`，由 GitHub Actions 自动检查并构建安装包，不要求创建 PR。需要隔离开发时可以先使用 `codex/` 分支，验证后把提交合入本地 `main` 再推送。更新前先检查 `git status`，提交已有修改；不要用其他仓库的文件或安装包覆盖正在维护的版本。
 
 多个 worktree 共用远程配置和分支引用，但每个 worktree 的工作文件、当前分支和未提交改动彼此独立。调整远程时保留其他工作目录使用的分支，不切换或重置它们的文件。
 
@@ -60,4 +60,4 @@ bun run build
 
 涉及画质、发布表单或任务界面时，再运行对应的隔离 Core／UI smoke；命令见 [PlutoFish 接入说明](PLUTOFISH.md#验证)。测试使用临时配置和模拟接口，避免将真实下载、上传、账号设置当作测试数据。
 
-验证后推送集成分支到 `origin` 并创建 PR，写明保留的定制功能、引入的改进和验证结果。PR 合入后再按发布流程更新版本、打标签和构建安装包；不在整理远程或提交备份时发布版本。
+验证后先拉取 `origin/main`，将最新主分支与已验证的提交合入本地 `main`，然后直接推送 `main`，无需 PR。提交说明写明改动内容和必要的验证结果。推送会自动触发 TUI 检查及桌面端安装包构建，产物在 Actions 中保留 14 天。正式发布仍按发布流程更新版本并推送 `desktop-v*` 标签；普通源码提交不会自动创建 Release。

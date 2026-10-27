@@ -1,10 +1,11 @@
 name: desktop
 
-# 桌面端发布：推 desktop-v* 标签（如 desktop-v0.1.1）即构建 Windows / macOS 安装包并发 Release。
+# main 提交自动构建 Windows / macOS 安装包；desktop-v* 标签另行发布 Release。
 # 与 TUI 的 v* 标签互不干扰；Release 不标为 Latest，TUI 的发布页不受影响。
 # 桌面端自动更新（app/src/main/updater.ts）按 desktop-v* 取最新发布里的 latest.yml。
 on:
   push:
+    branches: [main]
     tags: ["desktop-v*"]
   workflow_dispatch:
 
