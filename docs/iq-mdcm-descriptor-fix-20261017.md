@@ -32,7 +32,7 @@
 从 `tui/` 运行：
 
 ```powershell
-$env:PATH = 'C:/Users/example/.dotnet;' + $env:PATH
+$env:PATH = (Join-Path $env:USERPROFILE '.dotnet') + ';' + $env:PATH
 dotnet test third_party/N_m3u8DL-RE/src/N_m3u8DL-RE.Tests/N_m3u8DL-RE.Tests.csproj --filter 'FullyQualifiedName~IqMdcmDescriptorTests|FullyQualifiedName~IqBbtsTests'
 ./scripts/build-managed-re.ps1 -Runtime win-x64 -Install
 ```

@@ -30,14 +30,16 @@ git config remote.pushDefault origin
 
 ```sh
 git fetch origin
-git fetch upstream
 git switch main
 git merge --ff-only origin/main
 git switch -c codex/upstream-sync-YYYYMMDD
-git log --oneline HEAD..upstream/main
 ```
 
-需要上游的一整批改进时，在集成分支执行 `git merge upstream/main`，保留共同历史，方便后续同步。只需要独立修复时，用 `git cherry-pick <commit>`，同时检查依赖提交和相应测试。两种方式按改动范围选择，不把 `main` 强制重置为上游。
+本仓库已重写历史，移除了上游遗留凭据、网关地址和个人路径。不要 merge、镜像推送或重新发布未经清理的上游历史、旧分支或旧标签；这些操作会把已删除内容重新带回可达历史。
+
+在独立的临时克隆中查看上游变更，将需要的补丁应用到当前集成分支，再检查补丁内容、依赖和相应测试。不要向工作仓库导入上游原始 refs。已有旧克隆应重新克隆，未提交改动通过补丁恢复。不要把本仓库 `main` 强制重置为上游。
+
+每次引入补丁后运行 `python3 scripts/check-public-content.py --history`，检查当前文件及全部可达历史中的网关凭据、个人路径和硬编码网关配置。扫描只报告位置与类型，不输出敏感值；它不代替安装包或第三方二进制审计。GitHub Actions 同步运行这项检查。
 
 发生冲突时同时保留平台基础功能和 PlutoFish 接入要求，特别核对 [维护边界](PLUTOFISH.md#维护边界) 中的入口，以及任务、命名和发布状态：
 

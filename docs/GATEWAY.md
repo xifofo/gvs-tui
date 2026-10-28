@@ -384,6 +384,9 @@ Clash / 类似 TUN 的 **fake-ip**（解析成 `198.18.0.0/15`）会把 WebSocke
 
 ```powershell
 # 1. 隧道本身：应打印 OPEN，且到结束仍是 open=true
+# 先设置 TUNNEL_URL 和 TUNNEL_KEY；脚本不提供默认地址或密钥。
+$env:TUNNEL_URL='https://gateway.example.invalid'
+# TUNNEL_KEY 由本机环境提供，不要写进脚本或提交到仓库。
 bun run scripts/probe-tunnel.ts
 
 # 2. 端到端：起一条真隧道，另开窗口让网关借本机 IP 发请求

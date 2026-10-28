@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto'
 const require = createRequire(import.meta.url)
 const ts = require('../node_modules/typescript') as typeof import('typescript')
 const asar = require('../app/node_modules/@electron/asar')
-const installed = 'C:/Users/example/AppData/Local/Programs/GVS/resources/app.asar'
+const installed = process.env.GVS_INSTALLED_ASAR
+if (!installed) throw new Error('Set GVS_INSTALLED_ASAR to the installed app.asar path')
 const mainPath = join('out','main','index.js')
 const original = asar.extractFile(installed, mainPath).toString('utf8') as string
 const built = readFileSync(resolve('app/out/main/index.js'),'utf8')
