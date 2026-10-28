@@ -265,3 +265,5 @@ Ctrl+9 切换咪咕，支持搜索、榜单、手机分享链接、完整分集�
 旧任务若保存 `mobile:5/tv:8` 等合并画质标识，需重新打开对应来源的作品选择分集和画质。受保护、试看及降档流不可下载。
 
 相关回归：`bun test src/lib/migu.test.ts src/migu-runtime.test.ts`；本机媒体下载：`bun test scripts/web-video-download.test.ts`。
+
+PlutoFish 网盘目录选择：单击选中，双击或右侧箭头进入；单击不会请求目录列表。上传位置与创建父目录都使用选中项，底部显示实际目标路径。

@@ -6,7 +6,7 @@ const { join, resolve } = require('node:path')
 const { tmpdir } = require('node:os')
 const profile = mkdtempSync(join(tmpdir(), 'gvs-manual-directory-'))
 app.setPath('userData', profile); app.disableHardwareAcceleration(); app.on('window-all-closed', () => {})
-const output = resolve('../.build/manual-directory-smoke'); mkdirSync(output, { recursive: true })
+const output = mkdtempSync(join(tmpdir(), 'gvs-directory-screens-')); console.log('screenshots:', output)
 const accounts = [{ id: 'source-a', alias: 'a', name: '账号 A', provider: '115', enabled: true }, { id: 'source-b', alias: 'b', name: '账号 B', provider: '115', enabled: true }]
 const connection = { url: 'https://example.invalid', hasKey: true, status: 'verified', error: '', identity: { id: 'publisher', name: '测试发布端', kind: 'publisher', sourceAccount: accounts[0], sourceAccounts: accounts, categories: [{ value: 'tv', label: '日韩剧集' }, { value: 'other', label: '其他剧集' }] } }
 const tmdb = { id: 123, kind: 'show', name: 'Doctor X', title: 'Doctor X', year: 2024, overview: '' }
@@ -74,7 +74,10 @@ async function open() {
 }
 async function chooseCreationParent(name) {
   await clickText('根目录', '.directory-dialog')
+  const reads = calls.filter(c => c.method === 'publisherDirectories').length
   await clickText(name, '.directory-dialog .folders')
+  assert.equal(calls.filter(c => c.method === 'publisherDirectories').length, reads, 'single selection must not browse')
+  assert.equal(await run('document.querySelectorAll(".folder-select[aria-pressed=true]").length'), 1)
   await wait('document.querySelector(".directory-dialog [aria-label=完整创建路径]")')
 }
 async function changeSeason(number) {
@@ -95,6 +98,21 @@ async function main() {
   await app.whenReady(); await open()
   await wait('document.querySelector("[aria-label=新建网盘路径]")?.textContent === "日韩剧集/Doctor X {tmdbid-123}/season 02"')
   const original = clone(preferences['source-a'].publication)
+  await clickText('选择目录')
+  await clickText('根目录', '.directory-dialog')
+  const reads = calls.filter(c => c.method === 'publisherDirectories').length
+  await clickText('其他位置', '.directory-dialog .folders')
+  assert.equal(calls.filter(c => c.method === 'publisherDirectories').length, reads)
+  assert.equal(await run('document.querySelector(".directory-dialog footer .selected").textContent'), '上传至：/其他位置')
+  await run('document.querySelector(".folder-select[aria-pressed=true]").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))')
+  await wait('document.querySelector(".directory-dialog .breadcrumbs").textContent.includes("其他位置")')
+  assert.equal(calls.filter(c => c.method === 'publisherDirectories').length, reads + 1)
+  await clickText('根目录', '.directory-dialog')
+  await run(`document.querySelector('[aria-label="进入“发布资源”"]').click()`)
+  await wait('document.querySelector(".directory-dialog .breadcrumbs").textContent.includes("发布资源")')
+  assert.equal(calls.filter(c => c.method === 'publisherDirectories').length, reads + 3)
+  await clickText('取消', '.directory-dialog')
+
   await openCreation()
   assert.equal(creations.length, 0, 'opening the parent browser must never create directories')
   await chooseCreationParent('其他位置')
@@ -115,7 +133,7 @@ async function main() {
   assert.equal(preferences['source-a'].publication.directoryCreation.parentId, '300')
   await run('document.querySelector(".create-work-directory").scrollIntoView({ block: "center", behavior: "instant" })'); await delay(150)
   writeFileSync(join(output, 'created.png'), (await win.webContents.capturePage()).toPNG())
-  await clickText('选择目录'); await clickText('选择此目录', '.directory-dialog'); await delay(100)
+  await clickText('选择目录'); await clickText('保存到当前文件夹', '.directory-dialog'); await delay(100)
   assert.equal(preferences['source-a'].publication.directoryCreation.workDirectoryId, firstWorkId, 'same ID selection preserves the creation record')
   preferences['source-a'].tmdb = { ...tmdb, name: '新的译名' }
   win.destroy(); await open(); await wait('document.querySelector(".create-work-directory button").textContent === "文件夹已创建"')
