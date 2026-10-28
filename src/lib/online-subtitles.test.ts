@@ -101,3 +101,48 @@ describe('crunchyroll online subtitles', () => {
     }
   })
 })
+
+describe('tencent soft subtitles', () => {
+  // 腾讯 play 的 subtitles[] 现在带 url/urls，且 url 是 HLS 封装的 .vtt.m3u8。
+  const gateway = {
+    subtitles: [
+      {
+        id: '53102', name: '简体中文', lang: 'zh-cn', lang_id: 'zh-cn', format: 'vtt',
+        url: 'http://cdn.example/gzc_1.f53102000.vtt.m3u8?ver=4',
+        urls: ['http://cdn.example/gzc_1.f53102000.vtt.m3u8?ver=4', 'http://cdn2.example/gzc_1.f53102000.vtt.m3u8?ver=4'],
+        playlist: true,
+      },
+    ],
+  }
+
+  test('keeps the CDN url and marks the HLS playlist', () => {
+    const rows = onlineSubtitles(gateway)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.url).toContain('.vtt.m3u8')
+    expect(rows[0]!.playlist).toBe(true)
+    expect(rows[0]!.urls).toHaveLength(2)
+    expect(subtitleFileName(rows[0]!)).toBe('简体中文.vtt')
+  })
+
+  test('downloads the playlist and stitches it into a real WebVTT file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gvs-subs-'))
+    const playlist = '#EXTM3U\n#EXTINF:6.000,\nseg0.vtt\n#EXTINF:6.000,\nseg1.vtt\n#EXT-X-ENDLIST\n'
+    const files: Record<string, string> = {
+      'http://cdn.example/gzc_1.f53102000.vtt.m3u8?ver=4': playlist,
+      'http://cdn.example/seg0.vtt': 'WEBVTT\n\n00:00:00.100 --> 00:00:01.000\n甲\n',
+      'http://cdn.example/seg1.vtt': 'WEBVTT\n\n00:00:00.100 --> 00:00:02.000\n乙\n',
+    }
+    try {
+      const out = await downloadSubtitles(onlineSubtitles(gateway), dir, {
+        fetcher: async (url) => new Response(files[url] ?? '', { status: url in files ? 200 : 404 }),
+      })
+      const text = readFileSync(out[0]!.path, 'utf8')
+      expect(text.startsWith('WEBVTT')).toBe(true)
+      expect(text).not.toContain('#EXTM3U')
+      expect(text).toContain('甲')
+      expect(text).toContain('00:00:06.100 --> 00:00:08.000')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

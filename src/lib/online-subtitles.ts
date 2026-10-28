@@ -4,26 +4,43 @@ import { join } from 'node:path'
 import { mkvLang } from './mkvmerge.ts'
 import { withMkvGroupTags } from './release-group.ts'
 import { isObj } from './util.ts'
+import { fetchHlsVtt } from './vtt-hls.ts'
 
 /**
  * Crunchyroll 的字幕不在 DASH 清单里，而是源站单独给的签名直链
  * （`{locale, format:"ass", url}`，URL 自带 `~hmac`，**不需要认证头**）。
  * 网关 play/resolve 会把这张表原样带回来，这里负责落盘与挂轨。
  */
-export type OnlineSubtitle = { id: string; lang: string; label: string; format: string; url: string }
+export type OnlineSubtitle = {
+  id: string
+  lang: string
+  label: string
+  format: string
+  url: string
+  /** url 是 `.vtt.m3u8`（腾讯软字幕）：下载时需要先拉分片再拼 VTT。 */
+  playlist?: boolean
+  /** CDN 镜像；首条与 url 相同。 */
+  urls?: string[]
+}
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
 /** 从网关回包里读字幕表（resolve/probe 都有 `subtitles[]`）。 */
 export function onlineSubtitles(data: Record<string, unknown>): OnlineSubtitle[] {
   const rows = Array.isArray(data.subtitles) ? data.subtitles.filter(isObj) : []
-  return rows.map(s => ({
-    id: str(s.id) || str(s.locale),
-    lang: str(s.lang) || str(s.locale) || str(s.id),
-    label: str(s.label) || str(s.locale) || str(s.id),
-    format: (str(s.format) || 'ass').toLowerCase(),
-    url: str(s.url),
-  })).filter(s => !!s.id && !!s.url)
+  return rows.map(s => {
+    const url = str(s.url)
+    const urls = Array.isArray(s.urls) ? s.urls.filter((u): u is string => typeof u === 'string') : []
+    return {
+      id: str(s.id) || str(s.locale),
+      lang: str(s.lang) || str(s.locale) || str(s.id),
+      label: str(s.label) || str(s.name) || str(s.locale) || str(s.id),
+      format: (str(s.format) || 'ass').toLowerCase(),
+      url,
+      playlist: s.playlist === true || /\.m3u8(\?|$)/i.test(url),
+      urls: urls.length ? urls : undefined,
+    }
+  }).filter(s => !!s.id && !!s.url)
 }
 
 /** 只保留用户勾选的语言；没有勾选就没有字幕。 */
@@ -86,9 +103,17 @@ export async function downloadSubtitles(
   const out: Array<{ path: string; sub: OnlineSubtitle }> = []
   for (const sub of subs) {
     signal?.throwIfAborted()
-    const res = await fetcher(sub.url, { signal: signal ?? AbortSignal.timeout(60_000) })
-    if (!res.ok) throw new Error(`字幕下载失败 (${sub.label}): HTTP ${res.status}`)
-    const body = new Uint8Array(await res.arrayBuffer())
+    // 腾讯软字幕是 HLS 封装的 WebVTT：直接写 playlist 会得到「内容是 m3u8 的 .vtt」。
+    // 这里先按分片拼成完整字幕再落盘（同一 fetcher / 同一出口）。
+    let body: Uint8Array
+    if (sub.playlist) {
+      const text = await fetchHlsVtt(fetcher, sub.url, signal)
+      body = new TextEncoder().encode(text)
+    } else {
+      const res = await fetcher(sub.url, { signal: signal ?? AbortSignal.timeout(60_000) })
+      if (!res.ok) throw new Error(`字幕下载失败 (${sub.label}): HTTP ${res.status}`)
+      body = new Uint8Array(await res.arrayBuffer())
+    }
     if (!body.length) throw new Error(`字幕为空 (${sub.label})`)
     const path = join(dir, subtitleFileName(sub))
     await writeFile(path, body)
