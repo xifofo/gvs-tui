@@ -16,6 +16,11 @@ export function fetchMediaSegment(url: string, init: RequestInit): Promise<Respo
   return fetchNativeMediaSegment(url, init, target => session.defaultSession.resolveProxy(target))
 }
 
+/** Side media files (CR subtitles) ride the same native route; the explicit proxy is unused here. */
+export function fetchMediaPart(url: string, init: RequestInit, _proxy = ''): Promise<Response> {
+  return fetchNativeMediaSegment(url, init, target => session.defaultSession.resolveProxy(target))
+}
+
 const PROXY_KEYS: Record<string, true> = { http_proxy: true, https_proxy: true, all_proxy: true }
 
 export function isProxyEnvKey(key: string): boolean {
@@ -32,6 +37,12 @@ export function normalizeHttpProxy(value: string): string {
   } catch {
     throw new Error('请填写 HTTP/HTTPS 代理地址，如 http://127.0.0.1:7897；留空使用默认网络')
   }
+}
+
+/** TUI-only explicit media exit; desktop always routes media through the native
+ * transport above (system/PAC proxy per request), so there is nothing to pass. */
+export function mediaDownloadProxy(_savedProxy = ''): string {
+  return ''
 }
 
 export function inheritedProxyUrl(env: NodeJS.Dict<string> = process.env): string {

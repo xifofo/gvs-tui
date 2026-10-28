@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { ffmpegGroupArgs } from './release-group.ts'
 import { globSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative } from 'node:path'
 import { homedir } from 'node:os'
@@ -146,8 +147,9 @@ export function ffmpegRemux(
   outPath: string,
   onProgress?: (n: number, total: number) => void,
   signal?: AbortSignal,
+  group = '',
 ): Promise<void> {
-  return run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', inPath, '-c', 'copy', '-metadata:s:a', 'title=', '-metadata:s:a', 'handler_name=', outPath],
+  return run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', inPath, '-c', 'copy', '-metadata:s:a', 'title=', '-metadata:s:a', 'handler_name=', ...ffmpegGroupArgs(outPath, group), outPath],
     { out: outPath, inputs: [inPath], cb: onProgress }, signal)
 }
 

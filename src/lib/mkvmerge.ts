@@ -51,6 +51,14 @@ function run(bin: string, args: string[], phase?: Phase, signal?: AbortSignal): 
   return promise
 }
 
+/** Track name players show as 备注. ISO 639-2 collapses both scripts to chi. */
+export function subtitleTrackName(lang: string): string {
+  const tag = lang.trim().toLowerCase().replace(/_/g, '-')
+  if (/(?:^|-)hant(?:-|$)/.test(tag) || /-(?:tw|hk|mo)$/.test(tag)) return '繁体中文'
+  if (/(?:^|-)hans(?:-|$)/.test(tag) || tag === 'chs' || /-(?:cn|sg)$/.test(tag)) return '简体中文'
+  return ''
+}
+
 /** Display names from 优酷 → ISO 639-2 for mkvmerge `--language`. */
 export function mkvLang(lang: string): string {
   const s = lang.trim().toLowerCase()
@@ -268,11 +276,28 @@ export async function mkvmergeTrackFiles(bin: string, inputs: string[], out: str
       // MGTV's original-only TS may be tagged English by the downloader. Only
       // correct that generic tag when the original language was confirmed;
       // retain multilingual tracks and other explicit languages.
-      if (track.type==='audio' && singleAudio && originalAudioLanguage
+      // 视频轨跟着主语言打标签（与 IQ/其他平台成品一致）；只在 und/未知时补，
+      // 已有显式语言的视频轨不动。
+      if (track.type==='video' && originalAudioLanguage && isUnknownAudioLanguage(language)) {
+        args.push('--language',`${track.id}:${originalAudioLanguage}`)
+      } else if (track.type==='audio' && singleAudio && originalAudioLanguage
         && (isUnknownAudioLanguage(language) || /^(en|eng)(?:[-_]|$)/i.test(language))) {
         args.push('--language',`${track.id}:${originalAudioLanguage}`)
-      } else if (match && isUnknownAudioLanguage(language)) args.push('--language',`${track.id}:${match[1]}`)
-      if (track.type==='subtitles') args.push('--default-track',`${track.id}:no`)
+      } else if (match && isUnknownAudioLanguage(language)) args.push('--language',`${track.id}:${mkvLang(match[1]!)}`)
+      if (track.type==='subtitles') {
+        args.push('--default-track',`${track.id}:no`)
+        // RE names the file from LANGUAGE and drops NAME when this mux runs.
+        // Without a track name, 简体 and 繁体 both show up as bare 中文.
+        const remark = subtitleTrackName(match?.[1] || language)
+        if (remark) args.push('--track-name', `${track.id}:${remark}`)
+        // RE names the file from LANGUAGE. zh-Hans is not a language mkvmerge
+        // keeps on a text subtitle, so the merged track stays und.
+        const raw = match?.[1] || ''
+        const parts = raw.toLowerCase().split('-')
+        const scripted = /^(?:cmn|yue|zh|zho|chi)$/.test(parts[0] || '') && /^(?:hans|hant|cn|sg|tw|hk|mo)$/.test(parts[1] || '')
+        const tagged = scripted ? raw : mkvLang(raw)
+        if (tagged && tagged !== 'und') args.push('--language',`${track.id}:${tagged}`)
+      }
       if (track.type==='audio') {
         args.push('--default-track',`${track.id}:${firstAudio?'yes':'no'}`)
         firstAudio = false
