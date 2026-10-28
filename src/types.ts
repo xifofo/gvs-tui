@@ -73,7 +73,7 @@ export type Quality = {
   iqcnQuality?: IQCNQualitySelection
 }
 /** Selectable audio track (only some platforms expose more than one). */
-/** A separately downloadable subtitle rendition (Disney+ HLS); id = the rendition playlist file. */
+/** A separately downloadable subtitle rendition; id is the provider's track identifier. */
 export type Subtitle = { id: string; label: string; lang: string; forced: boolean; sdh: boolean; selected: boolean; isDefault: boolean }
 export type Audio = { id: string; label: string; lang: string; codec: string; isDefault: boolean; selected: boolean; embedded?: boolean; vid?: string; url?: string; /** Apple TV: the track describes the video (audio description) and must not be preselected. */ audioDescription?: boolean }
 export type Detail = {

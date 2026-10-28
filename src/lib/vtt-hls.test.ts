@@ -89,6 +89,35 @@ describe('fetchHlsVtt', () => {
       new Response(url.endsWith('.m3u8') ? PLAYLIST : '', { status: url.endsWith('.m3u8') ? 200 : 500 })
     await expect(fetchHlsVtt(onlyPlaylist, 'https://cdn.example/sub/x.vtt.m3u8')).rejects.toThrow()
   })
+
+  test('strict mode rejects a partial track but allows valid empty dialogue-free segments', async () => {
+    const url = 'https://cdn.example/sub/x.vtt.m3u8'
+    const broken = async (u: string) => u.endsWith('seg1.vtt') ? new Response('', { status: 404 }) : fetcher(u)
+    await expect(fetchHlsVtt(broken, url, undefined, { strict: true })).rejects.toThrow('HTTP 404')
+    const empty = async (u: string) => u.endsWith('seg1.vtt') ? new Response('WEBVTT\n\n') : fetcher(u)
+    expect(await fetchHlsVtt(empty, url, undefined, { strict: true })).toContain('甲')
+    const html = async (u: string) => u.endsWith('seg1.vtt') ? new Response('<html>Forbidden</html>') : fetcher(u)
+    await expect(fetchHlsVtt(html, url, undefined, { strict: true })).rejects.toThrow('WebVTT')
+  })
+
+  test('follows subtitle masters and accepts standard short VTT timestamps', async () => {
+    const out = await fetchHlsVtt(async (url) => new Response(url.endsWith('master.m3u8')
+      ? '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nx.vtt.m3u8\n'
+      : url.endsWith('x.vtt.m3u8') ? PLAYLIST
+      : 'WEBVTT\n\n00:00.100 --> 00:01.000\n短时间戳\n'), 'https://cdn.example/sub/master.m3u8', undefined, { strict: true })
+    expect(out).toContain('00:00:06.100 --> 00:00:07.000')
+  })
+
+  test('an abort in a segment stops immediately, even if previous cues succeeded', async () => {
+    const stop = new AbortController()
+    const seen: string[] = []
+    await expect(fetchHlsVtt(async (url) => {
+      seen.push(url)
+      if (url.endsWith('seg1.vtt')) { stop.abort(new Error('fixture stop')); throw stop.signal.reason }
+      return fetcher(url)
+    }, 'https://cdn.example/sub/x.vtt.m3u8', stop.signal)).rejects.toThrow('fixture stop')
+    expect(seen).toHaveLength(3)
+  })
 })
 
 describe('isHlsPlaylist', () => {

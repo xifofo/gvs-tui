@@ -5,6 +5,7 @@ import ReleasePicker from '../integrations/plutofish/ReleasePicker.vue'
 import PublicationFields from '../integrations/plutofish/PublicationFields.vue'
 import { supportsTmdb } from '@shared/api'
 import { resolveDefaultAudioId } from '@shared/audio-selection'
+import { tencentCaption } from '@shared/tencent-quality-selection'
 import { outputNaming, type OutputNaming } from '@shared/output-naming'
 import { defaultTmdbHit } from '@shared/tmdb-selection'
 import { audioChannels, audioCodec, hdrKind, resolutionTier, videoCodec } from '@shared/media-specs'
@@ -33,7 +34,7 @@ const d = computed(() => store.detail)
 const probe = computed(() => store.probe)
 const qIndex = ref(0)
 const audioIds = ref<string[]>([])
-/** Separately downloadable subtitle renditions (Apple TV / Disney+); empty = subtitles follow the video. */
+/** Separately downloadable subtitle renditions returned by the provider. */
 const subtitles = computed(() => probe.value?.subtitles ?? [])
 const subtitleIds = ref<string[]>([])
 watch(subtitles, (list) => { subtitleIds.value = list.filter((s) => s.selected).map((s) => s.id) }, { immediate: true })
@@ -72,6 +73,14 @@ const miguApp = computed(() => d.value?.provider === 'migu' && !d.value.id.start
 const canMatchTmdb = computed(() => supportsTmdb(d.value?.provider))
 
 const quality = computed(() => probe.value?.qualities[qIndex.value] ?? null)
+const hardTencentCaption = computed(() => d.value?.provider === 'tencent' && !!quality.value &&
+  tencentCaption(quality.value.captionProbe || quality.value.caption || '') === 'hard')
+const tencentDefaultSubtitleId = computed(() => {
+  const selected = subtitles.value.filter(s => subtitleIds.value.includes(s.id))
+  return (selected.find(s => s.isDefault) ?? selected[0])?.id
+})
+const subtitleIsDefault = (s: { id: string; isDefault: boolean }) =>
+  d.value?.provider === 'tencent' ? !hardTencentCaption.value && s.id === tencentDefaultSubtitleId.value : s.isDefault
 const audios = computed<AudioView[]>(() => {
   const q = quality.value
   if (q && q.audios.length) return q.audios
@@ -327,7 +336,7 @@ const request = computed<EnqueueRequest | null>(() => {
     episodes: store.probeEpisodes.map((e) => ({ ...e, languages: e.languages.map((l) => ({ ...l })) })),
     quality: qIndex.value,
     audioIds: [...audioIds.value],
-    ...(subtitles.value.length ? { subtitleIds: [...subtitleIds.value] } : {}),
+    ...(subtitles.value.length ? { subtitleIds: hardTencentCaption.value ? [] : [...subtitleIds.value] } : {}),
     defaultAudioId: preferredAudioId.value || undefined,
     tmdb: tmdb.value ? { ...tmdb.value } : null,
     publication: autoUpload.value ? { sourceAccountId: publication.value.sourceAccountId, releaseSelection: publication.value.releaseSelection, category: publication.value.category, directoryId: publication.value.directoryId, directoryPath: publication.value.directoryPath, directoryCreation: publication.value.directoryCreation ? { ...publication.value.directoryCreation } : undefined, episodeNumbers: { ...publication.value.episodeNumbers } } : undefined,
@@ -614,23 +623,24 @@ async function applyRule() {
 
             <section class="qsec">
               <div class="qsec-h"><Icon name="cc" :size="16" /><span>字幕</span></div>
-              <div v-if="subtitles.length" class="agrid">
-                <div v-for="s in subtitles" :key="s.id" class="acard" :class="{ on: subtitleIds.includes(s.id), def: s.isDefault }">
+              <div v-if="hardTencentCaption" class="muted small">所选档位为硬字幕，不额外挂入软字幕。</div>
+              <div v-else-if="subtitles.length" class="agrid">
+                <div v-for="s in subtitles" :key="s.id" class="acard" :class="{ on: subtitleIds.includes(s.id), def: subtitleIsDefault(s) }">
                   <label class="achip" :title="s.forced ? '强制字幕：只翻译外语对白 / 画面文字' : s.sdh ? 'SDH：含音效描述，供听障观众' : s.lang">
                     <input type="checkbox" class="sr-only" :checked="subtitleIds.includes(s.id)" @change="toggleSubtitle(s.id)" />
                     <span class="cbox"><Icon v-if="subtitleIds.includes(s.id)" name="check" :size="12" :stroke="3" /></span>
                     <span class="alang">{{ s.label }}</span>
-                    <span class="alabel">{{ [s.lang, s.forced ? '强制' : '', s.sdh ? 'SDH' : '', s.isDefault ? '默认显示' : ''].filter(Boolean).join(' · ') }}</span>
+                    <span class="alabel">{{ [s.lang, s.forced ? '强制' : '', s.sdh ? 'SDH' : '', subtitleIsDefault(s) ? '默认显示' : ''].filter(Boolean).join(' · ') }}</span>
                   </label>
                 </div>
               </div>
-              <span v-if="subtitles.length" class="muted small">已选 {{ subtitleIds.length }} / {{ subtitles.length }} 条字幕；按源站原格式（ASS / VTT / SRT）挂成独立轨，写入语言、轨名与默认标记。默认勾选简体中文，没有则繁体、再没有则英语。</span>
-              <div v-else class="agrid">
+              <span v-if="subtitles.length && !hardTencentCaption" class="muted small">已选 {{ subtitleIds.length }} / {{ subtitles.length }} 条字幕；封装为独立轨，写入语言、轨名与默认标记。中文字幕默认勾选简体和繁体，优先默认显示简体；没有中文时勾选英语。</span>
+              <div v-if="!subtitles.length && !hardTencentCaption && d?.provider !== 'tencent'" class="agrid">
                 <div class="acard on sub-card">
                   <span class="achip dis"><span class="cbox"><Icon name="check" :size="12" :stroke="3" /></span><span class="alang">跟随视频</span><span class="alabel">平台内嵌 / 硬字幕</span></span>
                 </div>
               </div>
-              <span v-if="!subtitles.length" class="muted small">该平台没有返回可单独下载的字幕轨，字幕随视频画面保留。</span>
+              <span v-if="!subtitles.length && !hardTencentCaption" class="muted small">{{ d?.provider === 'tencent' ? '当前未返回可下载的软字幕轨，此次不会额外添加字幕。' : '该平台没有返回可单独下载的字幕轨，字幕随视频画面保留。' }}</span>
             </section>
           </template>
         </div>

@@ -16,10 +16,10 @@ export type HlsSubtitleSegment = { url: string; start: number }
 export type VttPart = { start: number; body: string }
 
 const TIMING =
-  /^(\d{1,3}):([0-5]\d):([0-5]\d)[.,](\d{3})[ \t]+-->[ \t]+(\d{1,3}):([0-5]\d):([0-5]\d)[.,](\d{3})(.*)$/
+  /^(?:(\d{1,3}):)?([0-5]\d):([0-5]\d)[.,](\d{3})[ \t]+-->[ \t]+(?:(\d{1,3}):)?([0-5]\d):([0-5]\d)[.,](\d{3})(.*)$/
 
 const toSeconds = (h: string, m: string, s: string, ms: string): number =>
-  Number(h) * 3600 + Number(m) * 60 + Number(s) + Number(ms) / 1000
+  Number(h || 0) * 3600 + Number(m) * 60 + Number(s) + Number(ms) / 1000
 
 export const formatVttTime = (sec: number): string => {
   const total = Math.max(0, Math.round(sec * 1000))
@@ -139,32 +139,57 @@ export type SubtitleFetcher = (url: string, init: RequestInit) => Promise<Respon
 
 /**
  * 拉一条 `.vtt.m3u8` 并拼成完整 WebVTT。
- * 分片失败不整轨报废（多镜像/单片 404 是常态），但一个 cue 都拿不到就报错。
+ * strict 模式要求每个分片可读取；调用方可换完整 CDN 镜像重试，避免缺失部分字幕仍被当作成功。
  */
 export async function fetchHlsVtt(
   fetcher: SubtitleFetcher,
   playlistUrl: string,
   signal?: AbortSignal,
+  options: { strict?: boolean } = {},
 ): Promise<string> {
   const get = async (url: string): Promise<string> => {
-    const res = await fetcher(url, { signal: signal ?? AbortSignal.timeout(60_000) })
+    signal?.throwIfAborted()
+    const timeout = AbortSignal.timeout(60_000)
+    const res = await fetcher(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return await res.text()
   }
-  const first = await get(playlistUrl)
-  if (!isHlsPlaylist(first)) return first // 已经是完整 WebVTT
+  const checkVtt = (body: string) => {
+    if (options.strict && (!/^\s*WEBVTT\b/.test(body) || (body.includes('-->') && !parseCues(body).length))) {
+      throw new Error('字幕分片不是有效 WebVTT')
+    }
+  }
+  let first = await get(playlistUrl)
+  // A subtitle master can point at a media playlist. Bound nesting and reject loops.
+  const visited = new Set([playlistUrl])
+  while (isHlsPlaylist(first) && /#EXT-X-STREAM-INF/.test(first) && !/#EXTINF:/.test(first)) {
+    const next = parseHlsSubtitlePlaylist(first, playlistUrl)[0]?.url
+    if (!next || visited.has(next) || visited.size >= 4) throw new Error('字幕 playlist 嵌套无效')
+    visited.add(next)
+    playlistUrl = next
+    first = await get(next)
+  }
+  if (!isHlsPlaylist(first)) {
+    checkVtt(first)
+    if (options.strict && !parseCues(first).length) throw new Error('字幕里没有 cue')
+    return first
+  }
   const segs = parseHlsSubtitlePlaylist(first, playlistUrl)
   if (!segs.length) throw new Error('字幕 playlist 没有分片')
   const parts: VttPart[] = []
   for (const seg of segs) {
     try {
       const body = await get(seg.url)
-      if (!body.includes('-->')) continue
+      checkVtt(body)
+      if (!parseCues(body).length) continue // Valid empty VTT is allowed during a dialogue-free segment.
       parts.push({ start: seg.start, body })
-    } catch {
+    } catch (e) {
+      signal?.throwIfAborted()
+      if (options.strict) throw e
       continue
     }
   }
   if (!parts.length) throw new Error('字幕分片里没有 cue')
+  signal?.throwIfAborted()
   return stitchVttParts(parts)
 }

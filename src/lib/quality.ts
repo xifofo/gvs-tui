@@ -15,6 +15,7 @@ import { tencentPlayInput } from './tencent-qr.ts'
 import { iqcnOptions } from './iqcn.ts'
 import { runLog } from './runlog.ts'
 import { tencentSelectedPlayInput, tencentPersonaKey } from './tencent-quality-selection.ts'
+import { tencentSubtitleOptions } from './tencent-subtitles.ts'
 export { tencentPersonaKey } from './tencent-quality-selection.ts'
 
 export type StreamOptions = { qualities: Quality[]; audios: Audio[]; subtitles?: import('../types.ts').Subtitle[]; vip?: VipProbe }
@@ -870,13 +871,14 @@ async function probeTencent(cli: GwClient, cfg: FileConfig, vid: string, edition
     : data.formats
   const qualities = qualitiesFromTencentFormats(formats)
   const audios = audiosFromTencent(data)
+  const subtitles = tencentSubtitleOptions(data)
   if (edition?.edition === 'imax' && !qualities.length) {
     const message = asString(data.error) || asString(data.msg)
     throw new Error(message && !/^(success|ok)$/i.test(message) ? message : 'IMAX 片源暂未返回可用画质，请检查极光 TV 会话与影片权益。')
   }
   // Empty catalog without em=93: keep static ladder fallback for old gateways.
-  if (!qualities.length) return { qualities: tencentQualityList(), audios }
-  return { qualities, audios }
+  if (!qualities.length) return { qualities: tencentQualityList(), audios, subtitles }
+  return { qualities, audios, subtitles }
 }
 
 /** Build play params for a selected Tencent quality / pending task. */

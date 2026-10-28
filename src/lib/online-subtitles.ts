@@ -4,11 +4,11 @@ import { join } from 'node:path'
 import { mkvLang } from './mkvmerge.ts'
 import { withMkvGroupTags } from './release-group.ts'
 import { isObj } from './util.ts'
-import { fetchHlsVtt } from './vtt-hls.ts'
+import { fetchHlsVtt, vttToSrt } from './vtt-hls.ts'
 
 /**
- * Crunchyroll 的字幕不在 DASH 清单里，而是源站单独给的签名直链
- * （`{locale, format:"ass", url}`，URL 自带 `~hmac`，**不需要认证头**）。
+ * Crunchyroll / 腾讯的字幕在网关回包中提供独立直链或 HLS 字幕清单。
+ * CR 的 `{locale, format:"ass", url}` 自带签名，不需要认证头。
  * 网关 play/resolve 会把这张表原样带回来，这里负责落盘与挂轨。
  */
 export type OnlineSubtitle = {
@@ -29,12 +29,13 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 export function onlineSubtitles(data: Record<string, unknown>): OnlineSubtitle[] {
   const rows = Array.isArray(data.subtitles) ? data.subtitles.filter(isObj) : []
   return rows.map(s => {
-    const url = str(s.url)
     const urls = Array.isArray(s.urls) ? s.urls.filter((u): u is string => typeof u === 'string') : []
+    const url = str(s.url) || urls[0] || ''
+    const id = str(s.id) || (typeof s.id === 'number' && Number.isFinite(s.id) ? String(s.id) : '') || str(s.locale)
     return {
-      id: str(s.id) || str(s.locale),
-      lang: str(s.lang) || str(s.locale) || str(s.id),
-      label: str(s.label) || str(s.name) || str(s.locale) || str(s.id),
+      id,
+      lang: str(s.lang) || str(s.lang_id) || str(s.locale) || id,
+      label: str(s.label) || str(s.name) || str(s.locale) || id,
       format: (str(s.format) || 'ass').toLowerCase(),
       url,
       playlist: s.playlist === true || /\.m3u8(\?|$)/i.test(url),
@@ -55,14 +56,15 @@ export function pickSubtitles(all: readonly OnlineSubtitle[], selected: readonly
  * CR 给的是 BCP 47：`zh-Hans` / `zh-Hant` / `zh-CN` / `zh-TW` ……，无区域的 `zh` 按简体处理。
  */
 export function chineseVariant(...texts: Array<string | undefined>): 'hans' | 'hant' | '' {
+  let genericChinese = false
   for (const text of texts) {
     const v = (text || '').trim().toLowerCase().replace(/_/g, '-')
     if (!v) continue
     if (/繁体|繁體/.test(v) || /^zh-(?:hant|tw|hk|mo)\b/.test(v)) return 'hant'
     if (/简体|簡體/.test(v) || /^zh-(?:hans|cn|sg)\b/.test(v)) return 'hans'
-    if (/^zh\b/.test(v) || /中文/.test(v)) return 'hans'
+    if (/^zh\b/.test(v) || /中文/.test(v)) genericChinese = true
   }
-  return ''
+  return genericChinese ? 'hans' : ''
 }
 
 /** 字幕轨顺序权重：简体 → 繁体 → 其他。 */
@@ -94,28 +96,52 @@ export function subtitleFileName(sub: OnlineSubtitle): string {
 export async function downloadSubtitles(
   subs: readonly OnlineSubtitle[],
   dir: string,
-  options: { signal?: AbortSignal; fetcher?: (url: string, init: RequestInit) => Promise<Response> } = {},
+  options: { signal?: AbortSignal; fetcher?: (url: string, init: RequestInit) => Promise<Response>; strictHls?: boolean; vttAsSrt?: boolean } = {},
 ): Promise<Array<{ path: string; sub: OnlineSubtitle }>> {
   const { signal } = options
   const fetcher = options.fetcher ?? ((url: string, init: RequestInit) => fetch(url, init))
   if (!subs.length) return []
   await mkdir(dir, { recursive: true })
   const out: Array<{ path: string; sub: OnlineSubtitle }> = []
+  const names = new Set<string>()
   for (const sub of subs) {
     signal?.throwIfAborted()
     // 腾讯软字幕是 HLS 封装的 WebVTT：直接写 playlist 会得到「内容是 m3u8 的 .vtt」。
     // 这里先按分片拼成完整字幕再落盘（同一 fetcher / 同一出口）。
-    let body: Uint8Array
-    if (sub.playlist) {
-      const text = await fetchHlsVtt(fetcher, sub.url, signal)
-      body = new TextEncoder().encode(text)
-    } else {
-      const res = await fetcher(sub.url, { signal: signal ?? AbortSignal.timeout(60_000) })
-      if (!res.ok) throw new Error(`字幕下载失败 (${sub.label}): HTTP ${res.status}`)
-      body = new Uint8Array(await res.arrayBuffer())
+    let body: Uint8Array | undefined
+    let lastError: unknown
+    for (const url of new Set([sub.url, ...(sub.urls ?? [])])) {
+      signal?.throwIfAborted()
+      try {
+        if (sub.playlist) {
+          const text = await fetchHlsVtt(fetcher, url, signal, { strict: options.strictHls })
+          body = new TextEncoder().encode(text)
+        } else {
+          const timeout = AbortSignal.timeout(60_000)
+          const res = await fetcher(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          body = new Uint8Array(await res.arrayBuffer())
+        }
+        if (!body.length) throw new Error('字幕为空')
+        break
+      } catch (e) {
+        signal?.throwIfAborted()
+        body = undefined
+        lastError = e
+      }
     }
-    if (!body.length) throw new Error(`字幕为空 (${sub.label})`)
-    const path = join(dir, subtitleFileName(sub))
+    if (!body) throw new Error(`字幕下载失败 (${sub.label}): ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+    const asSrt = options.vttAsSrt && sub.format === 'vtt'
+    if (asSrt) {
+      const text = vttToSrt(new TextDecoder().decode(body))
+      if (!text) throw new Error(`字幕没有有效内容 (${sub.label})`)
+      body = new TextEncoder().encode(text)
+    }
+    const name = subtitleFileName(asSrt ? { ...sub, format: 'srt' } : sub)
+    let unique = name
+    for (let i = 2; names.has(unique.toLowerCase()); i++) unique = name.replace(/(\.[^.]+)$/, `.${i}$1`)
+    names.add(unique.toLowerCase())
+    const path = join(dir, unique)
     await writeFile(path, body)
     out.push({ path, sub })
   }

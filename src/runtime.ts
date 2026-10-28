@@ -54,7 +54,7 @@ import {
   type DlTask,
 } from './lib/jobs.ts'
 import { moviePlayables, probeOptions, qualityChoiceLabel, youkuEditionsFromDetail, youkuMoviePick, tencentPlayQualityInput} from './lib/quality.ts'
-import { selectedTencentQuality } from './lib/tencent-quality-selection.ts'
+import { selectedTencentQuality, tencentHardSubtitles } from './lib/tencent-quality-selection.ts'
 import { selectedIQCNQuality } from './lib/iqcn-quality-selection.ts'
 import { runTunnel } from './lib/tunnel.ts'
 import {
@@ -877,7 +877,11 @@ export class Runtime {
       episodeGroup: this.episodeGroup,
       qualities: this.qualities,
       audios: this.audios.map((a) => ({ ...a })),
-      subtitles: this.subtitles.map((s) => ({ ...s })),
+      subtitles: this.hardTencentCaption ? [] : this.subtitles.map((s) => ({ ...s,
+        isDefault: this.pending[0]?.provider === 'tencent'
+          ? s.id === (this.subtitles.find(row => row.selected && row.isDefault) ?? this.subtitles.find(row => row.selected))?.id
+          : s.isDefault,
+      })),
       tmdbHits: this.tmdbHits,
       tmdbState: this.tmdbState === 'loading' && this.tmdbGeneration !== this.requestGeneration ? 'idle' : this.tmdbState,
       tmdbError: this.tmdbError,
@@ -1684,10 +1688,14 @@ export class Runtime {
     }
   }
 
+  private get hardTencentCaption(): boolean {
+    return this.pending[0]?.provider === 'tencent' && !!this.qualities[this.qIdx] && tencentHardSubtitles(this.qualities[this.qIdx]!)
+  }
+
   private updateQuality(k: string): void {
     const nq = this.qualities.length
     const na = this.audios.length
-    const ns = this.subtitles.length
+    const ns = this.hardTencentCaption ? 0 : this.subtitles.length
     if (k === 'esc') {
       this.requestGeneration++
       this.searching = false
@@ -1797,9 +1805,9 @@ export class Runtime {
       t.audioTracks = t.provider === 'youku'
         ? bindYoukuAudioTracksToTask(tracks, t)
         : tracks.map((a) => ({ ...a }))
-      // Apple TV / Disney+ hand the subtitle picker's indexes to resolve; other
-      // providers never populate `subtitles`, so their tasks stay untouched.
-      if (this.subtitles.length) t.subtitleTracks = subtitleDownloadTracks(this.subtitles)
+      if (t.provider === 'tencent' || this.subtitles.length) {
+        t.subtitleTracks = t.provider === 'tencent' && tencentHardSubtitles(t) ? [] : subtitleDownloadTracks(this.subtitles)
+      }
     }
     this.probeFailed = false
     if (q) {

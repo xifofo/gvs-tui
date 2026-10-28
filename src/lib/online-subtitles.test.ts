@@ -145,4 +145,31 @@ describe('tencent soft subtitles', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  test('a partial primary CDN retries the complete track on its mirror', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gvs-subs-mirror-'))
+    const urls: string[] = []
+    try {
+      const out = await downloadSubtitles(onlineSubtitles(gateway), dir, { strictHls: true, fetcher: async (url) => {
+        urls.push(url)
+        if (url.includes('.m3u8')) return new Response('#EXTM3U\n#EXTINF:6,\nseg0.vtt\n#EXTINF:6,\nseg1.vtt\n')
+        if (url.includes('cdn.example/seg1')) return new Response('', { status: 404 })
+        return new Response('WEBVTT\n\n00:00:00.100 --> 00:00:01.000\n完整字幕\n')
+      } })
+      expect(urls.some(u => u.includes('cdn2.example'))).toBe(true)
+      expect(readFileSync(out[0]!.path, 'utf8')).toContain('00:00:06.100 --> 00:00:07.000')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('Tencent VTT converts to SRT without overwriting another track with the same display name', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gvs-subs-names-'))
+    try {
+      const rows = ['hans', 'hant'].map(id => ({ id, lang: `zh-${id}`, label: '中文', format: 'vtt', url: `https://cdn.example/${id}.vtt` }))
+      const files = await downloadSubtitles(rows, dir, { vttAsSrt: true, fetcher: async url => new Response(`WEBVTT\n\n00:00.100 --> 00:01.000\n${url.includes('hans') ? '简体' : '繁體'}\n`) })
+      expect(files[0]!.path).not.toBe(files[1]!.path)
+      expect(files.every(f => f.path.endsWith('.srt'))).toBe(true)
+      expect(readFileSync(files[0]!.path, 'utf8')).toContain('00:00:00,100 --> 00:00:01,000\n简体')
+      expect(readFileSync(files[1]!.path, 'utf8')).toContain('繁體')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
 })

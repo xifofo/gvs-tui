@@ -1,11 +1,6 @@
 import type { Quality, TencentQualitySelection, TencentPlayParams } from '../types.ts'
-
-export function tencentCaption(value: string): string {
-  const c = value.trim().toLowerCase()
-  if (['soft', '软', '软字幕', 'srt'].includes(c)) return 'soft'
-  if (['hard', '硬', '硬字幕', 'burn'].includes(c)) return 'hard'
-  return c
-}
+import { tencentCaption } from './tencent-caption.ts'
+export { tencentCaption } from './tencent-caption.ts'
 
 export function tencentPersonaKey(value: string): string {
   return value.trim().replace(/_(?:软|硬|soft|hard)$/i, '')
@@ -61,4 +56,8 @@ export function tencentDownloadSelection(q: TencentQualityChoice): { stream: str
   const selection = tencentChoiceSelection(q)
   const input = tencentSelectedPlayInput(q)
   return { stream: input.defn, caption: input.caption, formatId: selection.formatId }
+}
+
+export function tencentHardSubtitles(choice: TencentQualityChoice): boolean {
+  return tencentSelectedPlayInput(choice).caption === 'hard'
 }

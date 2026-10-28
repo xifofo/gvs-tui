@@ -61,7 +61,7 @@ import { filename, folder, folderSegments, tierHeight, dots } from '@tui/name.ts
 import { usesMeasuredNaming } from '@tui/completed-naming.ts'
 import { namingPreviewFilename, NAMING_PREVIEW_NOTE } from '@tui/naming-preview.ts'
 import { moviePlayables, probeOptions, qualityChoiceLabel, youkuEditionsFromDetail, youkuMoviePick } from '@tui/quality.ts'
-import { selectedTencentQuality } from '@tui/tencent-quality-selection.ts'
+import { selectedTencentQuality, tencentHardSubtitles } from '@tui/tencent-quality-selection.ts'
 import { selectedIQCNQuality, restoreIQCNSourceHints } from '@tui/iqcn-quality-selection.ts'
 import { runLog } from '@tui/runlog.ts'
 import { applyTencentLogin, pollTencentDualQR, tencentTVLoginInput } from '@tui/tencent-qr.ts'
@@ -1580,6 +1580,8 @@ export class Core {
       drm: q.drm,
       hdr: q.hdr ?? '',
       fps: q.fps ?? 0,
+      caption: q.caption,
+      captionProbe: q.captionProbe,
       audios: (q.audios ?? []).map(audioView),
     }))
     this.emit.state()
@@ -1749,7 +1751,9 @@ export class Core {
             ? tierHeight(q.height, q.width)
             : tierHeight(q.width, q.height))
       t.audioTracks = t.provider === 'youku' ? bindYoukuAudioTracksToTask(tracks, t) : tracks.map((a) => ({ ...a }))
-      if (probe.subtitles?.length) {
+      if (t.provider === 'tencent' && tencentHardSubtitles(t)) {
+        t.subtitleTracks = []
+      } else if (probe.subtitles?.length) {
         const want = new Set(req.subtitleIds ?? probe.subtitles.filter((s) => s.selected).map((s) => s.id))
         // Playlist order (what RE muxes) is kept so flags can be matched by position.
         t.subtitleTracks = probe.subtitles.filter((s) => want.has(s.id)).map(({ id, label, lang, forced, sdh, isDefault }) => ({ id, label, lang, forced, sdh, isDefault }))

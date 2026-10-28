@@ -31,6 +31,7 @@ import { retryCdnRefresh } from './cdn-retry.ts'
 import { asString, human, isObj } from './util.ts'
 import type { Job, TencentQualitySelection, IQCNQualitySelection } from '../types.ts'
 import { tencentDownloadSelection } from './tencent-quality-selection.ts'
+import { resolveTencentSubtitles, tencentHardSubtitles } from './tencent-subtitles.ts'
 import { moveFileSync } from './file-move.ts'
 import { downloadIQ } from './iq.ts'
 import { downloadIQCN } from './iqcn.ts'
@@ -801,6 +802,7 @@ async function dlTencent(
     return cdn
   }
   let played = await play()
+  let subtitles = tencentHardSubtitles(t) ? [] : resolveTencentSubtitles(played, t.subtitleTracks)
   let cdn = await pick(played)
   if (!cdn) throw new Error('腾讯没有可用视频地址')
   let cipher = tencentCipher(played)
@@ -832,6 +834,7 @@ async function dlTencent(
       emit('重取', 0.1, `CDN ${e.status}，重新取链后下载`)
       refreshes += 1
       played = await play()
+      subtitles = tencentHardSubtitles(t) ? [] : resolveTencentSubtitles(played, t.subtitleTracks)
       cdn = await pick(played)
       if (!cdn) throw new Error('腾讯重新取链失败')
       cipher = tencentCipher(played)
@@ -850,11 +853,30 @@ async function dlTencent(
     }
     // A long audio track must not make a truncated video look complete.
     const muxToOut = async (mux: (dest: string) => Promise<void>) => writeFinal(out, async dest => {
-      await mux(dest)
-      emit('验收', 0.98, '检查视频与音轨完整性')
-      await verifyTencentCoverage(ffmpeg, dest, expected, signal)
-      signal?.throwIfAborted()
-      try { unlinkSync(`${dest}.timing.json`) } catch { /* no report */ }
+      try {
+        await mux(dest)
+        if (subtitles.length) {
+          try {
+            emit('字幕', 0.96, `下载 ${subtitles.length} 条字幕`)
+            // SRT is supported by more Matroska readers than S_TEXT/WEBVTT.
+            const files = await downloadSubtitles(subtitles.map(s => s.sub), join(work, 'tencent-subs'), {
+              signal, strictHls: true, vttAsSrt: true,
+              fetcher: (url, init) => fetchMediaPart(url, { ...init, headers: { Referer: referer('tencent') } }),
+            })
+            emit('封装', 0.97, '写入字幕语言、轨名与默认标记')
+            await attachSubtitles(mkvmerge, dest, files.map((f, i) => ({ ...f, isDefault: subtitles[i]!.isDefault })), signal, releaseGroup(t, cfg))
+          } catch (e) {
+            signal?.throwIfAborted()
+            runLog(`tencent subtitles failed vid=${t.vid}: ${e instanceof Error ? e.message : String(e)}`)
+            throw new Error('字幕下载或封装失败，未生成成品。请继续任务重试，或重新选择字幕。', { cause: e })
+          }
+        }
+        emit('验收', 0.98, '检查视频与音轨完整性')
+        await verifyTencentCoverage(ffmpeg, dest, expected, signal)
+        signal?.throwIfAborted()
+      } finally {
+        try { unlinkSync(`${dest}.timing.json`) } catch { /* no report */ }
+      }
     })
     if (!plan.files.length) {
       // The video stream carries its own default audio track.
@@ -895,6 +917,7 @@ async function dlTencent(
     // Success and cancel drop the sources; a failure keeps them for diagnosis,
     // and a pause keeps them so the resume can reuse the downloaded bytes.
     if (done || signal?.reason === 'cancel') {
+      try { rmSync(join(work, 'tencent-subs'), { recursive: true, force: true }) } catch { /* cleanup can retry later */ }
       for (const path of temps) {
         try { unlinkSync(path) } catch { /* keep */ }
       }

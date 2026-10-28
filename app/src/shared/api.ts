@@ -200,6 +200,8 @@ export type QualityView = {
   drm: string
   hdr: string
   fps: number
+  caption?: string
+  captionProbe?: 'soft' | 'hard'
   audios: AudioView[]
 }
 
@@ -207,7 +209,7 @@ export type ProbeResult = {
   token: number
   qualities: QualityView[]
   audios: AudioView[]
-  /** Separately downloadable subtitles (Disney+); absent = subtitles follow the video. */
+  /** Separately downloadable subtitle tracks; absent = no extra track was offered. */
   subtitles?: SubtitleView[]
   vip: { canPlay: boolean; isVip: boolean; hasTrial: boolean; note: string } | null
   warning: string

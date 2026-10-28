@@ -73,3 +73,29 @@ test('a platform without subtitle tracks never exposes the column', async () => 
     runtime.close()
   }
 })
+
+test('Tencent soft subtitle selections reach every episode; hard caption hides them and clears the task selection', async () => {
+  const runtime = new Runtime({ simulate: true })
+  try {
+    await Bun.sleep(80)
+    const x = runtime as any
+    x.audios = []
+    x.subtitles = [{ id: '53102', label: '简体中文', lang: 'zh-cn', forced: false, sdh: false, selected: true, isDefault: true }]
+    x.qualities = ['soft', 'hard'].map(caption => ({ id: `fhd|${caption}|123`, stream: 'fhd', caption,
+      label: '1080p', title: '', width: 1920, height: 1080, codec: 'H264', size: 0, drm: '' }))
+    x.pending = ['ep1', 'ep2'].map(vid => ({ provider: 'tencent', vid, quality: '' }))
+    x.qIdx = 0; x.optionTab = 'quality'; x.scene = 'quality'
+    x.applyOptions()
+    expect(x.pending.map((t: any) => t.subtitleTracks.map((s: any) => s.id))).toEqual([['53102'], ['53102']])
+    x.pending[0].subtitleTracks[0].label = 'edited'
+    expect(x.pending[1].subtitleTracks[0].label).toBe('简体中文')
+    x.updateQuality('down')
+    x.updateQuality('right')
+    expect(x.optionTab).toBe('quality')
+    x.applyOptions(); x.emit()
+    expect(runtime.snapshot.subtitles).toEqual([])
+    expect(x.pending.every((t: any) => t.subtitleTracks.length === 0)).toBe(true)
+    x.updateQuality('up'); x.emit()
+    expect(runtime.snapshot.subtitles).toHaveLength(1)
+  } finally { runtime.close() }
+})

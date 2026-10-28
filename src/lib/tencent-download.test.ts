@@ -47,7 +47,8 @@ test.skipIf(process.env.GVS_MEDIA_TESTS !== '1')('Tencent shared runner complete
     expect(existsSync(final.log)).toBe(true)
     const tags = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', final.log], { encoding: 'utf8' }))
     expect(tags.format.tags.GROUP).toBe('WF')
-    expect(basename(final.log)).toBe('节目.S01E01.2026.360p.TX.WEB-DL.MAXPLUS.60fps.AVC.AAC.2.0-WF.mkv')
+    // This fixture explicitly signals BT.709; measured naming records its SDR range.
+    expect(basename(final.log)).toBe('节目.S01E01.2026.360p.TX.WEB-DL.MAXPLUS.SDR.60fps.AVC.AAC.2.0-WF.mkv')
     expect(final.actualVersion?.media?.dynamicRange).toBe('SDR')
   } finally {
     if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()))
