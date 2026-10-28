@@ -2,6 +2,8 @@
 
 PlutoFish 版以 `xifofo/gvs-tui` 为主要开发、更新和发布仓库。`my-name-is-alan/gvs-tui` 是原版上游，继续从中吸收平台下载、登录、音轨、字幕及界面改进。合入代码后仍由 PlutoFish 仓库构建客户端，发布方式见 [桌面端发布](desktop-releases.md)。
 
+**PlutoFish 相关源码、配置、文档和构建产物只允许提交、推送或发布到 `xifofo/gvs-tui`。禁止向旧仓库 `my-name-is-alan/gvs-tui` 或其他历史仓库推送这些内容，也不得通过 PR、补丁或附件向旧仓库提交。** 原版上游仅用于拉取更新；保持 `upstream` 的推送地址为 `DISABLED`，默认推送远程为 `origin`。每次推送或发布前核对目标仓库，不解除这项保护。
+
 ## 远程与分支
 
 | 名称 | 地址 | 用途 |
