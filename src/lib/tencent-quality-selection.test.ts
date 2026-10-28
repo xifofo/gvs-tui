@@ -4,12 +4,13 @@ import type { Quality } from '../types.ts'
 import { qualitiesFromTencentFormats, qualityCaptionText, qualityChoiceLabel } from './quality.ts'
 import { pickTencentDownloadURL } from './media.ts'
 
-test('unknown subtitle display retains the soft probe for selection and queued downloads', () => {
+test('probe rows keep the soft probe for selection but never as subtitle evidence', () => {
   const [quality] = qualitiesFromTencentFormats([{ name: 'fhd', id: '3', caption_probe: '软' }])
   expect(quality!.caption).toBeUndefined()
   expect(qualityCaptionText(quality!.caption)).toBe('')
-  expect(qualityCaptionText(quality!.caption, quality!.captionProbe)).toBe('软字幕')
-  expect(qualityChoiceLabel(quality!)).toBe('FHD · 软字幕')
+  // 探测默认就是 soft：没有已证实的 caption 就不能显示「软字幕」，否则整张表全标软字幕。
+  expect(qualityCaptionText(quality!.caption, quality!.captionProbe)).toBe('')
+  expect(qualityChoiceLabel(quality!)).toBe('FHD')
   expect(tencentSelectedPlayInput(quality!)).toEqual({ defn: 'fhd', caption: 'soft', format_id: '3' })
   const task = JSON.parse(JSON.stringify({ quality: quality!.stream, tencentQuality: selectedTencentQuality(quality!) }))
   expect(tencentSelectedPlayInput(task)).toEqual({ defn: 'fhd', caption: 'soft', format_id: '3' })
