@@ -959,7 +959,7 @@ async function probeYouku(
   vid: string,
   opts: { skipSign?: boolean; languages?: Array<{ vid: string; lang: string }> } = {},
 ): Promise<StreamOptions> {
-  const data = await cli.invoke('youku', 'play', { vid, tier: 'multi', expand: '0' }, cli.extra(cfg, 'youku', opts.skipSign))
+  const data = await cli.invoke('youku', 'play', { vid, tier: 'multi', expand: '0', fps: 'all' }, cli.extra(cfg, 'youku', opts.skipSign))
   assertYoukuPlayback(data)
 
   const names = new Map<string, string>()
@@ -1090,6 +1090,14 @@ async function probeYouku(
     })
   }
   if (!qualities.length) throw new Error('优酷没有画质列表')
+  // 网关 v3.9.119 起帧享一次回两条帧率阶梯（60fps 的 *_hfr_* 与 25/24 帧母版）。
+  // 同分辨率、同 HDR 偏好下 label 完全一样，只靠规格行里的「60帧/24帧」区分太弱，
+  // 给重名档位补上帧率，选择列表才能一眼看出选的是哪一档。
+  const labelCount = new Map<string, number>()
+  for (const q of qualities) labelCount.set(q.label, (labelCount.get(q.label) ?? 0) + 1)
+  for (const q of qualities) {
+    if ((labelCount.get(q.label) ?? 0) > 1 && q.fps) q.label = `${q.label} · ${q.fps}帧`
+  }
   qualities = sortQualitiesBySize(qualities)
 
   const extraVids: string[] = []
@@ -1107,7 +1115,7 @@ async function probeYouku(
     try {
       extras.push({
         vid: extraVid,
-        data: await cli.invoke('youku', 'play', { vid: extraVid, tier: 'multi', expand: '0' }, cli.extra(cfg, 'youku', opts.skipSign)),
+        data: await cli.invoke('youku', 'play', { vid: extraVid, tier: 'multi', expand: '0', fps: 'all' }, cli.extra(cfg, 'youku', opts.skipSign)),
         lang: langByVid[extraVid],
       })
     } catch (e) {
