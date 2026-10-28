@@ -173,9 +173,11 @@ Electron 回归使用临时配置和本机 HTTP 夹具，覆盖两端失败、�
 
 切换上传账号或作品后忽略旧响应；已保存偏好优先恢复，不重复自动识别。订阅编辑也提供手动文件名识别。旧服务端或上游故障保留手动分类和 TMDB ID 入口。
 
+开启自动上传时，下载页优先使用文件名识别，尚未直接搜索时不会显示“未找到 TMDB 条目”。配置本机 TMDB Key 后，仍可点击“搜索 TMDB”直接搜索作品；已有手动命名或已保存的作品偏好不会跳过这次搜索。请求失败可重试，只有成功搜索且结果为空才显示未找到。
+
 终端版选完画质后使用待下载文件名自动识别，确认页按 `R` 可输入文件名重新识别并替换待下载作品与分类，按 `C` 继续手动选择分类。识别不读取媒体、下载文件或访问网盘。
 
-本地验证：`bun test src/integrations/plutofish/recognition.test.ts`；桌面端在 `app/` 构建当前渲染页面并执行 `pnpm exec vite build --config scripts/recognition-smoke.config.ts` 后，使用 Electron 运行 `../.build/recognition/smoke.cjs` 验证真实 Core 与回环协议。附加 `--ui` 自动验证下载页和订阅编辑的候选确认，`--interactive` 打开隔离 UI，`--narrow-dark` 使用窄窗口与暗色；测试文件名前缀 `Slow`、`Ambiguous`、`Old` 分别模拟慢响应、歧义和旧服务端。测试不读取真实配置或调用网盘。
+本地验证：`bun test src/integrations/plutofish/recognition.test.ts`；桌面端在 `app/` 构建当前渲染页面并执行 `pnpm exec vite build --config scripts/recognition-smoke.config.ts` 后，使用 Electron 运行 `../.build/recognition/smoke.cjs` 验证真实 Core 与回环协议。附加 `--ui` 自动验证下载页和订阅编辑的候选确认，`--ui --tmdb-search` 验证自动上传开启时的手动搜索、偏好回读、失败和空结果重试，`--interactive` 打开隔离 UI，`--narrow-dark` 使用窄窗口与暗色；测试文件名前缀 `Slow`、`Ambiguous`、`Old` 分别模拟慢响应、歧义和旧服务端。测试不读取真实配置或调用网盘。
 
 ### 115 请求去重
 

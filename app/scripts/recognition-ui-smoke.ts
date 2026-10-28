@@ -4,6 +4,61 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserWindow } from 'electron'
 
+/** 开启自动上传且已填写命名时，显式搜索仍发起请求；错误、空结果与偏好回读分别验收。 */
+export async function runTmdbSearchUI(win: BrowserWindow, output: string) {
+  const run = (code: string) => win.webContents.executeJavaScript(code, true)
+  const checks: string[] = []
+  async function wait(code: string) {
+    for (let i = 0; i < 200; i++) {
+      if (await run(code)) return
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    throw new Error(`TMDB UI 超时：${code}\n${await run('document.body.innerText')}`)
+  }
+  async function check(label: string, code: string) { assert.equal(await run(code), true, label); checks.push(label) }
+  async function click(selector: string) {
+    await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled`)
+    await run(`document.querySelector(${JSON.stringify(selector)}).click()`)
+  }
+  async function openQuality() {
+    await run('[...document.querySelectorAll("nav button")].find(b => b.textContent.includes("发现")).click()')
+    await click('main button.item'); await click('button[aria-label^="第 1 集"]'); await click('.eps .foot button.primary')
+    await wait('!!document.querySelector(".output-settings .match")')
+  }
+  const calls = `window.__uiFlowFixture.snapshot().calls`
+  const searches = `${calls}.filter(c => c.method === 'tmdbSearch')`
+  const lastSave = `${calls}.filter(c => c.method === 'savePublicationPreferences').at(-1)`
+  await wait('window.__uiFlowFixture?.snapshot().ready')
+  await openQuality()
+  await wait('document.querySelector(".publication-recognition").textContent.includes("未识别到作品")')
+  await check('自动识别路径未搜索时不宣称没有条目', `${searches}.length === 0 && !document.querySelector('.output-settings').textContent.includes('未找到 TMDB 条目')`)
+  await run(`{ const input = document.querySelector('#output-title'); input.value = '保留的手动标题'; input.dispatchEvent(new Event('input', { bubbles: true })); }`)
+  await click('.output-settings .match .linkish')
+  await wait('document.querySelector(".output-settings .match")?.textContent.includes("后会友期 (2026)")')
+  await check('已有手动命名时搜索仍找到正确作品', `${searches}.length === 1`)
+  await wait('!document.querySelector(".resource-category select").disabled')
+  await run(`{ const select = document.querySelector('.resource-category select'); select.value = 'anime'; select.dispatchEvent(new Event('change', { bubbles: true })); }`)
+  await wait(`${lastSave}?.args[0].tmdb?.id === 338938`)
+  await openQuality()
+  await wait('document.querySelector(".output-settings .match")?.textContent.includes("后会友期 (2026)")')
+  await check('已保存作品自动恢复且没有重复搜索', `${searches}.length === 1`)
+  await click('.output-settings .match .linkish')
+  await wait('document.querySelector(".output-settings .warn-box")?.textContent.includes("请求过于频繁")')
+  await check('恢复偏好后仍可发起搜索并显示请求失败', `${searches}.length === 2`)
+  await click('.output-settings .warn-box .linkish')
+  await wait('document.querySelector(".output-settings .match")?.textContent.includes("未找到 TMDB 条目")')
+  await check('失败重试确实请求且只有真实空结果显示未找到', `${searches}.length === 3`)
+  await click('.output-settings .match .linkish')
+  await wait('document.querySelector(".output-settings .match")?.textContent.includes("后会友期 (2026)")')
+  await check('空结果重试后恢复正确匹配', `${searches}.length === 4`)
+  await wait('!!document.querySelector(".filename-preview") && !document.querySelector(".output-preview").classList.contains("pending") && !document.querySelector(".publication-grid").textContent.includes("正在匹配")')
+  await run('document.querySelector(".output-card.output-options").scrollIntoView({ block: "start" })')
+  writeFileSync(join(output, 'tmdb-search.png'), (await win.webContents.capturePage()).toPNG())
+  await check('搜索区域无横向溢出', 'document.documentElement.scrollWidth <= innerWidth')
+  writeFileSync(join(output, 'tmdb-search.json'), JSON.stringify({ passed: true, checks }, null, 2))
+  console.log(`TMDB 手动搜索 UI 验证通过：${checks.length} 项`)
+}
+
 export async function runRecognitionUI(win: BrowserWindow, output: string, dark: boolean) {
   const run = (code: string) => win.webContents.executeJavaScript(code, true).catch(error => { throw new Error(`${code}\n${error.message}`) })
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))

@@ -49,6 +49,7 @@ const releaseBinding = computed(() => JSON.stringify([store.state?.plutofish?.st
 const publicationFields = ref<InstanceType<typeof PublicationFields> | null>(null)
 const tmdbHits = ref<TmdbHit[]>([])
 const tmdbLoading = ref(false)
+const tmdbSearched = ref(false)
 const tmdbError = ref('')
 const tmdbOpen = ref(false)
 const seasons = ref<TmdbSeason[]>([])
@@ -105,6 +106,7 @@ watch(
     resetNaming()
     publication.value = { category: '' }
     tmdbHits.value = []
+    tmdbSearched.value = false
     tmdbError.value = ''
     tmdbOpen.value = false
     manualKind.value = false
@@ -164,19 +166,25 @@ function toggleAudio(a: AudioView) {
   reconcileDefaultAudio()
 }
 
-async function loadTmdb() {
+async function loadTmdb(manual = false) {
   const v = d.value
   if (!v) return
   const seq = ++tmdbSeq
   tmdbLoading.value = true
   tmdbError.value = ''
   try {
-    const saved = await gvs('publicationPreferences', { provider: v.provider, sourceWorkId: v.id, kind: v.kind })
-    if (seq !== tmdbSeq || d.value !== v) return
-    if (saved?.tmdb) { restorePublication(saved); return }
-    if ((autoUpload.value && store.state?.plutofish?.status === 'verified') || !store.state?.settings.tmdbKey || !canMatchTmdb.value) return
+    if (!manual) {
+      const saved = await gvs('publicationPreferences', { provider: v.provider, sourceWorkId: v.id, kind: v.kind })
+      if (seq !== tmdbSeq || d.value !== v) return
+      if (saved?.tmdb) { restorePublication(saved); return }
+      // Let file recognition fill the work, category and season together. An
+      // explicit search still has to reach TMDB, including after manual edits.
+      if (autoUpload.value && store.state?.plutofish?.status === 'verified') return
+    }
+    if (!store.state?.settings.tmdbKey || !canMatchTmdb.value) return
     const hits = await gvs('tmdbSearch', v.title, v.kind !== 'movie')
     if (seq !== tmdbSeq || d.value !== v) return
+    tmdbSearched.value = true
     tmdbHits.value = hits
     selectTmdb(defaultTmdbHit(manualKind.value ? hits.filter(h => h.kind === v.kind) : hits, v.title, v.year, v.kind))
   } catch (e) {
@@ -644,13 +652,13 @@ async function applyRule() {
               <div v-if="store.state?.settings.tmdbKey && canMatchTmdb" class="blk">
                 <span class="lab">TMDB 匹配</span>
                 <div v-if="tmdbLoading" class="dim small row"><span class="spin" />正在查 TMDB…</div>
-                <div v-else-if="tmdbError" class="warn-box">TMDB：{{ tmdbError }} <button type="button" class="linkish" @click="loadTmdb">重试</button></div>
+                <div v-else-if="tmdbError" class="warn-box">TMDB：{{ tmdbError }} <button type="button" class="linkish" @click="loadTmdb(true)">重试</button></div>
                 <template v-else>
                   <div class="match" :class="{ none: !tmdb }">
                     <Icon v-if="tmdb" name="check" :size="16" :stroke="2.5" />
-                    <span>{{ tmdb ? `${tmdb.name}${tmdb.year ? ` (${tmdb.year})` : ''}` : tmdbHits.length ? '不使用 TMDB' : '未找到 TMDB 条目' }}</span>
+                    <span>{{ tmdb ? `${tmdb.name}${tmdb.year ? ` (${tmdb.year})` : ''}` : tmdbHits.length ? '不使用 TMDB' : tmdbSearched ? '未找到 TMDB 条目' : '可使用下方文件名识别，或搜索 TMDB' }}</span>
                     <button v-if="tmdbHits.length" type="button" class="linkish" @click="tmdbOpen = !tmdbOpen">{{ tmdbOpen ? '收起' : '更换' }}</button>
-                    <button v-else type="button" class="linkish" @click="loadTmdb">重试</button>
+                    <button v-else type="button" class="linkish" @click="loadTmdb(true)">{{ tmdbSearched ? '重试' : '搜索 TMDB' }}</button>
                   </div>
                   <div v-if="tmdbOpen" class="hits">
                     <button v-for="h in tmdbHits" :key="`${h.kind}:${h.id}`" type="button" class="hit" :class="{ on: tmdb?.id === h.id && tmdb?.kind === h.kind }" @click="selectTmdb(h)">

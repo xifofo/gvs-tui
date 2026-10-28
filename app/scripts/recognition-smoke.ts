@@ -9,7 +9,7 @@ import { Core } from '../src/main/core'
 import { GwClient } from '../../src/lib/client'
 import { DEFAULT_UI_PREFS } from '../src/shared/ui-prefs'
 import type { Recognition, EnqueueRequest } from '../src/shared/api'
-import { runRecognitionUI } from './recognition-ui-smoke'
+import { runRecognitionUI, runTmdbSearchUI } from './recognition-ui-smoke'
 
 const profile = mkdtempSync(join(tmpdir(), 'gvs-recognition-'))
 process.env.APPDATA = profile
@@ -17,6 +17,8 @@ app.setPath('userData', profile); app.setName('GVS 识别验证'); app.disableHa
 const output = resolve('../.build/recognition'); mkdirSync(output, { recursive: true })
 const requests: Array<{ path: string; body: any }> = []
 const sources = [{ id: 'first', alias: 'default', name: '默认账号', provider: '115' }, { id: 'second', alias: 'selected', name: '第二账号', provider: '115' }]
+const tmdbSearchMode = process.argv.includes('--tmdb-search')
+let tmdbSearches = 0
 function result(fileName: string): Recognition {
   const work = { tmdbId: '123', mediaType: 'tv' as const, title: '星海纪行', originalTitle: 'Stars', englishTitle: 'Stars', year: 2024, posterUrl: '', category: { name: '动画番剧', value: 'anime', label: '动画番剧', status: 'matched' as const } }
   const value: Recognition = { status: 'compatible', canAutoFill: true, reasons: [], truncated: false, selectionBasis: '', parsed: { title: 'Stars', mediaType: 'tv', seasonNumber: 2, episodeNumber: 3, resolution: '1080p', source: 'WEB-DL', warnings: [] }, work, workTarget: { tmdbId: '123', mediaType: 'tv', category: 'anime' }, candidates: [{ work, conflicts: [] }] }
@@ -40,7 +42,11 @@ const server = createServer(async (req, res) => {
     assert.equal(req.headers.authorization, 'Bearer test-only')
     if (body.fileName.includes('Slow')) await new Promise(r => setTimeout(r, process.argv.includes('--ui') ? 700 : 5000))
     if (body.fileName.includes('Old')) { res.writeHead(404); return void res.end(JSON.stringify({ error: { code: 'NOT_FOUND' } })) }
-    return void res.end(JSON.stringify(result(body.fileName)))
+    const value = result(body.fileName)
+    if (tmdbSearchMode && body.fileName.includes('后会友期')) {
+      Object.assign(value, { status: 'not_identified', canAutoFill: false, work: null, workTarget: null, candidates: [] })
+    }
+    return void res.end(JSON.stringify(value))
   }
   if (path.endsWith('/releases/query')) return void res.end(JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100, match: 'none' }))
   if (path.endsWith('/range-proofs/pending')) return void res.end(JSON.stringify({ jobs: [] }))
@@ -73,6 +79,13 @@ async function main() {
   console.log('Core 识别、第二账号、作品/分类/季号入队、偏好回读、歧义与旧服务回退验证通过')
   if (!process.argv.includes('--interactive') && !process.argv.includes('--ui')) return void app.quit()
   ipcMain.handle('recognition-fixture', async (_event, method, ...args) => {
+    if (method === 'tmdbSearch' && tmdbSearchMode) {
+      assert.deepEqual(args, ['后会友期', true])
+      ++tmdbSearches
+      if (tmdbSearches === 2) throw new Error('TMDB 请求过于频繁，请稍后重试')
+      if (tmdbSearches === 3) return []
+      return [{ id: 338938, kind: 'show', name: '后会友期', title: '后会友期', year: 2026, overview: '' }]
+    }
     if (method === 'recognizePublication') return core.recognizePublication(args[0], args[1])
     if (method === 'publicationPreferences') return core.publicationPreferences(args[0])
     if (method === 'savePublicationPreferences') return core.savePublicationPreferences(args[0], args[1])
@@ -86,6 +99,9 @@ async function main() {
     .replace("const { contextBridge } = require('electron')", "const { contextBridge, ipcRenderer } = require('electron')")
     .replace('const settings = {', `const settings = { ui: ${JSON.stringify({ ...DEFAULT_UI_PREFS, theme: process.argv.includes('--narrow-dark') ? 'dark' : 'light', motion: false })},`)
     .replace('const cards = ', `state.plutofish = ${JSON.stringify(core.plutofish.view())};\nconst cards = `)
+  if (tmdbSearchMode) preload = preload.replace("const title = '山海回声'", "const title = '后会友期'")
+    .replace("tmdbKey: ''", "tmdbKey: 'test-only'")
+    .replace('switch (method) {', "switch (method) {\ncase 'tmdbSearch': return ipcRenderer.invoke('recognition-fixture', method, ...args);\ncase 'tmdbSeasons': return { seasons: [], warning: '' };")
   for (const method of ['publicationPreferences', 'savePublicationPreferences', 'namingPreview', 'publicationReleases', 'enqueue']) {
     preload = preload.replace(new RegExp(`case '${method}':`), `case '${method}': return ipcRenderer.invoke('recognition-fixture', method, ...args);\ncase 'unused-${method}':`)
   }
@@ -100,7 +116,8 @@ async function main() {
   win.webContents.on('console-message', event => { if (event.level === 'error') console.error(event.message) })
   await win.loadFile(resolve('out/renderer/index.html'))
   if (process.argv.includes('--ui')) {
-    await runRecognitionUI(win, output, process.argv.includes('--narrow-dark'))
+    if (tmdbSearchMode) await runTmdbSearchUI(win, output)
+    else await runRecognitionUI(win, output, process.argv.includes('--narrow-dark'))
     return void app.quit()
   }
   console.log('交互验收已就绪：Slow / Ambiguous / Old 文件名前缀分别模拟慢响应、歧义和旧服务')
