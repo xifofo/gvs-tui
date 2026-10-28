@@ -74,7 +74,10 @@ const canMatchTmdb = computed(() => supportsTmdb(d.value?.provider))
 
 const quality = computed(() => probe.value?.qualities[qIndex.value] ?? null)
 const hardTencentCaption = computed(() => d.value?.provider === 'tencent' && !!quality.value &&
-  tencentCaption(quality.value.captionProbe || quality.value.caption || '') === 'hard')
+  (tencentCaption(quality.value.caption || '') === 'hard'
+    // 没有可下载的软字幕轨 + 没有证实软字幕 → 按硬字幕处理；
+    // 不能再拿 captionProbe 判断（探测默认就是 soft）。
+    || (!subtitles.value.length && tencentCaption(quality.value.caption || '') !== 'soft')))
 const tencentDefaultSubtitleId = computed(() => {
   const selected = subtitles.value.filter(s => subtitleIds.value.includes(s.id))
   return (selected.find(s => s.isDefault) ?? selected[0])?.id

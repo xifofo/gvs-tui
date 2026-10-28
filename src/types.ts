@@ -57,6 +57,8 @@ export type Quality = {
   caption?: string
   /** Requested Tencent subtitle mode; does not confirm the delivered video's subtitles. */
   captionProbe?: 'soft' | 'hard'
+  /** 同一份目录里同时存在 soft/hard 两档探测时才有展示意义（否则默认 soft 会误导成全表软字幕）。 */
+  captionProbeMixed?: boolean
   /** hdr | hdr10 | sdr — 腾讯 fi 动态范围（MAX+ / HDR10 / 臻彩 MAX·SDR） */
   hdr?: string
   fps?: number

@@ -469,12 +469,18 @@ export function tencentFormatHDR(raw: Record<string, unknown>): string {
   return ''
 }
 
-/** Display the confirmed subtitle mode, falling back to the catalog's requested mode. */
-export function qualityCaptionText(caption?: string, captionProbe?: string): string {
-  if (caption === 'soft') return '软字幕'
-  if (caption === 'hard') return '硬字幕'
-  if (captionProbe === 'soft') return '软字幕'
-  if (captionProbe === 'hard') return '硬字幕'
+/**
+ * 画质表「字幕」列：只认网关回传的**已证实**字幕类型（`caption`）。
+ * `caption_probe` 只是「用哪种 persona 探的」，探测默认 soft —— 直接展示会让整张表全标「软字幕」。
+ * 只有同一份目录里同时存在软/硬两档时才用 probe 区分（`probeMixed`）。
+ */
+export function qualityCaptionText(caption?: string, captionProbe?: string, probeMixed = false): string {
+  if (caption === 'soft' || caption === '软') return '软字幕'
+  if (caption === 'hard' || caption === '硬') return '硬字幕'
+  if (probeMixed) {
+    if (captionProbe === 'soft' || captionProbe === '软') return '软字幕'
+    if (captionProbe === 'hard' || captionProbe === '硬') return '硬字幕'
+  }
   return ''
 }
 
@@ -500,11 +506,11 @@ export function qualityFpsText(fps?: number): string {
 }
 
 /** 确认页和状态行：档位名后面带上动态范围、帧率和软硬字幕。名字里已经写了的不再重复。 */
-export function qualityChoiceLabel(q: Pick<Quality, 'label' | 'title' | 'caption' | 'captionProbe' | 'hdr' | 'fps'>): string {
+export function qualityChoiceLabel(q: Pick<Quality, 'label' | 'title' | 'caption' | 'captionProbe' | 'captionProbeMixed' | 'hdr' | 'fps'>): string {
   const base = (q.label || q.title || '').trim()
   const hdr = qualityHdrText(q.hdr)
   const fps = qualityFpsText(q.fps)
-  const cap = qualityCaptionText(q.caption, q.captionProbe)
+  const cap = qualityCaptionText(q.caption, q.captionProbe, q.captionProbeMixed)
   const parts = [base]
   if (hdr && !base.toUpperCase().includes(hdr.toUpperCase())) parts.push(hdr)
   if (fps && !base.toLowerCase().includes(fps.toLowerCase())) parts.push(fps)
@@ -631,6 +637,9 @@ export function qualitiesFromTencentFormats(formats: unknown): Quality[] {
       encodeTag: encodeTag || undefined,
     })
   }
+  // caption_probe 只有在软/硬两档同时出现时才有区分度；单一探测档不能当作软字幕证据。
+  const probes = new Set(out.map(q => q.captionProbe).filter((p): p is 'soft' | 'hard' => !!p))
+  if (probes.size > 1) for (const q of out) q.captionProbeMixed = true
   return sortTencentQualities(out)
 }
 
