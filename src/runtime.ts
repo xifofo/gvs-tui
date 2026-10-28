@@ -262,7 +262,10 @@ export class Runtime {
       },
     })
     this.publications = new PublicationWorker(this.plutofish, draft => {
-      for (const job of this.jobs) if (job.publication?.fileKey === draft.fileKey) job.publication = draft
+      for (const job of this.jobs) if (job.publication?.fileKey === draft.fileKey) {
+        job.publication = draft
+        if (draft.measured) job.completedMedia = draft.measured
+      }
       this.emit()
     })
     this.connectionForm = new ConnectionForm(this.plutofish.view().url)

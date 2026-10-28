@@ -226,6 +226,45 @@ async function main() {
   assert.equal(reportedFiles.at(-1)!.releaseTarget.seasonNumber, 0)
   assert.equal(reportedFiles.at(-1)!.episodeNumber, 151)
   assert.equal(calls, downloadsBefore + 4, '改名后的手动上传不能触发重新下载')
+  // 缺少成品规格的旧任务：首次检测失败，重启后点重试读取同一个文件。
+  await core.saveSettings({ plutofishAutoUpload: false })
+  assert.equal(await core.enqueue({ ...request, episodes: [{ ...request.episodes[0]!, vid: 'legacy-ep3', number: 3 }], publication: undefined }), 1)
+  const retryId = core.jobList().at(-1)!.id, retryPath = join(profile, 'Existing.S00E03.1080p.APP.WEB-DL.mkv')
+  writeFileSync(retryPath, Buffer.alloc(2048, 5))
+  ;(core as any).onJob({ id: retryId, status: '完成', pct: 1, log: retryPath, err: '', done: true })
+  const stage = () => core!.jobList().find(job => job.id === retryId)!.publication!.progress?.stage
+  async function untilStage(expected: string) {
+    const deadline = Date.now() + 5000
+    while (stage() !== expected && Date.now() < deadline) {
+      await (core as any).publications.tick()
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(stage(), expected)
+  }
+  let probeCalls = 0
+  core.probePublicationMedia = async path => { assert.equal(path, retryPath); probeCalls++; return { status: 'unavailable' } }
+  const startsBeforeRetry = uploadStarts, downloadsBeforeRetry = calls
+  await core.completePublicationSetup(retryId, 'anime')
+  await untilStage('failed')
+  assert.equal(probeCalls, 1)
+  assert.equal(uploadStarts, startsBeforeRetry)
+  const retryKey = core.jobList().find(job => job.id === retryId)!.publication!.fileKey
+  await core.shutdown(); core.dispose(); core = await create()
+  core.probePublicationMedia = async path => { assert.equal(path, retryPath); probeCalls++; return measured.media }
+  await (core as any).publications.tick()
+  assert.equal(stage(), 'failed', '重启不能自行重试失败任务')
+  assert.equal(probeCalls, 1)
+  await core.controlPublication(retryId, 'resume')
+  await untilStage('completed')
+  const retried = core.jobList().find(job => job.id === retryId)!
+  assert.equal(probeCalls, 2)
+  assert.equal(calls, downloadsBeforeRetry, '重试上传只能补检现有文件，不能重新下载')
+  assert.equal(uploadStarts, startsBeforeRetry + 1)
+  assert.equal(retried.publication!.fileKey, retryKey)
+  assert.equal(retried.output, retryPath)
+  assert.deepEqual(retried.completedMedia, measured)
+  assert.deepEqual(retried.publication!.measured, measured)
+  assert.deepEqual(readFileSync(retryPath), Buffer.alloc(2048, 5))
   const countBeforeFailure = core.jobList().length
   const n = calls
   rmSync(join(profile, 'jobs.json')); mkdirSync(join(profile, 'jobs.json'))

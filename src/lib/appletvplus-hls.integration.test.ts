@@ -39,6 +39,8 @@ mediaTest('Apple TV HLS CBCS jobs decrypt separate content KIDs and publish veri
     const finished=events.find(e=>e.id===1&&e.done)!
     if(finished.err){const logs=readdirSync(root,{recursive:true}).filter(p=>String(p).endsWith('.download-error.log')).map(p=>readFileSync(join(root,String(p)),'utf8')).join('\n');throw new Error(`${finished.err}\n${logs}`)}
     expect(finished.status).toBe('完成')
+    expect(finished.completedMedia?.media).toMatchObject({ status: 'probed', width: 160, height: 90, codec: 'h264', audio: { codec: 'aac' } })
+    expect(finished.completedMedia?.file.size).toBe(readFileSync(finished.log).length)
     expect(readFileSync(finished.log).subarray(0,4).toString('hex')).toBe('1a45dfa3')
     run(ffmpeg,['-nostdin','-v','error','-xerror','-i',finished.log,'-map','0:v','-map','0:a','-f','null','-'])
     expect(requested.some(u=>u.includes('video-'))).toBe(true)
@@ -46,7 +48,6 @@ mediaTest('Apple TV HLS CBCS jobs decrypt separate content KIDs and publish veri
     expect(requested.some(u=>u.includes('caption.vtt'))).toBe(true)
     const probe=spawnSync(ffmpeg,['-hide_banner','-i',finished.log],{encoding:'utf8',windowsHide:true,timeout:10000})
     expect(probe.stderr).toContain('Subtitle:')
-    expect(events.some(e=>e.status==='校验'&&e.log.includes('完整音视频校验'))).toBe(true)
     const logs=JSON.stringify(events);expect(logs).not.toContain(video.key);expect(logs).not.toContain(audio.key)
   } finally {await hub.cancelAll();server.closeAllConnections();if(server.listening)await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(root,{recursive:true,force:true})}
 },100000)

@@ -360,10 +360,13 @@ export class Core {
     const changed: number[] = []
     for (const rec of this.jobs.values()) if (rec.task.publication?.fileKey === draft.fileKey) {
       rec.task.publication = draft
+      if (draft.measured) rec.view.completedMedia = draft.measured
       changed.push(rec.view.id)
     }
     if (changed.length) this.pushJobs(changed)
-  }, { autoUpload: () => this.cfg.plutofishAutoUpload !== false, beforeCleanup: () => this.flushJobs(true), retention: { compute: (path, signal, progress) => this.computePublicationED2K(path, signal, progress) } })
+  }, { autoUpload: () => this.cfg.plutofishAutoUpload !== false, beforeCleanup: () => this.flushJobs(true),
+    probeMedia: (path, signal) => this.probePublicationMedia(path, signal),
+    retention: { compute: (path, signal, progress) => this.computePublicationED2K(path, signal, progress) } })
 
   constructor(private readonly emit: Emit) {
     this.hub = new JobHub((e) => this.onJob(e))

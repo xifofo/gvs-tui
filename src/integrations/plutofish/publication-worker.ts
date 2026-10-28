@@ -4,12 +4,14 @@ import { publicationFailure } from './publication-error'
 import { UploadPauses, UploadRateLimitError, uploadRateLimited } from './upload-pause'
 import { basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { lstat } from 'node:fs/promises'
 import { UploadBudget, type UploadTransfer } from './upload-traffic.ts'
 import type { JobEvt } from '../../lib/job-event.ts'
 import { PlutoFishConnection } from './connection.ts'
 import { publicationDirectory } from './publication-store.ts'
 import { PublicationStore, type PublicationState, type TaskSnapshot } from './publication-state.ts'
-import { publicationMissing, type PublicationDraft } from './publication-types.ts'
+import { publicationMediaReady, publicationMissing, type PublicationDraft } from './publication-types.ts'
+import { samePublicationFile } from './publication-file.ts'
 import { fingerprint, challengeHash } from './upload-file.ts'
 import { uploadParts, type OSSFactory } from './oss-upload.ts'
 import type { UploadReply } from './upload-types.ts'
@@ -17,7 +19,8 @@ import { publicationVersion } from './publication-version.ts'
 import { PublicationProofs } from './publication-proofs.ts'
 import { PublicationCleanup } from './publication-cleanup.ts'
 import { PublicationRetention, type RetentionOptions } from './publication-retention.ts'
-import { localFileInUse } from '../../lib/local-file-use.ts'
+import { localFileInUse, useLocalFile } from '../../lib/local-file-use.ts'
+import { probeFinishedMedia } from '../../lib/gvs-record.ts'
 
 const eligible = (draft: PublicationDraft) => !publicationMissing(draft).length
 const safeError = (error: unknown) => publicationFailure(error, '发布任务').message
@@ -52,11 +55,12 @@ export class PublicationWorker {
   private readonly syncErrors = new Map<string, PublisherError>()
 
   constructor(private readonly connection: PlutoFishConnection, private readonly changed: (draft: PublicationDraft, transient?: boolean) => void,
-    options: { directory?: string; factory?: OSSFactory; manual?: boolean; autoUpload?: () => boolean; beforeCleanup?: () => void; now?: () => number; retention?: RetentionOptions } = {}) {
+    options: { directory?: string; factory?: OSSFactory; manual?: boolean; autoUpload?: () => boolean; beforeCleanup?: () => void; now?: () => number; retention?: RetentionOptions; probeMedia?: typeof probeFinishedMedia } = {}) {
     this.store = new PublicationStore(options.directory ?? publicationDirectory())
     this.uploadPauses = new UploadPauses(this.store.directory, options.now)
     this.factory = options.factory
     this.autoUpload = options.autoUpload ?? (() => true)
+    this.probeMedia = options.probeMedia ?? probeFinishedMedia
     this.cleanup = new PublicationCleanup(connection, state => {
       if (this.states.get(state.draft.fileKey) !== state || this.running.has(state.draft.fileKey) || this.preparing?.key === state.draft.fileKey || this.proofs.isUsing(state) || localFileInUse(state.draft.output)) return
       this.store.removeCompleted(state)
@@ -71,6 +75,7 @@ export class PublicationWorker {
   }
   private readonly factory?: OSSFactory
   private readonly autoUpload: () => boolean
+  private readonly probeMedia: typeof probeFinishedMedia
 
   /** Persist waiting tasks when disabled; re-enabling applies only to new tasks. */
   refreshUploadPolicy(): void {
@@ -115,7 +120,7 @@ export class PublicationWorker {
     }
     this.loaded = true
   }
-  /** 入队只保存本地快照，上传必须等待下载器给出已探测成品。 */
+  /** 入队只保存本地快照，上传准备阶段补检缺少规格的本地成品。 */
   register(draft: PublicationDraft): void {
     if (this.closed || !eligible(draft)) return
     draft = { ...draft, episodeTitle: episodeTitle(draft) }
@@ -335,12 +340,11 @@ export class PublicationWorker {
           const state = eligible.find(s => !this.running.has(s.draft.fileKey) && !this.prepared.has(s.draft.fileKey))
           if (state) {
             const abort = new AbortController(), key = state.draft.fileKey
-            this.phase(state, 'hashing')
-            const promise = fingerprint(state.draft.output, abort.signal).then(() => {
+            const promise = this.prepare(state, abort.signal).then(() => {
               if (!abort.signal.aborted && !this.closed) { this.prepared.add(key); this.phase(state, undefined) }
             }).catch(error => {
               if (!abort.signal.aborted) {
-                const failure = publicationFailure(error, '读取本地文件')
+                const failure = publicationFailure(error, state.draft.progress?.phase === 'probing' ? '检测媒体规格' : '读取本地文件')
                 state.failure = { retryable: failure.retryable, diagnostic: failure.diagnostic }
                 this.update(state, { stage: 'failed', errorMessage: failure.message })
               }
@@ -352,6 +356,32 @@ export class PublicationWorker {
     } catch (error) {
       for (const state of this.states.values()) this.publish(state, safeError(error))
     } finally { this.syncing = false }
+  }
+
+  /** 旧任务直接补检已有文件；暂停/取消后不能落盘迟到的检测结果。 */
+  private async prepare(state: PublicationState, signal: AbortSignal): Promise<void> {
+    const draft = state.draft
+    signal.throwIfAborted()
+    if (!publicationMediaReady(draft.measured)) {
+      this.phase(state, 'probing')
+      const release = useLocalFile(draft.output)
+      try {
+        const before = await lstat(draft.output)
+        if (!before.isFile() || before.size < 1) throw new Error('成品不是有效的非空普通文件，请检查本地文件后重试上传')
+        const media = await this.probeMedia(draft.output, signal)
+        signal.throwIfAborted()
+        const after = await lstat(draft.output)
+        if (!after.isFile() || !samePublicationFile(before, after)) throw new Error('成品在媒体检测期间发生变化，请检查本地文件后重试上传')
+        signal.throwIfAborted()
+        draft.measured = { media, file: { size: after.size } }
+        draft.updatedAt = new Date().toISOString()
+        this.update(state, { sizeBytes: after.size })
+        if (!publicationMediaReady(draft.measured)) throw new Error('成品媒体规格检测失败，请确认文件完整及本机媒体工具可用后重试上传')
+      } finally { release() }
+    }
+    signal.throwIfAborted()
+    this.phase(state, 'hashing')
+    await fingerprint(draft.output, signal)
   }
 
   private async upload(state: PublicationState, abort: AbortController, grouped: boolean): Promise<void> {
@@ -373,7 +403,7 @@ export class PublicationWorker {
     }
     try {
       const measured = draft.measured
-      if (measured?.media.status !== 'probed' || !measured.media.width || !measured.media.height || !measured.media.codec || !measured.file.size) throw new Error('成品媒体规格待检查，尚未上传')
+      if (!publicationMediaReady(measured)) throw new Error('成品媒体规格待检查，尚未上传')
       this.phase(state, 'hashing')
       const file = await fingerprint(draft.output, signal)
       if (file.size !== measured.file.size) throw new Error('成品大小与检测记录不一致')
