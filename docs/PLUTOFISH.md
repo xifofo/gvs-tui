@@ -102,6 +102,8 @@ macOS 对已复现的 E-AC-3 指数解码兼容错误（开头 `exponent -1`，�
 
 Complete 回执丢失时先按原任务核验网盘文件大小和 SHA1。115 的原上传任务码可能不同于完成文件取件码；服务端仅从任务绑定目录中核对唯一同名、同大小、同 SHA1 的完整文件，再通过真实取件码复核，返回独立的 filePickCode 供资源登记，不改用于续传的 pickCode。仅针对旧版未启用 sequential 的已合并断点：服务端明确返回文件尚未就绪、且 OSS 明确返回 NoSuchUpload 时，保留旧 uploadId 供追溯，保留原 pick_code，采用本次续传返回的对象存储参数创建顺序分片会话；普通网络故障和核验错误不能触发迁移。目录登记失败可以单独重试，不重复上传成品；最终登记携带 `releaseTarget.autoPublish=true`，就绪主视频自动发布草稿；重复上报不重复发布，也不恢复管理员已下架的版本。当前完成链只处理任务的主视频文件，独立外挂字幕仍走原文件上报契约。
 
+资源登记失败会显示约定错误码对应的具体原因，并保留“登记资源”阶段、HTTP 状态、业务码和请求 ID。例如 `CONTENT_EDITION_MISSING` 显示“服务端数据库缺少发行规格字段（edition），请完成数据库迁移后重试登记”。缺表/缺列、数据约束和已知版本/文件身份冲突停止自动重试，修正后可手动重试原任务；数据库暂不可用、事务冲突和连接旧结构仍沿用临时失败重试。客户端不直接展示服务端任意 message 或 SQL；旧服务端只返回 `INTERNAL_ERROR` 或未知错误码时，明确提示“服务端未提供可识别的具体原因，请凭请求 ID 查询服务端日志”，不推断为 115 上传失败。
+
 协议依据：[115 上传流程](https://open.115.com/doc/115开放平台/API列表/文件管理/文件上传/上传流程.md?raw=true)、[获取上传凭证](https://open.115.com/doc/115开放平台/API列表/文件管理/文件上传/获取上传凭证.md?raw=true)、[文件上传](https://open.115.com/doc/115开放平台/API列表/文件管理/文件上传/文件上传.md?raw=true)、[断点续传](https://open.115.com/doc/115开放平台/API列表/文件管理/文件上传/断点续传.md?raw=true)（2026-10-15 读取，文档最后修改于 2026-09-14），以及 [ali-oss SDK](https://github.com/ali-sdk/ali-oss) 和 [OpenList 的 115 顺序分片实现](https://github.com/OpenListTeam/OpenList/blob/main/drivers/115_open/upload.go)。
 
 ## 验证
