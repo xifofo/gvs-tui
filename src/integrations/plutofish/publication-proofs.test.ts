@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { PlutoFishConnection } from './connection.ts'
-import { PublicationProofs, type ProofJob } from './publication-proofs.ts'
+import { PublicationProofs, PUBLICATION_PROOF_CONCURRENCY, type ProofJob } from './publication-proofs.ts'
 import { PublicationStore, type PublicationState } from './publication-state.ts'
 import { completePublication, preparePublication } from './publication.ts'
 import { fingerprint } from './upload-file.ts'
@@ -38,12 +38,150 @@ function proofGate() {
   return { promise, resolve }
 }
 
-test('本地最多两个校验任务，同一成品直到最后一份回执完成才允许清理', async () => {
-  const f = await setup()
-  const gates = [proofGate(), proofGate(), proofGate()]
-  const entered = [proofGate(), proofGate(), proofGate()]
+test('两千个挑战在慢回执期间持续收件，保持十六个在途上限且关闭前等待所有读取退出', async () => {
+  const f = await setup(), held = proofGate(), completed = proofGate()
+  const abort = new AbortController(), proofs = new PublicationProofs(f.connection, () => {})
+  // 使用不同的真实范围，避免压测只命中同一个摘要缓存；总共读取并校验约 125 MiB。
+  const bytes = Buffer.from(Array.from({ length: 1024 * 1024 }, (_, i) => i % 251))
+  writeFileSync(f.path, bytes)
+  const file = await fingerprint(f.path, abort.signal)
+  f.state.checkpoint!.file = file
+  f.state.snapshot.sizeBytes = file.size
+  const jobs = Array.from({ length: 2000 }, (_, i) => {
+    const start = i * 509 % (bytes.length - 65536)
+    return { ...f.job, id: (i + 1).toString(16).padStart(32, '0'), sha1: file.sha1, sizeBytes: file.size, signCheck: `${start}-${start + 65535}` }
+  })
+  const expected = new Map(jobs.map(job => {
+    const [start, end] = job.signCheck.split('-').map(Number) as [number, number]
+    return [job.id, createHash('sha1').update(bytes.subarray(start, end + 1)).digest('hex').toUpperCase()]
+  }))
+  const pending = new Map(jobs.map(job => [job.id, job]))
+  const seen = new Set<string>()
+  let active = 0, peak = 0, finished = 0
+  f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
+    if (route === 'range-proofs/pending') {
+      const after = (body as { after: string }).after
+      const page = [...pending.values()].filter(job => job.id > after).slice(0, 101)
+      return { jobs: page.slice(0, 100), ...(page.length > 100 ? { nextCursor: page[99]!.id } : {}), waitSupported: true } as T
+    }
+    const report = body as { id: string; signValue: string }
+    expect(report.signValue).toBe(expected.get(report.id)!)
+    expect(seen.has(report.id)).toBeFalse()
+    seen.add(report.id)
+    active++; peak = Math.max(peak, active)
+    // 第一份回执一直不结束；后续页也必须被领取，不能等第一整页完成。
+    if (report.id === jobs[0]!.id) await held.promise
+    else await Bun.sleep(40)
+    pending.delete(report.id)
+    active--; finished++
+    if (finished === jobs.length - 1) completed.resolve()
+    return { accepted: true } as T
+  }
+  const started = performance.now()
+  const work = proofs.run(() => [f.state], abort.signal)
+  try {
+    await completed.promise
+    const elapsed = performance.now() - started
+    expect(elapsed).toBeLessThan(30_000)
+    expect(seen.size).toBe(2000)
+    expect(peak).toBe(PUBLICATION_PROOF_CONCURRENCY)
+    expect(proofs.isUsing(f.state)).toBeTrue()
+    held.resolve()
+    abort.abort()
+    await work
+    expect(finished).toBe(2000)
+    expect(proofs.isUsing(f.state)).toBeFalse()
+    console.info(`本地校验离线压测：2000 个挑战、40ms 模拟回执、1 个持续慢回执，其余完成耗时 ${elapsed.toFixed(0)}ms，峰值 ${peak}`)
+  } finally { held.resolve(); abort.abort(); await work; f.cleanup() }
+}, 20_000)
+
+test('后台回执失败后重查原挑战，其他已成功回执不重复发送', async () => {
+  const f = await setup(), completed = proofGate(), abort = new AbortController()
+  const jobs = Array.from({ length: 20 }, (_, i) => ({ ...f.job, id: (i + 1).toString(16).padStart(32, '0') }))
+  const pending = new Map(jobs.map(job => [job.id, job])), calls = new Map<string, number>()
+  f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
+    if (route === 'range-proofs/pending') return { jobs: [...pending.values()].filter(job => job.id > (body as { after: string }).after), waitSupported: true } as T
+    const id = (body as { id: string }).id, count = (calls.get(id) ?? 0) + 1
+    calls.set(id, count)
+    if (id === jobs[0]!.id && count === 1) throw new Error('temporary report failure')
+    pending.delete(id)
+    if (!pending.size) completed.resolve()
+    return { accepted: true } as T
+  }
   const proofs = new PublicationProofs(f.connection, () => {})
-  const jobs = ['a', 'b', 'c'].map(c => ({ ...f.job, id: c.repeat(32) }))
+  const work = proofs.run(() => [f.state], abort.signal)
+  try {
+    await completed.promise
+    abort.abort(); await work
+    expect(calls.get(jobs[0]!.id)).toBe(2)
+    expect([...calls.values()].filter(count => count === 1)).toHaveLength(19)
+  } finally { abort.abort(); await work; f.cleanup() }
+})
+
+test('十六个回执在途时关闭会取消所有请求，队列剩余任务不启动且文件占用全部释放', async () => {
+  const f = await setup(), entered = proofGate(), abort = new AbortController()
+  const proofs = new PublicationProofs(f.connection, () => {})
+  const jobs = Array.from({ length: 100 }, (_, i) => ({ ...f.job, id: (i + 1).toString(16).padStart(32, '0') }))
+  let reports = 0, cancelled = 0
+  f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, _body: unknown, signal?: AbortSignal): Promise<T> => {
+    if (route === 'range-proofs/pending') return { jobs, waitSupported: true } as T
+    if (++reports === PUBLICATION_PROOF_CONCURRENCY) entered.resolve()
+    return await new Promise<T>((_resolve, reject) => {
+      signal!.addEventListener('abort', () => { cancelled++; reject(signal!.reason) }, { once: true })
+    })
+  }
+  const work = proofs.run(() => [f.state], abort.signal)
+  try {
+    await entered.promise
+    abort.abort(); await work
+    expect(reports).toBe(16)
+    expect(cancelled).toBe(16)
+    expect(proofs.isUsing(f.state)).toBeFalse()
+  } finally { abort.abort(); await work; f.cleanup() }
+})
+
+test('下一页查询途中旧回执失败，迟到分页不能覆盖首页重放位置', async () => {
+  const f = await setup(), failReport = proofGate(), queryEntered = proofGate(), releaseQuery = proofGate(), completed = proofGate()
+  const abort = new AbortController(), proofs = new PublicationProofs(f.connection, () => {})
+  const jobs = Array.from({ length: 20 }, (_, i) => ({ ...f.job, id: (i + 1).toString(16).padStart(32, '0') }))
+  const pending = new Map(jobs.map(job => [job.id, job]))
+  let polls = 0, firstAttempts = 0
+  f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
+    if (route === 'range-proofs/pending') {
+      const after = (body as { after: string }).after
+      if (++polls === 2) { queryEntered.resolve(); await releaseQuery.promise }
+      if (polls === 3) expect(after).toBe('')
+      return { jobs: [...pending.values()].filter(job => job.id > after), waitSupported: true } as T
+    }
+    const id = (body as { id: string }).id
+    if (id === jobs[0]!.id && ++firstAttempts === 1) {
+      await failReport.promise
+      throw new Error('late report failure')
+    }
+    pending.delete(id)
+    if (!pending.size) completed.resolve()
+    return { accepted: true } as T
+  }
+  const work = proofs.run(() => [f.state], abort.signal)
+  try {
+    await queryEntered.promise
+    failReport.resolve()
+    await Bun.sleep(10)
+    releaseQuery.resolve()
+    await completed.promise
+    abort.abort(); await work
+    expect(firstAttempts).toBe(2)
+    expect(pending.size).toBe(0)
+  } finally { failReport.resolve(); releaseQuery.resolve(); abort.abort(); await work; f.cleanup() }
+})
+
+test('本地最多十六个校验任务，同一成品直到最后一份回执完成才允许清理', async () => {
+  const f = await setup()
+  const count = PUBLICATION_PROOF_CONCURRENCY
+  const gates = Array.from({ length: count + 1 }, proofGate)
+  const entered = Array.from({ length: count + 1 }, proofGate)
+  const proofs = new PublicationProofs(f.connection, () => {})
+  const jobs = Array.from({ length: count + 1 }, (_, i) => ({ ...f.job, id: (i + 1).toString(16).padStart(32, '0') }))
   let active = 0, peak = 0, reports = 0
   f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
     if (route === 'range-proofs/pending') return { jobs } as T
@@ -56,18 +194,18 @@ test('本地最多两个校验任务，同一成品直到最后一份回执完�
   }
   const work = proofs.tick([f.state], new AbortController().signal)
   try {
-    await Promise.all([entered[0]!.promise, entered[1]!.promise])
-    expect(reports).toBe(2)
+    await Promise.all(entered.slice(0, count).map(gate => gate.promise))
+    expect(reports).toBe(count)
     expect(proofs.isUsing(f.state)).toBeTrue()
     gates[0]!.resolve()
-    await entered[2]!.promise
-    gates[2]!.resolve()
+    await entered[count]!.promise
+    gates.slice(2).forEach(gate => gate.resolve())
     await Bun.sleep(5)
     expect(proofs.isUsing(f.state)).toBeTrue()
     gates[1]!.resolve()
     await work
-    expect(peak).toBe(2)
-    expect(reports).toBe(3)
+    expect(peak).toBe(count)
+    expect(reports).toBe(count + 1)
     expect(proofs.isUsing(f.state)).toBeFalse()
   } finally {
     gates.forEach(gate => gate.resolve())
@@ -76,14 +214,14 @@ test('本地最多两个校验任务，同一成品直到最后一份回执完�
   }
 })
 
-test('并发回执失败后不领取第三个任务，等待已开始的任务结束再退出', async () => {
+test('并发回执失败后不领取额外任务，等待所有已开始任务结束再退出', async () => {
   const f = await setup(), gate = proofGate(), entered = proofGate()
   const proofs = new PublicationProofs(f.connection, () => {})
   let reports = 0, settled = false
   f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
-    if (route === 'range-proofs/pending') return { jobs: ['a', 'b', 'c'].map(c => ({ ...f.job, id: c.repeat(32) })) } as T
+    if (route === 'range-proofs/pending') return { jobs: Array.from({ length: PUBLICATION_PROOF_CONCURRENCY + 1 }, (_, i) => ({ ...f.job, id: (i + 1).toString(16).padStart(32, '0') })) } as T
     reports++
-    if ((body as { id: string }).id === f.job.id) throw new Error('offline report failure')
+    if ((body as { id: string }).id === '1'.padStart(32, '0')) throw new Error('offline report failure')
     entered.resolve()
     await gate.promise
     return { accepted: true } as T
@@ -99,7 +237,7 @@ test('并发回执失败后不领取第三个任务，等待已开始的任务�
     expect(proofs.isUsing(f.state)).toBeTrue()
     gate.resolve()
     expect((await work)?.message).toBe('offline report failure')
-    expect(reports).toBe(2)
+    expect(reports).toBe(PUBLICATION_PROOF_CONCURRENCY)
     expect(proofs.isUsing(f.state)).toBeFalse()
   } finally { gate.resolve(); await work; f.cleanup() }
 })
