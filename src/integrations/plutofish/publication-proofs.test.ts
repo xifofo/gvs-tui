@@ -1,5 +1,5 @@
 /** 分段校验测试只使用临时本地文件和内存网关，验证重启、文件缺失、篡改、撤权与摘要复用。 */
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -214,7 +214,7 @@ test('真实待办超过一页时连续领取，最后一页后才恢复 15 秒�
   } finally { f.cleanup() }
 })
 
-test('本机清单已清空也能回报不可用，下一页不会被缺失记录挡住', async () => {
+test('同 Key 下本机清单为空时静默跳过，仍继续翻页且不打断持有文件的客户端', async () => {
   const f = await setup()
   try {
     const reports: unknown[] = []
@@ -231,7 +231,15 @@ test('本机清单已清空也能回报不可用，下一页不会被缺失记�
     await proofs.tick([], new AbortController().signal)
     await proofs.tick([], new AbortController().signal)
     expect(polls).toBe(2)
-    expect(reports).toEqual([{ id: f.job.id, taskKey: f.job.taskKey, unavailable: true }])
+    expect(reports).toEqual([])
+    // 第二个客户端以同一身份领取相同挑战，仍能使用自己的本地成品响应。
+    f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
+      if (route === 'range-proofs/pending') return { jobs: [f.job] } as T
+      reports.push(body)
+      return { accepted: true } as T
+    }
+    await new PublicationProofs(f.connection, () => {}).tick([f.state], new AbortController().signal)
+    expect(reports).toEqual([{ id: f.job.id, taskKey: f.job.taskKey, signValue: createHash('sha1').update('cdef').digest('hex').toUpperCase() }])
   } finally { f.cleanup() }
 })
 
@@ -321,7 +329,7 @@ test('协商成功后等待新任务，收到任务时使用最新本地清单�
   } finally { f.cleanup() }
 })
 
-test('不可用待办等待手动处理时不形成长轮询忙循环', async () => {
+test('其他客户端的待办不会形成长轮询忙循环，也不会回报不可用', async () => {
   const f = await setup()
   try {
     let polls = 0, reports = 0
@@ -334,8 +342,35 @@ test('不可用待办等待手动处理时不形成长轮询忙循环', async ()
     await proofs.tick([], new AbortController().signal)
     await proofs.tick([], new AbortController().signal)
     expect(polls).toBe(1)
-    expect(reports).toBe(1)
+    expect(reports).toBe(0)
   } finally { f.cleanup() }
+})
+
+test('登记已触发校验但本机尚未完成时先跳过，完成后可在原窗口内响应', async () => {
+  const f = await setup()
+  let now = Date.now()
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  try {
+    f.state.snapshot.stage = 'uploading'
+    const reports: unknown[] = []
+    let polls = 0
+    f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
+      if (route === 'range-proofs/pending') { polls++; return { jobs: [f.job], waitSupported: true } as T }
+      reports.push(body)
+      return { accepted: true } as T
+    }
+    const proofs = new PublicationProofs(f.connection, () => {})
+    const signal = new AbortController().signal
+    await proofs.tick(() => [f.state], signal)
+    expect(reports).toEqual([])
+    f.state.snapshot.stage = 'completed'
+    await proofs.tick(() => [f.state], signal)
+    expect(polls).toBe(1)
+    now += 1000
+    await proofs.tick(() => [f.state], signal)
+    expect(polls).toBe(2)
+    expect(reports).toEqual([{ id: f.job.id, taskKey: f.job.taskKey, signValue: createHash('sha1').update('cdef').digest('hex').toUpperCase() }])
+  } finally { clock.mockRestore(); f.cleanup() }
 })
 
 test('独立收件循环等待期间仍同步新任务，关闭会取消长请求', async () => {

@@ -35,7 +35,7 @@ async function fixture() {
   return { directory, connection, store, states, create, remove, close }
 }
 
-test('删除成品后先撤销服务端资格，再清掉两份本地清单，下载历史不会在重启时重新入队', async () => {
+test('删除成品后先上报本机清理，再清掉两份本地清单，下载历史不会在重启时重新入队', async () => {
   const f = await fixture()
   let worker: PublicationWorker | undefined
   try {
@@ -177,7 +177,7 @@ test('校验发现删除后可优先清理，无需等下一次一分钟扫描',
   } finally { f.close() }
 })
 
-test('宿主确认整目录已删除后落盘删除事实，父目录缺失也能在重启后撤销校验资格', async () => {
+test('宿主确认整目录已删除后落盘删除事实，父目录缺失也能在重启后补报本机清理', async () => {
   const f = await fixture()
   let worker: PublicationWorker | undefined
   try {
