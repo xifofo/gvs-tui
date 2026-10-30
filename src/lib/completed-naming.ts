@@ -172,7 +172,7 @@ export function previewSpecs(provider: string, q: PreviewQuality, audios?: Previ
   const hay = `${q.hdr || ''} ${q.label || ''} ${q.title || ''} ${q.stream || q.id || ''}`
   const dr = Number(q.iqcnQuality?.dynamicRangeCode)
   const dynamicRange = dv || [1, 3].includes(dr) || /杜比视界|dolby\s*vision|dolbyvision|(?:^|[^a-z])dv(?:[^a-z]|$)/i.test(hay) ? 'DV'
-    : dr === 2 || /hdr10|(?:^|[^a-z])hdr(?:[^a-z]|$)|hlg/i.test(hay) ? 'HDR' : undefined
+    : dr === 2 || /hdr10|(?:^|[^a-z])hdr(?:[^a-z]|$)|(?:^|[^a-z])pq(?:[^a-z]|$)|hlg/i.test(hay) ? 'HDR' : undefined
   return { status: 'unavailable', width: q.width || 0, height: q.height || 0, codec, fps: q.fps || 0, dynamicRange, audio: previewAudio(audios) }
 }
 

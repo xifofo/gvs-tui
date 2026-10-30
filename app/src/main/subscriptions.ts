@@ -1,5 +1,6 @@
 import type { DetailView, EnqueueRequest, EpisodeView, ProbeResult, Provider, SubscriptionProgress } from '@shared/api'
 import { pickBest, shouldUpgrade, DEFAULT_RULES, type RuleCandidate } from '../shared/rule-groups'
+import { hdrKind } from '../shared/media-specs'
 import { mgtvShowId } from '../shared/calendar'
 import {
   DEFAULT_INTERVAL_MIN, diffEpisodes, jitter, nextCheckAt, nextRetryAt, retryDelay, subKey,
@@ -48,7 +49,7 @@ function episodesLabel(eps: Array<{ number: number }>): string {
 
 export function candidatesOf(probe: ProbeResult): RuleCandidate[] {
   return probe.qualities.map((q) => ({
-    index: q.index, height: q.height, width: q.width, codec: q.codec, hdr: q.hdr, label: q.label, size: q.size, fps: q.fps,
+    index: q.index, height: q.height, width: q.width, codec: q.codec, hdr: hdrKind(q.hdr, q.codec, q.label, q.stream) || q.hdr, label: q.label, size: q.size, fps: q.fps,
     audios: (q.audios.length ? q.audios : probe.audios).map((a) => ({ id: a.id, label: a.label, codec: a.codec, lang: a.lang })),
   }))
 }

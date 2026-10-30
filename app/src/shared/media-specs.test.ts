@@ -21,6 +21,9 @@ test('media: video codec and hdr', () => {
     expect(hdrKind('4K HDR Vivid')).toBe('HDR Vivid')
     expect(hdrKind('sdr')).toBe('')
     expect(hdrKind('dvd')).toBe('')
+    expect(hdrKind('PQ')).toBe('HDR')
+    expect(hdrKind('1920|H265|PQ|23.976')).toBe('HDR')
+    expect(hdrKind('DV', 'PQ', '1920p DV PQ')).toBe('杜比视界')
   })
 test('media: audio codec and channels', () => {
     expect(audioCodec('杜比全景声')).toBe('Dolby Atmos')

@@ -16,6 +16,8 @@ test('badges from probed qualities', () => {
   ], [], 5)
   expect([h.badges, h.height, h.source, h.at]).toEqual([['4K', 'DV', 'ATMOS', '60FPS'], 2160, 'probe', 5])
   expect(badgesFromQualities([{ height: 1080, hdr: 'HDR10' }], [{ label: 'AAC', codec: 'mp4a' }]).badges).toEqual(['1080P', 'HDR'])
+  expect(badgesFromQualities([{ height: 1920, hdr: 'PQ', codec: 'H265', label: '1920p H265 PQ' }]).badges).toEqual(['1080P', 'HDR'])
+  expect(badgesFromQualities([{ height: 1920, hdr: 'PQ', codec: 'DV', label: '1920p DV PQ' }]).badges).toEqual(['1080P', 'DV'])
 })
 
 test('merge and score order results', () => {

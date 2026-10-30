@@ -3,7 +3,7 @@ import { formatRules, parseRules, pickBest, shouldUpgrade, type RuleCandidate } 
 
 const dolby = { id: 'a-ddp', label: '杜比全景声', codec: 'ec-3' }
 const aac = { id: 'a-aac', label: '普通话', codec: 'mp4a.40.2' }
-const c = (index: number, height: number, codec: string, audios = [aac], hdr = ''): RuleCandidate => ({ index, height, codec, hdr, audios, label: `${height}P` })
+const c = (index: number, height: number, codec: string, audios = [aac], hdr = ''): RuleCandidate => ({ index, height, codec, hdr, audios, label: `${codec === "DV" ? height + "p DV PQ" : height + "P"}` })
 
 test('parse groups, aliases, negation and unknown tokens', () => {
   const g = parseRules(' 4K & 杜比 > 1080p&AAC > !HDR > any > foo ')
@@ -32,6 +32,13 @@ test('no tier matches returns null; empty spec means any', () => {
 test('hdr / dolby vision and negation', () => {
   const cands = [c(0, 2160, 'hevc', [aac], 'HDR10'), c(1, 2160, 'hevc', [aac], 'Dolby Vision'), c(2, 2160, 'hevc', [aac], 'SDR')]
   expect(pickBest('DV > HDR > any', cands)?.index).toBe(1)
+  expect(pickBest('!HDR', cands)?.index).toBe(2)
+})
+
+test('Apple TV PQ is HDR and a DV codec wins over HDR', () => {
+  const cands = [c(0, 1920, 'H265', [aac], 'PQ'), c(1, 1920, 'DV', [aac], 'PQ'), c(2, 1920, 'H265', [aac], 'SDR')]
+  expect(pickBest('DV > HDR > any', cands)?.index).toBe(1)
+  expect(pickBest('HDR > any', cands)?.index).toBe(0)
   expect(pickBest('!HDR', cands)?.index).toBe(2)
 })
 

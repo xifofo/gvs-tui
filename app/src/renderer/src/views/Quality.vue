@@ -424,10 +424,10 @@ function streamCode(q: { stream: string; label: string }): string {
 /** 同是「4K · 60fps」的几档靠码流名区分：杜比视界 / HDR / SDR */
 function range(q: { stream: string; hdr: string; label: string }): string {
   const t = `${q.stream} ${q.hdr}`.toLowerCase()
-  if (/dolbyvision|dvhe|dvh1|(^|_)dv(_|$)/.test(t)) return '杜比视界'
+  if (/dolbyvision|dvhe|dvh1|(^|[\s_|])dv([\s_|]|$)/.test(t)) return '杜比视界'
   if (/hdr10/.test(t)) return 'HDR10'
   if (/vivid/.test(t)) return 'HDR Vivid'
-  if (/hdr/.test(t)) return 'HDR'
+  if (/hdr|(^|[\s_|])pq([\s_|]|$)/.test(t)) return 'HDR'
   if (/sdr/.test(t)) return 'SDR'
   return ''
 }
