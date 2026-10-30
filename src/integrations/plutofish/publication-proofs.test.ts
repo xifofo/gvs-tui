@@ -57,9 +57,10 @@ test('两千个挑战在慢回执期间持续收件，保持十六个在途上�
   }))
   const pending = new Map(jobs.map(job => [job.id, job]))
   const seen = new Set<string>()
-  let active = 0, peak = 0, finished = 0
+  let active = 0, peak = 0, finished = 0, polls = 0
   f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
     if (route === 'range-proofs/pending') {
+      polls++
       const after = (body as { after: string }).after
       const page = [...pending.values()].filter(job => job.id > after).slice(0, 101)
       return { jobs: page.slice(0, 100), ...(page.length > 100 ? { nextCursor: page[99]!.id } : {}), waitSupported: true } as T
@@ -83,6 +84,8 @@ test('两千个挑战在慢回执期间持续收件，保持十六个在途上�
     await completed.promise
     const elapsed = performance.now() - started
     expect(elapsed).toBeLessThan(30_000)
+    // 20 页加少量尾部回查，不应每释放一个槽都重新领取已取得的页尾。
+    expect(polls).toBeLessThan(60)
     expect(seen.size).toBe(2000)
     expect(peak).toBe(PUBLICATION_PROOF_CONCURRENCY)
     expect(proofs.isUsing(f.state)).toBeTrue()
@@ -91,7 +94,7 @@ test('两千个挑战在慢回执期间持续收件，保持十六个在途上�
     await work
     expect(finished).toBe(2000)
     expect(proofs.isUsing(f.state)).toBeFalse()
-    console.info(`本地校验离线压测：2000 个挑战、40ms 模拟回执、1 个持续慢回执，其余完成耗时 ${elapsed.toFixed(0)}ms，峰值 ${peak}`)
+    console.info(`本地校验离线压测：2000 个挑战、40ms 模拟回执、1 个持续慢回执，其余完成耗时 ${elapsed.toFixed(0)}ms，峰值 ${peak}，领取请求 ${polls} 次`)
   } finally { held.resolve(); abort.abort(); await work; f.cleanup() }
 }, 20_000)
 
@@ -116,6 +119,35 @@ test('后台回执失败后重查原挑战，其他已成功回执不重复发�
     expect(calls.get(jobs[0]!.id)).toBe(2)
     expect([...calls.values()].filter(count => count === 1)).toHaveLength(19)
   } finally { abort.abort(); await work; f.cleanup() }
+})
+
+test('只见到在途挑战时，回执完成立即续接领取，不等待轮询计时器', async () => {
+  const f = await setup(), held = proofGate(), duplicateSeen = proofGate(), resumed = proofGate()
+  const abort = new AbortController(), proofs = new PublicationProofs(f.connection, () => {})
+  // 固定时钟使轮询期限不会自行到达，只能由真实回执完成唤醒。
+  const now = Date.now(), clock = spyOn(Date, 'now').mockReturnValue(now)
+  let polls = 0
+  f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string): Promise<T> => {
+    if (route === 'range-proofs/pending') {
+      if (++polls <= 2) {
+        if (polls === 2) duplicateSeen.resolve()
+        return { jobs: [f.job], waitSupported: true } as T
+      }
+      resumed.resolve()
+      return { jobs: [], waitSupported: true } as T
+    }
+    await held.promise
+    return { accepted: true } as T
+  }
+  const work = proofs.run(() => [f.state], abort.signal)
+  try {
+    await duplicateSeen.promise
+    await Bun.sleep(5)
+    held.resolve()
+    const woken = await Promise.race([resumed.promise.then(() => true), Bun.sleep(1000).then(() => false)])
+    expect(woken).toBeTrue()
+    expect(polls).toBe(3)
+  } finally { held.resolve(); abort.abort(); await work; clock.mockRestore(); f.cleanup() }
 })
 
 test('十六个回执在途时关闭会取消所有请求，队列剩余任务不启动且文件占用全部释放', async () => {
@@ -173,6 +205,46 @@ test('下一页查询途中旧回执失败，迟到分页不能覆盖首页重�
     expect(firstAttempts).toBe(2)
     expect(pending.size).toBe(0)
   } finally { failReport.resolve(); releaseQuery.resolve(); abort.abort(); await work; f.cleanup() }
+})
+
+test('消费已领取页尾时前一页回执失败，停止启动页尾并保留首页重放', async () => {
+  const f = await setup(), failFirst = proofGate(), holdLater = proofGate(), filled = proofGate()
+  const abort = new AbortController(), proofs = new PublicationProofs(f.connection, () => {})
+  const jobs = Array.from({ length: 21 }, (_, i) => ({ ...f.job, id: (i + 1).toString(16).padStart(32, '0') }))
+  let polls = 0, laterReports = 0, now = Date.now()
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
+    if (route === 'range-proofs/pending') {
+      if (++polls === 1) return { jobs: [jobs[0]], nextCursor: jobs[0]!.id, waitSupported: true } as T
+      if (polls === 2) return { jobs: jobs.slice(1), waitSupported: true } as T
+      expect((body as { after: string }).after).toBe('')
+      return { jobs: [], waitSupported: true } as T
+    }
+    if ((body as { id: string }).id === jobs[0]!.id) {
+      await failFirst.promise
+      throw new Error('previous page report failed')
+    }
+    if (++laterReports === PUBLICATION_PROOF_CONCURRENCY - 1) filled.resolve()
+    await holdLater.promise
+    return { accepted: true } as T
+  }
+  let consuming: Promise<void> | undefined
+  try {
+    await proofs.tick([f.state], abort.signal, true)
+    consuming = proofs.tick([f.state], abort.signal, true)
+    await filled.promise
+    failFirst.resolve()
+    expect(await Promise.race([consuming.then(() => true), Bun.sleep(1000).then(() => false)])).toBeTrue()
+    expect(laterReports).toBe(PUBLICATION_PROOF_CONCURRENCY - 1)
+    now += 1000
+    await proofs.tick([f.state], abort.signal, true)
+    expect(polls).toBe(3)
+  } finally {
+    abort.abort(); failFirst.resolve(); holdLater.resolve()
+    await consuming
+    await Bun.sleep(0)
+    clock.mockRestore(); f.cleanup()
+  }
 })
 
 test('本地最多十六个校验任务，同一成品直到最后一份回执完成才允许清理', async () => {
@@ -327,7 +399,7 @@ test('一千条上传历史中的最后一个文件首轮即可校验，请求�
   } finally { f.cleanup() }
 })
 
-test('真实待办超过一页时连续领取，最后一页后才恢复 15 秒轮询', async () => {
+test('真实待办超过一页时连续领取，最后一页后才进入短轮询退避', async () => {
   const f = await setup()
   try {
     const jobs = Array.from({ length: 101 }, (_, i) => ({ ...f.job, id: (i + 1).toString(16).padStart(32, '0') }))
@@ -350,6 +422,83 @@ test('真实待办超过一页时连续领取，最后一页后才恢复 15 秒�
     await proofs.tick([f.state], signal)
     expect(polls).toBe(2)
   } finally { f.cleanup() }
+})
+
+test('短轮询活跃时一秒补领，连续空闲逐步退避并在新任务到达后恢复', async () => {
+  const f = await setup()
+  let now = Date.now(), polls = 0, reports = 0, hasJob = false
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  try {
+    f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string): Promise<T> => {
+      if (route === 'range-proofs/pending') {
+        polls++
+        return { jobs: hasJob ? [f.job] : [], waitSupported: false } as T
+      }
+      hasJob = false; reports++
+      return { accepted: true } as T
+    }
+    const proofs = new PublicationProofs(f.connection, () => {})
+    const signal = new AbortController().signal
+    await proofs.tick([f.state], signal)
+    for (const delay of [1000, 2000, 4000, 8000, 15_000, 15_000]) {
+      const previous = polls
+      now += delay - 1
+      await proofs.tick([f.state], signal)
+      expect(polls).toBe(previous)
+      now++
+      await proofs.tick([f.state], signal)
+      expect(polls).toBe(previous + 1)
+    }
+    hasJob = true; now += 15_000
+    await proofs.tick([f.state], signal)
+    expect(reports).toBe(1)
+    hasJob = true; now += 1000
+    await proofs.tick([f.state], signal)
+    expect(reports).toBe(2)
+  } finally { clock.mockRestore(); f.cleanup() }
+})
+
+test('正常批量摘要回传不重复发布任务状态，避免触发每份回执的清单写盘', async () => {
+  const f = await setup()
+  try {
+    let reports = 0, updates = 0
+    f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string): Promise<T> => {
+      if (route === 'range-proofs/pending') return { jobs: Array.from({ length: 100 }, (_, i) => ({ ...f.job, id: (i + 1).toString(16).padStart(32, '0') })) } as T
+      reports++
+      return { accepted: true } as T
+    }
+    await new PublicationProofs(f.connection, () => { updates++ }).tick([f.state], new AbortController().signal)
+    expect(reports).toBe(100)
+    expect(updates).toBe(0)
+  } finally { f.cleanup() }
+})
+
+test('本地文件暂不可用的提示在恢复成功后清除，之后的成功摘要不再重复刷新', async () => {
+  const f = await setup()
+  let now = Date.now()
+  const clock = spyOn(Date, 'now').mockImplementation(() => now)
+  try {
+    const messages: (string | undefined)[] = [], reports: unknown[] = []
+    f.connection.request = async <T>(_binding: PublicationDraft['binding'], route: string, body: unknown): Promise<T> => {
+      if (route === 'range-proofs/pending') return { jobs: [f.job], waitSupported: true } as T
+      reports.push(body)
+      return { accepted: true } as T
+    }
+    const proofs = new PublicationProofs(f.connection, (_state, message) => { messages.push(message) })
+    const signal = new AbortController().signal
+    rmSync(f.path)
+    await proofs.tick([f.state], signal)
+    expect(messages).toEqual(['本机成品暂不可用，其他客户端仍可继续校验'])
+    expect(reports).toEqual([{ id: f.job.id, taskKey: f.job.taskKey, unavailable: true }])
+    writeFileSync(f.path, 'abcdefgh')
+    now += 60_000
+    await proofs.tick([f.state], signal)
+    expect(messages).toEqual(['本机成品暂不可用，其他客户端仍可继续校验', undefined])
+    expect(reports.at(-1)).toEqual({ id: f.job.id, taskKey: f.job.taskKey, signValue: createHash('sha1').update('cdef').digest('hex').toUpperCase() })
+    await proofs.tick([f.state], signal)
+    expect(reports).toHaveLength(3)
+    expect(messages).toHaveLength(2)
+  } finally { clock.mockRestore(); f.cleanup() }
 })
 
 test('同 Key 下本机清单为空时静默跳过，仍继续翻页且不打断持有文件的客户端', async () => {
