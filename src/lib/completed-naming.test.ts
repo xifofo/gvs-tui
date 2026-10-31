@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { tencentActualVersion, type MediaSpecs } from './actual-version.ts'
-import { finalizeCompletedName, iqcnNamingEvidence, renameCompletedFile, reserveOutputPath, tencentNamingEvidence, usesMeasuredNaming, youkuNamingEvidence } from './completed-naming.ts'
+import { finalizeCompletedName, iqcnNamingEvidence, previewFilename, renameCompletedFile, reserveOutputPath, tencentNamingEvidence, usesMeasuredNaming, youkuNamingEvidence } from './completed-naming.ts'
 import { completedFilename, filename, folder, sourceTag, type Naming } from './name.ts'
 import { finishedVersionRecord, saveVersionRecord } from './gvs-record.ts'
 import { lookHostFFmpeg } from './tools.ts'
@@ -81,6 +81,13 @@ test('domestic IQ uses IQIYI and actual video/default audio specs for movies and
   expect(sourceTag('iq')).toBe('IQ')
   // Apple TV+ 用行业惯用标签 ATVP，不能落到 default 的「前三字母」变成 APP
   expect(sourceTag('appletvplus')).toBe('ATVP')
+
+})
+test('Apple TV PQ preview is named HDR, DV codec stays DV', () => {
+  const n = naming({ source: 'ATVP', height: 1920 })
+  expect(previewFilename(n, 'appletvplus', { id: '1920|H265|PQ|23.976', label: '1920p H265 PQ', codec: 'H265', hdr: 'PQ', width: 3840, height: 1920, fps: 23.976 })).toContain('.HDR.')
+  expect(previewFilename(n, 'appletvplus', { id: '1920|DV|PQ|23.976', label: '1920p DV PQ', codec: 'DV', hdr: 'PQ', width: 3840, height: 1920 })).toContain('.DV')
+  expect(previewFilename(n, 'appletvplus', { id: '1920|H265|SDR|23.976', label: '1920p H265 SDR', codec: 'H265', hdr: 'SDR', width: 3840, height: 1920 })).not.toContain('.HDR.')
 })
 
 test('long Chinese subtitles retain the measured suffix without creating directories', () => {

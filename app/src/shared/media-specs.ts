@@ -20,13 +20,14 @@ export function videoCodec(...texts: Array<string | undefined>): string {
   return ''
 }
 
-/** HDR 类型：杜比视界 / HDR10 / HDR Vivid / HDR；SDR 或未知返回空串 */
+/** HDR 类型：杜比视界 / HDR10 / HDR Vivid / HDR；SDR 或未知返回空串。
+ * Apple TV 用 PQ（SMPTE ST 2084）标 HDR，不会写 HDR 字样。 */
 export function hdrKind(...texts: Array<string | undefined>): string {
   const t = texts.filter(Boolean).join(' ').toLowerCase()
   if (/dolby\s*vision|dolbyvision|dvhe|dvh1|dovi|(^|[\s_|])dv([\s_|]|$)|杜比视界/.test(t)) return '杜比视界'
   if (/hdr10/.test(t)) return 'HDR10'
   if (/vivid|菁彩/.test(t)) return 'HDR Vivid'
-  if (/hdr/.test(t)) return 'HDR'
+  if (/hdr|(^|[\s_|])pq([\s_|]|$)/.test(t)) return 'HDR'
   return ''
 }
 

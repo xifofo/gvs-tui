@@ -451,6 +451,8 @@ describe('qualitiesFromTencentFormats', () => {
     expect(qualityChoiceLabel(pick('uhd', 'soft'))).toBe('超高清SDR · 软字幕')
     expect(pick('fhd', 'hard').hdr).toBe('hdr10')
     expect(qualityHdrText('hdr10')).toBe('HDR10')
+    expect(qualityHdrText('PQ')).toBe('HDR')
+    expect(qualityHdrText('pq')).toBe('HDR')
     expect(qualityCaptionText('soft')).toBe('软字幕')
     expect(qualityCaptionText('hard')).toBe('硬字幕')
     expect(pick('fhd', 'soft').hdr).toBeUndefined()

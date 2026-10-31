@@ -179,6 +179,17 @@ test('uhd and suhd aliases require an identical actual format ID and consistent 
   expect(tencentActualVersion({ formats: [r, { ...r, name: 'suhd', width: 1920, height: 1080 }] }, url, 'format', choice, 'vid').evidence).toBe('ambiguous')
 })
 
+test('play metadata format ID suffix is the same catalog rendition', () => {
+  const choice = { stream: 'suhd', formatId: '322100', caption: 'soft', persona: 'fp_qua_soft' }
+  const record = tencentActualVersion({
+    video: { url, format_id: '322100001', defn: '354', caption: 'soft', persona: 'fp_qua_soft', width: 3840, height: 1608 },
+    formats: [{ id: '322100', name: 'suhd', width: 3840, height: 1608 }],
+  }, url, 'default', choice, 'vid')
+  expect(record.matchesSelection).toBe('same')
+  expect(tencentActualVersion({ video: { url, format_id: '322093001', defn: 'suhd', caption: 'soft' } }, url, 'default', choice, 'vid').matchesSelection).toBe('different')
+  expect(tencentActualVersion({ video: { url, format_id: '32210001', defn: 'suhd', caption: 'soft' } }, url, 'default', choice, 'vid').matchesSelection).toBe('different')
+})
+
 test('an explicit format ID can identify its catalog alias despite a numeric definition', () => {
   const record = tencentActualVersion({ video: { url, format_id: '322093', defn: '685', caption: '硬' },
     formats: [{ id: '322093', name: 'uhd' }, { id: '322093', name: 'suhd' }] }, url, 'default',

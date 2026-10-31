@@ -34,9 +34,9 @@ export function badgesFromQualities(qs: Q[], audios: Array<{ label: string; code
   let height = 0
   for (const q of qs) {
     height = Math.max(height, q.height || 0)
-    const hdr = `${q.hdr || ''} ${q.label || ''}`
-    if (/dolby\s*vision|dolbyvision|dovi|\bdv\b|杜比视界/i.test(hdr)) out.add('DV')
-    else if (q.hdr && !/^sdr$/i.test(q.hdr)) out.add('HDR')
+    const hdr = `${q.hdr || ''} ${q.label || ''} ${q.codec || ''}`
+    if (/dolby\s*vision|dolbyvision|dovi|(?:^|[^a-z])dv(?:[^a-z]|$)|杜比视界/i.test(hdr)) out.add('DV')
+    else if ((q.hdr && !/^sdr$/i.test(q.hdr)) || /(?:^|[^a-z])pq(?:[^a-z]|$)/i.test(hdr)) out.add('HDR')
     if ((q.fps ?? 0) >= 50) out.add('60FPS')
     if (/imax/i.test(q.label || '')) out.add('IMAX')
     for (const a of [...(q.audios ?? []), ...audios]) {
