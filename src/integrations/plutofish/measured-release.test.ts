@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { matchMeasuredRelease, measuredReleaseVersion, matchRelease, type ReleaseOption } from './release-selection'
-import { releaseSource, sourceReviewReason } from './release-specs'
+import { parseReleaseSpecs, releaseSource, sourceReviewReason } from './release-specs'
 import { completedFilename, type Naming } from '../../lib/name'
 import { publicationVersion } from './publication-version'
 import type { PublicationDraft } from './publication-types'
@@ -39,6 +39,19 @@ test('实测校验文件名矛盾和未知媒体规格，不自动创建错误�
   }
   for (const patch of [{ fps: undefined }, { audio: { status: 'ambiguous' as const } }]) {
     expect(matchMeasuredRelease([], { ...media, ...patch }, 'show.mkv', preset).canCreate).not.toBe(true)
+  }
+})
+
+test('MPEG 音轨（MP2/MP3）按实测编码自动匹配和新建版本，文件名中的写法识别为音轨规格', () => {
+  for (const label of ['MP2', 'MP3']) {
+    const mpeg: MediaSpecs = { ...media, audio: { status: 'confirmed', codec: label.toLowerCase(), channels: 2 } }
+    const name = measuredReleaseVersion(mpeg, 'show.mkv', 1, preset).name
+    expect(name).toBe(`S01.1080p.YOUKU.WEB-DL.SDR.AVC.${label}.2.0`)
+    expect(matchMeasuredRelease([row({ name })], mpeg, 'show.mkv', preset).matchedId).toBe('a'.repeat(32))
+    expect(matchMeasuredRelease([row()], mpeg, 'show.mkv', preset)).toEqual({ canCreate: true, reason: '未匹配到已有版本' })
+    expect(parseReleaseSpecs(`Show.S01E01.1080p.HDTV.AVC.${label}.2.0-GRP`)).toMatchObject({ audio: label, channels: 2, extras: '', group: 'GRP' })
+    expect(measuredReleaseVersion(mpeg, `Show.S01E01.1080p.YK.WEB-DL.AVC.${label}.2.0-GRP.mkv`, 1).name).toBe(`S01.1080p.YOUKU.WEB-DL.SDR.AVC.${label}.2.0-GRP`)
+    expect(matchMeasuredRelease([], media, `Show.1080p.YK.WEB-DL.AVC.${label}.2.0.mkv`).reason).toContain('实际媒体')
   }
 })
 
