@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:http'
 import { PlutoFishConnection } from './connection.ts'
 import { normalizePlutoFishURL, verifyPublisher, type PublisherFetch } from './client.ts'
 import { loadPlutoFishConfig, savePlutoFishConfig } from './config.ts'
@@ -19,6 +20,38 @@ function connection(options: ConstructorParameters<typeof PlutoFishConnection>[0
   active.push(c)
   return c
 }
+
+test('状态上报及心跳套接字断开不取消其他上传请求，撤权仍锁定连接', async () => {
+  let release!: () => void, started!: () => void, revoked = false
+  const waiting = new Promise<void>(resolve => { started = resolve })
+  const server = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk
+    const body = JSON.parse(raw)
+    if (body.action === 'credentials') {
+      started(); release = () => res.setHeader('Content-Type', 'application/json').end(JSON.stringify({ ok: true }))
+      return
+    }
+    if (revoked) { res.writeHead(401, { 'Content-Type': 'application/json' }).end('{}'); return }
+    req.socket.destroy()
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  const c = connection({ load: () => ({ url, key: 'offline-only' }), autoReconnect: true })
+  const binding = { url, publisherId: publisher.id, sourceAccount: publisher.sourceAccount }
+  try {
+    await c.verify()
+    const credentials = c.request(binding, 'uploads/prepare', { action: 'credentials' })
+    await waiting
+    for (const [path, body] of [['tasks/report', {}], ['uploads/prepare', { action: 'heartbeat' }], ['range-proofs/pending', {}], ['files/ed2k', {}]] as const) {
+      await expect(c.request(binding, path, body)).rejects.toThrow('网络连接中断')
+      expect(c.ready).toBe(true); expect(c.view().reconnect).toBeUndefined()
+    }
+    release(); expect(await credentials).toEqual({ ok: true })
+    revoked = true
+    await expect(c.request(binding, 'tasks/report', {})).rejects.toThrow('HTTP 401')
+    expect(c.ready).toBe(false)
+  } finally { c.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
+})
 
 test('saved credentials are unverified at startup; only a valid identity unlocks entry', async () => {
   const c = connection()
