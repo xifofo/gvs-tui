@@ -42,6 +42,21 @@ test('实测校验文件名矛盾和未知媒体规格，不自动创建错误�
   }
 })
 
+test('分辨率以文件名为准，裁切像素不拦截匹配或新建；缺失时才回退实测', () => {
+  const cropped: MediaSpecs = { ...media, width: 3236, height: 2156, codec: 'hevc', dynamicRange: 'DV', fps: 23.976,
+    audio: { status: 'confirmed', codec: 'eac3', channels: 6, atmos: true } }
+  const file = 'Primetime.2026.2160p.WEB-DL.AMZN.DV.HEVC.DDP.5.1.Atmos-Ftang.mkv'
+  const version = measuredReleaseVersion(cropped, file)
+  expect(version.resolution).toBe('2160p')
+  expect(version.name).toBe('2160p.AMZN.WEB-DL.DV.HEVC.DDP.5.1.Atmos-Ftang')
+  const existing = row({ ...version })
+  const other = row({ id: 'b'.repeat(32), name: version.name.replace('2160p', '1440p'), resolution: '1440p', dynamicRange: 'DV' })
+  expect(matchMeasuredRelease([other, existing], cropped, file).matchedId).toBe(existing.id)
+  expect(matchMeasuredRelease([other], cropped, file).canCreate).toBe(true)
+  expect(measuredReleaseVersion(media, 'Show.2160p.YK.WEB-DL.AVC.mkv', 1).resolution).toBe('2160p')
+  expect(measuredReleaseVersion(cropped, file.replace('2160p.', '')).resolution).toBe('1440p')
+})
+
 test('MPEG 音轨（MP2/MP3）按实测编码自动匹配和新建版本，文件名中的写法识别为音轨规格', () => {
   for (const label of ['MP2', 'MP3']) {
     const mpeg: MediaSpecs = { ...media, audio: { status: 'confirmed', codec: label.toLowerCase(), channels: 2 } }
