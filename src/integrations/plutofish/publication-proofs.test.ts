@@ -633,6 +633,24 @@ test('其他客户端的待办不会形成长轮询忙循环，也不会回报�
   } finally { f.cleanup() }
 })
 
+test('已连接但身份未绑定源账号时收件循环退避等待，不以零延迟空转饿死计时器', async () => {
+  const f = await setup()
+  const abort = new AbortController()
+  try {
+    let polls = 0
+    f.connection.request = async <T>(): Promise<T> => { polls++; return { jobs: [] } as T }
+    const view = f.connection.view()
+    spyOn(f.connection, 'view').mockImplementation(() => ({ ...view, identity: { ...view.identity!, sourceAccount: undefined as never } }))
+    const proofs = new PublicationProofs(f.connection, () => {})
+    const running = proofs.run(() => [], abort.signal)
+    // 空转时只剩微任务，这个计时器永远不会触发，测试会卡死而不是失败。
+    await Bun.sleep(50)
+    abort.abort()
+    await running
+    expect(polls).toBe(0)
+  } finally { abort.abort(); f.cleanup() }
+}, 5000)
+
 test('登记已触发校验但本机尚未完成时先跳过，完成后可在原窗口内响应', async () => {
   const f = await setup()
   let now = Date.now()

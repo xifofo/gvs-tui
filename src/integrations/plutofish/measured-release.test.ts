@@ -194,7 +194,9 @@ test('DVD 隔行片源：保留 480i/576i，MPEG2 视频可匹配，非方形像
   const pal: MediaSpecs = { ...dvd, height: 576, fps: 25, audio: { status: 'confirmed', codec: 'ac3', channels: 2 } }
   expect(measuredReleaseVersion(pal, 'Movie.576i.PAL.DVD9.REMUX.MPEG-2.AC3.2.0-GRP.mkv').name).toBe('576i.REMUX.DVD9.PAL.SDR.MPEG2.AC3.2.0-GRP')
   expect(measuredReleaseVersion(dvd, 'Movie.DVD.REMUX.mkv').resolution).toBe('480p')
-  expect(measuredReleaseVersion({ ...dvd, codec: 'mpeg4' }, 'Movie.480p.DVD.XviD.mkv').name).toBe('480p.DVD.SDR.XviD.DDP.2.0')
+  expect(measuredReleaseVersion({ ...dvd, codec: 'mpeg4' }, 'Movie.480p.DVD.XviD.mkv').name).toBe('480p.DVD.SDR.MPEG4.DDP.2.0')
+  // 0.1.30 曾把 MPEG-4 Part 2 写成 XviD，已建版本仍能匹配。
+  expect(matchMeasuredRelease([row({ name: '480p.DVD.SDR.XviD.DDP.2.0', resolution: '480p' })], { ...dvd, codec: 'mpeg4' }, 'Movie.480p.DVD.XviD.mkv').matchedId).toBe('a'.repeat(32))
   expect(measuredReleaseVersion({ ...media, codec: 'vc1' }, 'Movie.1080i.HDTV.VC-1.mkv').name).toBe('1080i.HDTV.SDR.VC1.AAC.2.0')
 })
 

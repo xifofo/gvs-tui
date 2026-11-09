@@ -132,7 +132,8 @@ realMediaTest('IQ mux moves the selected default first and publishes measured na
       group: 'WF', tmdbId: 0, container: 'mkv' }, { muxAudio })
     expect(named.note).toBeUndefined()
     expect(basename(named.output)).toContain('海外节目.S00E298.特别篇.2026.')
-    expect(basename(named.output)).toEndWith('.IQ.WEB-DL.MPEG4.DDP.5.1-WF.mkv')
+    // MPEG-4 Part 2 不承载 HDR，缺色彩标记时按 SDR 命名。
+    expect(basename(named.output)).toEndWith('.IQ.WEB-DL.SDR.MPEG4.DDP.5.1-WF.mkv')
     expect(basename(named.output)).not.toMatch(/2160p|HEVC|HQ|MAXPLUS|25fps/)
 
     const aacDest = reserveOutputPath(join(root, 'default-aac.mkv'))
