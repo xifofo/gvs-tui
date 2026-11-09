@@ -37,6 +37,9 @@ test('实测校验文件名矛盾和未知媒体规格，不自动创建错误�
     expect(matchMeasuredRelease([row()], media, path).reason).toContain('实际媒体')
     expect(matchMeasuredRelease([], media, path).canCreate).not.toBe(true)
   }
+  expect(matchMeasuredRelease([], media, 'Show.2160p.YK.WEB-DL.HDR.HEVC.60fps.DDP5.1.mkv').reason).toBe('文件名与实际媒体规格不符（视频编码：文件名写 HEVC，实测 AVC；动态范围：文件名写 HDR，实测 SDR；音轨：文件名写 DDP，实测 AAC；声道：文件名写 5.1，实测 2.0；帧率：文件名写 60fps，实测 25fps），请确认版本')
+  // 文件名没写音轨时，无音轨成品照常按实测处理。
+  expect(matchMeasuredRelease([], { ...media, audio: { status: 'none' } }, 'Show.1080p.YK.WEB-DL.AVC.mkv').canCreate).toBe(true)
   for (const patch of [{ fps: undefined }, { audio: { status: 'ambiguous' as const } }]) {
     expect(matchMeasuredRelease([], { ...media, ...patch }, 'show.mkv', preset).canCreate).not.toBe(true)
   }
@@ -190,7 +193,11 @@ test('DVD 隔行片源：保留 480i/576i，MPEG2 视频可匹配，非方形像
   expect(version).toEqual({ name: '480i.REMUX.DVD5.NTSC.SDR.MPEG2.DDP.2.0-PF', resolution: '480i', dynamicRange: 'SDR' })
   expect(matchMeasuredRelease([row({ ...version })], dvd, file).matchedId).toBe('a'.repeat(32))
   expect(matchMeasuredRelease([row({ ...version, name: version.name.replace('480i', '480p'), resolution: '480p' })], dvd, file).canCreate).toBe(true)
-  expect(matchMeasuredRelease([], { ...dvd, audio: { status: 'confirmed', codec: 'ac3', channels: 2 } }, file).reason).toContain('实际媒体')
+  expect(matchMeasuredRelease([], { ...dvd, audio: { status: 'confirmed', codec: 'ac3', channels: 2 } }, file).reason)
+    .toBe('文件名与实际媒体规格不符（音轨：文件名写 DDP，实测 AC3），请确认版本')
+  // 用户反馈的成品：重封装丢了音轨，文件名仍写 DDP2.0。
+  const silent = matchMeasuredRelease([row({ ...version })], { ...dvd, audio: { status: 'none' } }, file)
+  expect(silent).toEqual({ reason: '文件名与实际媒体规格不符（音轨：文件名写 DDP 2.0，实测没有音轨），请检查文件' })
   const pal: MediaSpecs = { ...dvd, height: 576, fps: 25, audio: { status: 'confirmed', codec: 'ac3', channels: 2 } }
   expect(measuredReleaseVersion(pal, 'Movie.576i.PAL.DVD9.REMUX.MPEG-2.AC3.2.0-GRP.mkv').name).toBe('576i.REMUX.DVD9.PAL.SDR.MPEG2.AC3.2.0-GRP')
   expect(measuredReleaseVersion(dvd, 'Movie.DVD.REMUX.mkv').resolution).toBe('480p')
