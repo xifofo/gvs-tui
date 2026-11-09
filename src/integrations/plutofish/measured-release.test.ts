@@ -141,6 +141,80 @@ test('自动匹配区分制作组，大小写兼容且明确绑定仍然优先',
   expect(measuredReleaseVersion(media, 'Show.YK.WEB-DL.AVC-制作组.mkv', 1).name).toBe(`${row().name}-制作组`)
 })
 
+test('各类音轨按实测编码自动新建并能从版本名读回，文件名的连写声道不混进特殊规格', () => {
+  // ffprobe 编码名、版本名写法、发布名中的常见写法
+  const families: Array<[string, string, string]> = [
+    ['opus', 'Opus', 'Opus2.0'], ['vorbis', 'Vorbis', 'Vorbis2.0'], ['aac', 'AAC', 'AAC2.0'], ['aac', 'AAC', 'HE-AAC2.0'],
+    ['ac3', 'AC3', 'DD2.0'], ['ac3', 'AC3', 'AC-3.2.0'], ['eac3', 'DDP', 'DDP2.0'], ['eac3', 'DDP', 'DD+2.0'], ['ac4', 'AC4', 'AC4.2.0'],
+    ['truehd', 'TrueHD', 'TrueHD2.0'], ['dts', 'DTS', 'DTS2.0'], ['flac', 'FLAC', 'FLAC2.0'], ['alac', 'ALAC', 'ALAC2.0'],
+    ['pcm_s24le', 'LPCM', 'LPCM2.0'], ['pcm_bluray', 'LPCM', 'PCM.2.0'], ['mp2', 'MP2', 'MP22.0'], ['mp3', 'MP3', 'MP3.2.0'],
+    ['wmapro', 'WMA', 'WMA2.0'], ['amr_nb', 'AMR', 'AMR2.0'], ['ape', 'APE', 'APE2.0'], ['wavpack', 'WavPack', 'WavPack2.0'],
+    ['tak', 'TAK', 'TAK2.0'], ['tta', 'TTA', 'TTA2.0'], ['dsd_lsbf', 'DSD', 'DSD2.0'], ['mpegh_3d_audio', 'MPEGH', 'MPEG-H.2.0'],
+    ['speex', 'Speex', 'Speex2.0'], ['adpcm_ima_wav', 'ADPCM', 'ADPCM2.0'],
+  ]
+  for (const [codec, label, spelling] of families) {
+    const specs: MediaSpecs = { ...media, audio: { status: 'confirmed', codec, channels: 2 } }
+    const name = measuredReleaseVersion(specs, 'show.mkv', 1, preset).name
+    expect(name).toBe(`S01.1080p.YOUKU.WEB-DL.SDR.AVC.${label}.2.0`)
+    expect(matchMeasuredRelease([row({ name })], specs, 'show.mkv', preset).matchedId).toBe('a'.repeat(32))
+    const file = `Show.S01E01.1080p.YK.WEB-DL.H.264.${spelling}-GRP.mkv`
+    expect(parseReleaseSpecs(file.slice(0, -4))).toMatchObject({ channels: 2, extras: '', group: 'GRP' })
+    expect(measuredReleaseVersion(specs, file, 1).name).toBe(`${name}-GRP`)
+    const other = codec === 'aac' ? 'opus' : 'aac'
+    expect(matchMeasuredRelease([], { ...specs, audio: { status: 'confirmed', codec: other, channels: 2 } }, file).reason).toContain('实际媒体')
+  }
+  // 表外的编码按编码名保留；ffprobe 认不出的 unknown 和缺声道仍要求选择。
+  const cook: MediaSpecs = { ...media, audio: { status: 'confirmed', codec: 'cook', channels: 2 } }
+  const name = measuredReleaseVersion(cook, 'show.mkv', 1, preset).name
+  expect(name).toBe('S01.1080p.YOUKU.WEB-DL.SDR.AVC.COOK.2.0')
+  expect(matchMeasuredRelease([row({ name })], cook, 'show.mkv', preset).matchedId).toBe('a'.repeat(32))
+  expect(matchMeasuredRelease([row()], cook, 'show.mkv', preset).canCreate).toBe(true)
+  for (const audio of [{ codec: 'unknown', channels: 2 }, { codec: 'opus' }]) {
+    expect(matchMeasuredRelease([], { ...media, audio: { status: 'confirmed', ...audio } }, 'show.mkv', preset).reason).toBe('音轨规格无法确定，请选择版本')
+  }
+})
+
+test('YouTube Opus 成品自动新建版本', () => {
+  const youtube: MediaSpecs = { ...media, width: 1280, height: 720, audio: { status: 'confirmed', codec: 'opus', channels: 2 } }
+  const file = 'A.Different.Kind.of.Pretty.Man.2014.S01E09.720p.YouTube.WEB-DL.Opus2.0.H.264-PFWEB.mkv'
+  expect(matchMeasuredRelease([row()], youtube, file)).toEqual({ canCreate: true, reason: '未匹配到已有版本' })
+  const version = measuredReleaseVersion(youtube, file, 1)
+  expect(version).toEqual({ name: 'S01.720p.YOUTUBE.WEB-DL.SDR.AVC.Opus.2.0-PFWEB', resolution: '720p', dynamicRange: 'SDR' })
+  expect(matchMeasuredRelease([row({ ...version })], youtube, file.replace('S01E09', 'S01E10')).matchedId).toBe('a'.repeat(32))
+})
+
+test('DVD 隔行片源：保留 480i/576i，MPEG2 视频可匹配，非方形像素不误判为 360p', () => {
+  const dvd: MediaSpecs = { ...media, width: 720, height: 480, codec: 'mpeg2video', fps: 30000 / 1001, audio: { status: 'confirmed', codec: 'eac3', channels: 2 } }
+  const file = 'Street.of.Fury.1996.480i.NTSC.DVD5.REMUX.MPEG2.DDP2.0-PF.mkv'
+  const version = measuredReleaseVersion(dvd, file)
+  expect(version).toEqual({ name: '480i.REMUX.DVD5.NTSC.SDR.MPEG2.DDP.2.0-PF', resolution: '480i', dynamicRange: 'SDR' })
+  expect(matchMeasuredRelease([row({ ...version })], dvd, file).matchedId).toBe('a'.repeat(32))
+  expect(matchMeasuredRelease([row({ ...version, name: version.name.replace('480i', '480p'), resolution: '480p' })], dvd, file).canCreate).toBe(true)
+  expect(matchMeasuredRelease([], { ...dvd, audio: { status: 'confirmed', codec: 'ac3', channels: 2 } }, file).reason).toContain('实际媒体')
+  const pal: MediaSpecs = { ...dvd, height: 576, fps: 25, audio: { status: 'confirmed', codec: 'ac3', channels: 2 } }
+  expect(measuredReleaseVersion(pal, 'Movie.576i.PAL.DVD9.REMUX.MPEG-2.AC3.2.0-GRP.mkv').name).toBe('576i.REMUX.DVD9.PAL.SDR.MPEG2.AC3.2.0-GRP')
+  expect(measuredReleaseVersion(dvd, 'Movie.DVD.REMUX.mkv').resolution).toBe('480p')
+  expect(measuredReleaseVersion({ ...dvd, codec: 'mpeg4' }, 'Movie.480p.DVD.XviD.mkv').name).toBe('480p.DVD.SDR.XviD.DDP.2.0')
+  expect(measuredReleaseVersion({ ...media, codec: 'vc1' }, 'Movie.1080i.HDTV.VC-1.mkv').name).toBe('1080i.HDTV.SDR.VC1.AAC.2.0')
+})
+
+test('DTS 子格式与 Atmos 的各种写法保留在音轨上，旧版本名中被拆散的规格仍能匹配', () => {
+  const dts = (channels: number, codec = 'dts'): MediaSpecs => ({ ...media, audio: { status: 'confirmed', codec, channels } })
+  expect(measuredReleaseVersion(dts(6), 'Movie.1080p.BluRay.DTS-HD.MA5.1.AVC-GRP.mkv').name).toBe('1080p.BluRay.SDR.AVC.DTS-HD.MA.5.1-GRP')
+  expect(measuredReleaseVersion(dts(8), 'Movie.1080p.BluRay.DTS-X.7.1.AVC-GRP.mkv').name).toBe('1080p.BluRay.SDR.AVC.DTS.X.7.1-GRP')
+  expect(measuredReleaseVersion(dts(8, 'dtsx'), 'Movie.1080p.BluRay.DTS-HD.MA.7.1.AVC-GRP.mkv').name).toBe('1080p.BluRay.SDR.AVC.DTS.X.7.1-GRP')
+  expect(matchMeasuredRelease([row({ name: '1080p.BluRay.1.5.HD.MA.SDR.AVC.DTS.5.1-GRP' })], dts(6), 'Movie.1080p.BluRay.DTS-HD.MA.5.1.AVC-GRP.mkv').matchedId).toBe('a'.repeat(32))
+  const truehd: MediaSpecs = { ...media, audio: { status: 'confirmed', codec: 'truehd', channels: 8 } }
+  for (const spelling of ['TrueHD7.1.Atmos', 'TrueHD.Atmos.7.1', 'TrueHD.7.1.Atmos']) {
+    expect(measuredReleaseVersion(truehd, `Movie.1080p.BluRay.${spelling}.AVC-GRP.mkv`).name).toBe('1080p.BluRay.SDR.AVC.TrueHD.7.1.Atmos-GRP')
+  }
+  const ddp: MediaSpecs = { ...media, audio: { status: 'confirmed', codec: 'eac3', channels: 6 } }
+  expect(measuredReleaseVersion(ddp, 'Show.S01E01.1080p.NF.WEB-DL.DDPA5.1.H.264-GRP.mkv', 1).name).toBe('S01.1080p.NF.WEB-DL.SDR.AVC.DDP.5.1.Atmos-GRP')
+  // 旧引擎把 DDP5.1 拆成 1、DDP5 写进了版本名，新文件仍归到这个版本。
+  const legacy = row({ name: 'S01.1080p.NF.WEB-DL.1.DDP5.SDR.AVC.DDP.5.1-GRP' })
+  expect(matchMeasuredRelease([legacy], ddp, 'Show.S01E02.1080p.NF.WEB-DL.DDP5.1.H.264-GRP.mkv').matchedId).toBe(legacy.id)
+})
+
 test('文件名明确写出的普通帧率保留在动态范围与编码之间', () => {
   expect(measuredReleaseVersion(media, 'Show.1080p.YK.WEB-DL.25fps.AVC.mkv', 1).name)
     .toBe('S01.1080p.YOUKU.WEB-DL.SDR.25fps.AVC.AAC.2.0')

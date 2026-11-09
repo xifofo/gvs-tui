@@ -129,6 +129,16 @@ test('DTS:X uses its actual MP4 sample entry when ffprobe has no decoder name', 
   expect(mediaSpecsFromProbe(missing, { mp4AudioTracks: [{ ...boxTrack, id: 3 }] }).audio?.codec).toBeUndefined()
 })
 
+test('MKV DTS:X profile is kept as dtsx, and legacy SD codecs without colour tags count as SDR', () => {
+  const dvd = { codec_type: 'video', codec_name: 'mpeg2video', width: 720, height: 480, avg_frame_rate: '30000/1001' }
+  const dtsx = { codec_type: 'audio', codec_name: 'dts', profile: 'DTS-HD MA + DTS:X', channels: 8 }
+  const result = mediaSpecsFromProbe(JSON.stringify({ streams: [dvd, dtsx] }))
+  expect(result).toMatchObject({ codec: 'mpeg2video', dynamicRange: 'SDR', audio: { codec: 'dtsx', channels: 8 } })
+  expect(mediaSpecsFromProbe(JSON.stringify({ streams: [{ ...dvd, color_transfer: 'bt470bg' }] })).dynamicRange).toBe('SDR')
+  expect(mediaSpecsFromProbe(JSON.stringify({ streams: [{ ...dvd, codec_name: 'h264' }] })).dynamicRange).toBeUndefined()
+  expect(mediaSpecsFromProbe(JSON.stringify({ streams: [dvd, { ...dtsx, profile: 'DTS-HD MA' }] })).audio?.codec).toBe('dts')
+})
+
 test('cover art is ignored and unreadable/absent audio never fabricates AAC or stereo', () => {
   const video = { codec_type: 'video', codec_name: 'hevc', width: 3840, height: 1600 }
   const cover = { codec_type: 'video', codec_name: 'mjpeg', width: 200, height: 200, disposition: { attached_pic: 1 } }

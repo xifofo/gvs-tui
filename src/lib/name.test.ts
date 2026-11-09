@@ -35,7 +35,7 @@ describe('filename', () => {
 
 test('resolution tiers are identical for landscape, portrait and cropped equivalents', () => {
   for (const [width, height, expected] of [[3840, 2160, 2160], [3840, 1608, 2160], [1920, 1080, 1080],
-    [1920, 808, 1080], [1280, 720, 720], [854, 480, 480]]) {
+    [1920, 808, 1080], [1280, 720, 720], [854, 480, 480], [720, 480, 480], [704, 480, 480], [720, 576, 576], [640, 360, 360]]) {
     expect(tierHeight(width!, height!)).toBe(expected!)
     expect(tierHeight(height!, width!)).toBe(expected!)
   }
