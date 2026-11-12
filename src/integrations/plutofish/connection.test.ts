@@ -21,6 +21,33 @@ function connection(options: ConstructorParameters<typeof PlutoFishConnection>[0
   return c
 }
 
+test('上传等待节点的 503 可重试，未知结果和其他 CLOUD 错误仍停止', async () => {
+  let code = 'CLOUD_WAITING_WORKER'
+  const server = createServer((_req, res) => {
+    res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '12' })
+    res.end(JSON.stringify({ error: { code } }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  const c = connection({ load: () => ({ url, key: 'offline-only' }) })
+  const binding = { url, publisherId: publisher.id, sourceAccount: publisher.sourceAccount }
+  try {
+    await c.verify()
+    for (const value of ['CLOUD_WAITING_WORKER', 'CLOUD_OPERATION_PENDING', 'CLOUD_REMOTE_UNCERTAIN', 'CLOUD_PROVIDER_REJECTED']) {
+      code = value
+      const error = await c.request(binding, 'uploads/prepare', { action: 'prepare' }).then(() => null, e => e)
+      expect(error).toBeInstanceOf(PublisherError)
+      expect(error.retryable).toBe(value === 'CLOUD_WAITING_WORKER')
+      expect(error.diagnostic).toMatchObject({ code: value, httpStatus: 503 })
+      if (value === 'CLOUD_WAITING_WORKER') expect(error.retryAfterMs).toBe(12000)
+    }
+    expect(c.ready).toBe(true)
+  } finally {
+    c.close(); server.closeAllConnections()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
 test('状态上报及心跳套接字断开不取消其他上传请求，撤权仍锁定连接', async () => {
   let release!: () => void, started!: () => void, revoked = false
   const waiting = new Promise<void>(resolve => { started = resolve })
